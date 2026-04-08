@@ -1,0 +1,1 @@
+from util_win import is_win11

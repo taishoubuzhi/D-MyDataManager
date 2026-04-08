@@ -1,10 +1,9 @@
 from loguru import logger
-from init import (get_db_dbsession)
+from init import (DBSession)
 
 
 def create_session():
-    db_session = get_db_dbsession()
-    session = db_session()
+    session = DBSession()
     if session is None:
         logger.error("session create fail")
         return None

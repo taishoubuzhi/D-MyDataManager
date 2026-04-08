@@ -1,5 +1,6 @@
 import datetime
-from loguru import logger
+
+import config
 from qfluentwidgets import (qconfig, QConfig, ConfigItem, OptionsConfigItem, BoolValidator, OptionsValidator,
                             RangeConfigItem, RangeValidator, FolderValidator, ConfigSerializer)
 
@@ -149,22 +150,7 @@ class Config(QConfig):
 
 def load_log_config():
     global log_config
-    if log_config is not None:
-        logger.success("log_config is not None")
-        return log_config
-    log_config = Config()
-    qconfig.load("app/config/config-log.json5", log_config)
-    if log_config == {}:
-        logger.error("load config fail")
-        return None
-    logger.success("load config success")
-    return log_config
+    return config.load(log_config, "app/config/config-log.json5", Config)
 
 
-def get_log_config():
-    if log_config is None:
-        logger.error("log_config is None")
-    return log_config
-
-
-log_config = None
+log_config = load_log_config()

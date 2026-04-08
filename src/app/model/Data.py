@@ -1,5 +1,4 @@
 import Base
-import Tag
 from sqlalchemy import (Column, String, Int, Enum, ARRAY)
 
 

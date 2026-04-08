@@ -1,0 +1,10 @@
+{
+  "MainWindow": {
+    "DpiScale": "Auto",
+    "Language": "Auto",
+    "MicaEnabled": true
+  },
+  "Update": {
+    "CheckUpdateAtStartUp": true
+  },
+}
