@@ -1,12 +1,10 @@
 from loguru import logger
-from init.init_database import (get_dbsession)
+from init import (get_db_dbsession)
 
 
 def create_session():
-    DBSession = get_dbsession()
-    if DBSession is None:
-        return None
-    session = DBSession()
+    db_session = get_db_dbsession()
+    session = db_session()
     if session is None:
         logger.error("session create fail")
         return None

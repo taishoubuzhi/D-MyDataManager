@@ -1,10 +1,11 @@
 import sys
 import datetime
-from app.commom.config.config_log import (load_config)
+from app.commom.config import (load_log_config, get_log_config)
 
 from loguru import logger
 
-def set_logger_config(sink, rotation, log_config_item):
+
+def _set_logger_config(sink, rotation, log_config_item):
     """
     配置并添加日志处理器
     根据配置参数设置 logger 的输出目标、格式、轮转等属性
@@ -29,7 +30,7 @@ def set_logger_config(sink, rotation, log_config_item):
                catch=log_config_item.catch.value)  # 是否捕获异常并记录到日志
 
 
-def get_log_file_path(file_name, log_config_item):
+def _get_log_file_path(file_name, log_config_item):
     """
     生成完整的日志文件路径
     根据配置决定是否在文件名中添加时间戳以避免覆盖
@@ -56,19 +57,13 @@ def get_log_file_path(file_name, log_config_item):
     # 拼接完整的文件路径：日志目录 + "/" + 文件名
     return log_config_item.file_path.value + "/" + file_name
 
-def init():
-    """
-    初始化日志系统
-    根据配置项设置 logger 的各种输出目标和行为
-    这是整个日志配置的入口函数，应在程序启动时调用
-    """
-    log_config = load_config()
-    if log_config is None:
+
+def init_log():
+    if load_log_config() is None:
         return None
-    # 1.预处理
-    # 初始化轮转策略变量为 None
+    log_config = get_log_config()
+    
     rotation = None
-    # 根据配置的轮转模式，计算具体的轮转策略
     match log_config.rotate_mode:
         case "Size":
             # 按文件大小轮转：拼接大小数值和单位（如 "10 MB"）
@@ -82,28 +77,16 @@ def init():
         case _:
             # 其他情况（包括 "None"）：不启用轮转
             rotation = None
-    # 2.输出设置
-    # loguru 默认会添加一个输出到 stderr 的处理器，先将其移除
+
     logger.remove()
 
-    # 2.1 控制台输出
-    # 如果启用了控制台输出
     if log_config.output_console.value:
-        # 添加一个输出到标准错误流（sys.stderr）的日志处理器
-        # 使用之前计算的轮转策略（对控制台输出通常无效，但保持一致性）
-        set_logger_config(sys.stderr, rotation, log_config)
+        _set_logger_config(sys.stderr, rotation, log_config)
 
-    # 2.2 文件输出
-    # 如果启用了文件输出
     if log_config.output_file.value:
-        # 生成统一日志文件的完整路径
-        file_path = get_log_file_path(log_config, log_config.log_file.value)
-        # 添加统一日志文件的处理器
-        set_logger_config(file_path, rotation, log_config)
-
-        # 如果启用了按等级分文件
+        file_path = _get_log_file_path(log_config, log_config.log_file.value)
+        _set_logger_config(file_path, rotation, log_config)
         if log_config.different_level_file.value:
-            # 遍历所有日志等级对应的文件名
             for file in [log_config.trace_level_file.value,
                          log_config.debug_level_file.value,
                          log_config.info_level_file.value,
@@ -111,8 +94,6 @@ def init():
                          log_config.warning_level_file.value,
                          log_config.error_level_file.value,
                          log_config.critical_level_file.value]:
-                # 为每个等级的日志文件生成完整路径
-                file_path = get_log_file_path(file, log_config)
-                # 添加该等级日志文件的处理器
-                set_logger_config(file_path, rotation, log_config)
-
+                file_path = _get_log_file_path(file, log_config)
+                _set_logger_config(file_path, rotation, log_config)
+    return None
