@@ -1,10 +1,19 @@
 {
-  "MainWindow": {
-    "DpiScale": "Auto",
-    "Language": "Auto",
-    "MicaEnabled": true
-  },
-  "Update": {
-    "CheckUpdateAtStartUp": true
-  },
+    "Update": {
+        "CheckUpdateAtStartUp": true
+    },
+    "MainWindow": {
+        "DpiScale": "Auto",
+        "Language": "zh_CN",
+        "MicaEnabled": true
+    },
+    "QFluentWidgets": {
+        "FontFamilies": [
+            "Segoe UI",
+            "Microsoft YaHei",
+            "PingFang SC"
+        ],
+        "ThemeColor": "#ff009faa",
+        "ThemeMode": "Dark"
+    }
 }
