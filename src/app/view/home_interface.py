@@ -4,7 +4,7 @@ from PyQt6.QtGui import QPixmap, QPainter, QColor, QBrush, QPainterPath, QLinear
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
 
 from qfluentwidgets import ScrollArea, isDarkTheme, FluentIcon
-from ..common.config import app_config
+from ..common.config import config
 from ..components import LinkCardView
 from ..components import SampleCardView
 from ..common.style_sheet import StyleSheet

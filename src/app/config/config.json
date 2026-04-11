@@ -1,0 +1,68 @@
+{
+    "Log": {
+        "Backtrace": true,
+        "Catch": true,
+        "Diagnose": true,
+        "Encoding": "utf-8",
+        "Enqueue": true,
+        "Format-To-JSON": false,
+        "JSON-Format": "{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | {message}",
+        "Log-Format": "{time} | {level} | {message}",
+        "Log-Level": "Debug",
+        "Output-Console": true
+    },
+    "Material": {
+        "AcrylicBlurRadius": 15
+    },
+    "Update": {
+        "CheckUpdateAtStartUp": true
+    },
+    "Log-File": {
+        "Compress-Mode": "zip",
+        "File-Critical": "critical.log",
+        "File-Debug": "debug.log",
+        "File-Error": "error.log",
+        "File-Overwrite": true,
+        "Log-Path": "D:/Program/PyCharm/python/LeetCode/D-MyDataManager/src/logs",
+        "File-Info": "info.log",
+        "File-Log": "log.log",
+        "Retention": 7,
+        "Retention-Unit": "days",
+        "Rotate-Interval": 1,
+        "Rotate-Interval-Unit": "hour",
+        "Rotate-Mode": "None",
+        "Rotate-Size": 10,
+        "Rotate-Size-Unit": "MB",
+        "Rotate-Time": "00:00",
+        "File-Success": "success.log",
+        "File-Trace": "trace.log",
+        "File-Warn": "warn.log"
+    },
+    "DB": {
+        "Connect-Args": {},
+        "Echo": true,
+        "Max-Overflow": 20,
+        "Pool-Pre-Ping": true,
+        "Pool-Recycle": 3600,
+        "Pool-Size": 10,
+        "URL": "sqlite:///data.db"
+    },
+    "File": {
+        "Different-Level-Files": true,
+        "Output-File": true
+    },
+    "MainWindow": {
+        "DpiScale": "Auto",
+        "Language": "zh_CN",
+        "MicaEnabled": true
+    },
+    "QFluentWidgets": {
+        "FontFamilies": [
+            "Segoe UI",
+            "Microsoft YaHei",
+            "PingFang SC"
+        ],
+        "ThemeColor": "#ff009faa",
+        "ThemeMode": "Dark"
+    }
+}

@@ -11,7 +11,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog, QTimeEdit, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
 import datetime
 
-from ..common.config import app_config,log_config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_SIZE_UNITS,ROTATE_INTERVAL_UNITS,RETENTION_UNITS,COMPRESS_MODES
+from ..common.config import config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_SIZE_UNITS,ROTATE_INTERVAL_UNITS,RETENTION_UNITS,COMPRESS_MODES
 from ..common.util import is_win11
 from ..common.signal_bus import signalBus
 from ..common.style_sheet import StyleSheet
@@ -35,11 +35,11 @@ class SettingInterface(ScrollArea):
             FIF.TRANSPARENT,
             self.tr('Mica effect'),
             self.tr('Apply semi transparent to windows and surfaces'),
-            app_config.micaEnabled,
+            config.micaEnabled,
             self.personalGroup
         )
         self.themeCard = ComboBoxSettingCard(
-            app_config.themeMode,
+            config.themeMode,
             FIF.BRUSH,
             self.tr('Application theme'),
             self.tr("Change the appearance of your application"),
@@ -50,14 +50,14 @@ class SettingInterface(ScrollArea):
             parent=self.personalGroup
         )
         self.themeColorCard = CustomColorSettingCard(
-            app_config.themeColor,
+            config.themeColor,
             FIF.PALETTE,
             self.tr('Theme color'),
             self.tr('Change the theme color of you application'),
             self.personalGroup
         )
         self.zoomCard = ComboBoxSettingCard(
-            app_config.dpi_scale,
+            config.dpi_scale,
             FIF.ZOOM,
             self.tr("Interface zoom"),
             self.tr("Change the size of widgets and fonts"),
@@ -68,7 +68,7 @@ class SettingInterface(ScrollArea):
             parent=self.personalGroup
         )
         self.languageCard = ComboBoxSettingCard(
-            app_config.language,
+            config.language,
             FIF.LANGUAGE,
             self.tr('Language'),
             self.tr('Set your preferred language for UI'),
@@ -80,7 +80,7 @@ class SettingInterface(ScrollArea):
         self.materialGroup = SettingCardGroup(
             self.tr('Material'), self.scrollWidget)
         self.blurRadiusCard = RangeSettingCard(
-            app_config.blurRadius,
+            config.blurRadius,
             FIF.ALBUM,
             self.tr('Acrylic blur radius'),
             self.tr('The greater the radius, the more blurred the image'),
@@ -94,7 +94,7 @@ class SettingInterface(ScrollArea):
             FIF.UPDATE,
             self.tr('Check for updates when the application starts'),
             self.tr('The new version will be more stable and have more features'),
-            configItem=app_config.check_update_at_start_up,
+            configItem=config.check_update_at_start_up,
             parent=self.updateSoftwareGroup
         )
 
@@ -102,7 +102,7 @@ class SettingInterface(ScrollArea):
         self.logGroup = SettingCardGroup(
             self.tr('Log'), self.scrollWidget)
         self.logLevelCard = ComboBoxSettingCard(
-            log_config.log_level,
+            config.log_level,
             FIF.INFO,
             self.tr('Log level'),
             self.tr('Set the log level'),
@@ -113,32 +113,32 @@ class SettingInterface(ScrollArea):
             FIF.DOCUMENT,
             self.tr('Format to JSON'),
             self.tr('Format log to JSON'),
-            log_config.format_to_json,
+            config.format_to_json,
             self.logGroup
         )
         self.catchCard = SwitchSettingCard(
             FIF.CANCEL,
             self.tr('Catch'),
             self.tr('Catch exceptions'),
-            log_config.catch,
+            config.catch,
             self.logGroup
         )
         self.outputConsoleCard = SwitchSettingCard(
             FIF.COMMAND_PROMPT,
             self.tr('Output to console'),
             self.tr('Output log to console'),
-            log_config.output_console,
+            config.output_console,
             self.logGroup
         )
         self.enqueueCard = SwitchSettingCard(
             FIF.MORE,
             self.tr('Enqueue'),
             self.tr('Enqueue log'),
-            log_config.enqueue,
+            config.enqueue,
             self.logGroup
         )
         self.encodingCard = ComboBoxSettingCard(
-            log_config.encoding,
+            config.encoding,
             FIF.FONT,
             self.tr('Encoding'),
             self.tr('Set the encoding of log'),
@@ -149,14 +149,14 @@ class SettingInterface(ScrollArea):
             FIF.HISTORY,
             self.tr('Backtrace'),
             self.tr('Backtrace exceptions'),
-            log_config.backtrace,
+            config.backtrace,
             self.logGroup
         )
         self.diagnoseCard = SwitchSettingCard(
             FIF.DEVELOPER_TOOLS,
             self.tr('Diagnose'),
             self.tr('Diagnose problems'),
-            log_config.diagnose,
+            config.diagnose,
             self.logGroup
         )
 
@@ -164,32 +164,32 @@ class SettingInterface(ScrollArea):
             FIF.SAVE_AS,
             self.tr('Output to file'),
             self.tr('Output log to file'),
-            log_config.output_file,
+            config.output_file,
             self.logGroup
         )
         self.differentLevelFileCard = SwitchSettingCard(
             FIF.FILTER,
             self.tr('Different level files'),
             self.tr('Output log to different level files'),
-            log_config.different_level_file,
+            config.different_level_file,
             self.logGroup
         )
         self.filePathCard = PushSettingCard(
             self.tr('File path'),
             FIF.FOLDER,
             self.tr('Set the path of log file'),
-            log_config.get(log_config.file_path),
+            config.get(config.file_path),
             self.logGroup
         )
         self.fileOverrideCard = SwitchSettingCard(
             FIF.SYNC,
             self.tr('File override'),
             self.tr('Override log file'),
-            log_config.file_override,
+            config.file_override,
             self.logGroup
         )
         self.rotateModeCard = ComboBoxSettingCard(
-            log_config.rotate_mode,
+            config.rotate_mode,
             FIF.ROTATE,
             self.tr('Rotate mode'),
             self.tr('Set the rotate mode of log file'),
@@ -197,7 +197,7 @@ class SettingInterface(ScrollArea):
             parent=self.logGroup
         )
         self.rotateSizeCard = RangeSettingCard(
-            log_config.rotate_size,
+            config.rotate_size,
             FIF.ZOOM,
             self.tr('Rotate size'),
             self.tr('Set the rotate size of log file'),
@@ -207,19 +207,19 @@ class SettingInterface(ScrollArea):
             self.tr('Rotate time'),
             FIF.CALENDAR,
             self.tr('Set the rotate time of log file'),
-            str(log_config.get(log_config.rotate_time)),
+            str(config.get(config.rotate_time)),
             self.logGroup
         )
 
         self.rotateIntervalCard = RangeSettingCard(
-            log_config.rotate_interval,
+            config.rotate_interval,
             FIF.DATE_TIME,
             self.tr('Rotate interval'),
             self.tr('Set the rotate interval of log file'),
             self.logGroup
         )
         self.rotateIntervalUnitCard = ComboBoxSettingCard(
-            log_config.rotate_interval_unit,
+            config.rotate_interval_unit,
             FIF.UNIT,
             self.tr('Rotate interval unit'),
             self.tr('Set the rotate interval unit of log file'),
@@ -228,7 +228,7 @@ class SettingInterface(ScrollArea):
         )
 
         self.retentionCard = RangeSettingCard(
-            log_config.retention,
+            config.retention,
             FIF.LIBRARY,
             self.tr('Retention'),
             self.tr('Set the retention of log file'),
@@ -236,7 +236,7 @@ class SettingInterface(ScrollArea):
         )
 
         self.retentionUnitCard = ComboBoxSettingCard(
-            log_config.retention_unit,
+            config.retention_unit,
             FIF.UNIT,
             self.tr('Retention unit'),
             self.tr('Set the retention unit of log file'),
@@ -245,7 +245,7 @@ class SettingInterface(ScrollArea):
         )
 
         self.compressModeCard = ComboBoxSettingCard(
-            log_config.compress_mode,
+            config.compress_mode,
             FIF.ZIP_FOLDER,
             self.tr('Compress mode'),
             self.tr('Set the compress mode of log file'),
@@ -329,9 +329,9 @@ class SettingInterface(ScrollArea):
 
     def __onFilePathCardClicked(self):
         folder = QFileDialog.getExistingDirectory(self, self.tr("Choose folder"), "./")
-        if not folder or log_config.get(log_config.file_path) == folder:
+        if not folder or config.get(config.file_path) == folder:
             return
-        log_config.set(log_config.downloadFolder, folder)
+        config.set(config.downloadFolder, folder)
         self.filePathCard.setContent(folder)
 
     def __onRotateTimeCard(self):
@@ -339,10 +339,10 @@ class SettingInterface(ScrollArea):
 
     def __connectSignalToSlot(self):
         """ connect signal to slot """
-        app_config.appRestartSig.connect(self.__showRestartTooltip)
+        config.appRestartSig.connect(self.__showRestartTooltip)
 
         # personalization
-        app_config.themeChanged.connect(setTheme)
+        config.themeChanged.connect(setTheme)
         self.themeColorCard.colorChanged.connect(lambda c: setThemeColor(c))
         self.micaCard.checkedChanged.connect(signalBus.micaEnableChanged)
 

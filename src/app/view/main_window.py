@@ -6,7 +6,7 @@ from qfluentwidgets import (NavigationAvatarWidget, NavigationItemPosition, Mess
                             SplashScreen, SystemThemeListener, isDarkTheme)
 from qfluentwidgets import FluentIcon as FIF
 
-from ..common.config import (app_config)
+from ..common.config import config
 from .home_interface import HomeInterface
 from .setting_interface import SettingInterface
 
@@ -56,7 +56,7 @@ class MainWindow(FluentWindow):
         self.setWindowIcon(QIcon(':/d/images/logo.png'))
         self.setWindowTitle("数据管理器")
 
-        self.setMicaEffectEnabled(app_config.get(app_config.micaEnabled))
+        self.setMicaEffectEnabled(config.get(config.micaEnabled))
 
         self.splashScreen = SplashScreen(self.windowIcon(), self)
         self.splashScreen.setIconSize(QSize(106, 106))
@@ -69,7 +69,7 @@ class MainWindow(FluentWindow):
         QApplication.processEvents()
 
     def onSupport(self):
-        language = app_config.get(app_config.language).value
+        language = config.get(config.language).value
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
