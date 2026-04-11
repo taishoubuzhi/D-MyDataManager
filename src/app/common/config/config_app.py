@@ -23,6 +23,9 @@ class LanguageSerializer(ConfigSerializer):
 
 
 class Config(QConfig):
+    # Material
+    blurRadius = RangeConfigItem("Material", "AcrylicBlurRadius", 15, RangeValidator(0, 40))
+
     # main window
     micaEnabled = ConfigItem("MainWindow", "MicaEnabled", is_win11(), BoolValidator())
     dpi_scale = OptionsConfigItem(
