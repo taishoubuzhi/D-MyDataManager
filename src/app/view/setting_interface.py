@@ -11,7 +11,7 @@ from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog, QTimeEdit, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
 import datetime
 
-from ..common.config import app_config,pre_log_config,log_config, AUTHOR, VERSION, YEAR
+from ..common.config import app_config,log_config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_SIZE_UNITS,ROTATE_INTERVAL_UNITS,RETENTION_UNITS,COMPRESS_MODES
 from ..common.util import is_win11
 from ..common.signal_bus import signalBus
 from ..common.style_sheet import StyleSheet
@@ -106,7 +106,7 @@ class SettingInterface(ScrollArea):
             FIF.INFO,
             self.tr('Log level'),
             self.tr('Set the log level'),
-            texts=log_config.get(pre_log_config.log_levels),
+            texts=LOG_LEVELS,
             parent=self.logGroup
         )
         self.formatToJsonCard = SwitchSettingCard(
@@ -142,7 +142,7 @@ class SettingInterface(ScrollArea):
             FIF.FONT,
             self.tr('Encoding'),
             self.tr('Set the encoding of log'),
-            texts=log_config.get(pre_log_config.encodings),
+            texts=ENCODINGS,
             parent=self.logGroup
         )
         self.backtraceCard = SwitchSettingCard(
@@ -193,7 +193,7 @@ class SettingInterface(ScrollArea):
             FIF.ROTATE,
             self.tr('Rotate mode'),
             self.tr('Set the rotate mode of log file'),
-            texts=log_config.get(pre_log_config.rotate_modes),
+            texts=ROTATE_MODES,
             parent=self.logGroup
         )
         self.rotateSizeCard = RangeSettingCard(
@@ -223,7 +223,7 @@ class SettingInterface(ScrollArea):
             FIF.UNIT,
             self.tr('Rotate interval unit'),
             self.tr('Set the rotate interval unit of log file'),
-            texts=log_config.get(pre_log_config.rotate_interval_units),
+            texts=ROTATE_INTERVAL_UNITS,
             parent=self.logGroup
         )
 
@@ -240,7 +240,7 @@ class SettingInterface(ScrollArea):
             FIF.UNIT,
             self.tr('Retention unit'),
             self.tr('Set the retention unit of log file'),
-                texts=log_config.get(pre_log_config.retention_units),
+                texts=RETENTION_UNITS,
             parent=self.logGroup
         )
 
@@ -249,7 +249,7 @@ class SettingInterface(ScrollArea):
             FIF.ZIP_FOLDER,
             self.tr('Compress mode'),
             self.tr('Set the compress mode of log file'),
-            texts=log_config.get(pre_log_config.compress_modes),
+            texts=COMPRESS_MODES,
             parent=self.logGroup
         )
 

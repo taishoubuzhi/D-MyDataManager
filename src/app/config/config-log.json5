@@ -1,15 +1,5 @@
 {
   "Log": {
-    // 日志等级:TRACE(5):追踪,Debug(10):调试,Info(20):信息,Success(25):成功,Warn(30):警告,Error(40):错误,CRITICAL(50):严重错误,
-    "Log-Levels": [
-      "Trace",
-      "Debug",
-      "Info",
-      "Success",
-      "Warn",
-      "Error",
-      "Critical"
-    ],
     // 过滤日志等级:只显示过滤的日志等级,
     "Log-Level": "Debug",
     // 日志格式{time}:日志时间,{level}:日志等级,{message}:日志内容,{name}:模块名,{line}:代码行号,{process}:进程ID,{thread}:线程ID
@@ -24,10 +14,6 @@
     "Output-Console": true,
     // 记录放入队列
     "Enqueue": true,
-    // 编码
-    "Encodings": [
-      "utf-8"
-    ],
     // 默认编码
     "Encoding": "utf-8",
     // 异常跟踪是否应该延伸到捕获错误的点之外
@@ -54,56 +40,23 @@
     "File-Log": "log.log",
     // 日志文件覆盖
     "File-Overwrite": true,
-    // 轮转模式，包括None(不轮转),Size(文件大小),Time(时间),Interval(时间间隔)
-    "Rotate-Modes": [
-      "None",
-      "Size",
-      "Time",
-      "Interval"
-    ],
     // 默认轮转模式
     "Rotate-Mode": "None",
     // 超过 10MB 自动切割新文件 "10MB"
     "Rotate-Size": 10,
-    // 文件大小单位
-    "Rotate-Size-Units": [
-      "B",
-      "KB",
-      "MB",
-      "GB"
-    ],
     // 默认文件大小单位
     "Rotate-Size-Unit": "MB",
     // 每天 00:00 生成新文件
     "Rotate-Time": "00:00",
     // 每 1 小时生成新文件 "1 hour"
     "Rotate-Interval": 1,
-    // 间隔时间单位
-    "Rotate-Interval-Units": [
-      "second",
-      "minute",
-      "hour",
-      "day"
-    ],
     // 默认间隔时间单位
     "Rotate-Interval-Unit": "hour",
     // 保留 7 天的日志 "7 days"
     "Retention": 7,
-    // 保留时间单位
-    "Retention-Units": [
-      "seconds",
-      "minutes",
-      "hours",
-      "days"
-    ],
     // 默认保留时间单位
     "Retention-Unit": "days",
-    // 压缩方式，包括 None(不压缩), zip(zip 压缩)
-    "Compress-Modes": [
-      "None",
-      "zip"
-    ],
     // 默认压缩方式
-    "Compress-Mode": "zip",
-  },
+    "Compress-Mode": "zip"
+  }
 }

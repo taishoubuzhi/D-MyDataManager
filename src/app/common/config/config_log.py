@@ -18,23 +18,18 @@ class FileTimeSerializer(ConfigSerializer):
                 return datetime.time(0, 0)
 
 
-class PreConfig(QConfig):
-    log_levels = ConfigItem("Log", "Log-Levels", ["Trace", "Debug", "Info", "Success", "Warn", "Error", "Critical"])
-    encodings = ConfigItem("Log", "Encodings", ["utf-8"])
-    rotate_modes = ConfigItem("File", "Rotate-Modes", ["None", "Size", "Time", "Interval"])
-    rotate_size_units = ConfigItem("File", "Rotate-Size-Units", ["B", "KB", "MB", "GB"])
-    rotate_interval_units = ConfigItem("File", "Rotate-Interval-Units", ["second", "minute", "hour", "day"])
-    retention_units = ConfigItem("File", "Retention-Units", ["seconds", "minutes", "hours", "days"])
-    compress_modes = ConfigItem("File", "Compress-Modes", ["None", "zip"])
-
-
-pre_log_config = PreConfig()
+LOG_LEVELS = ["Trace", "Debug", "Info", "Success", "Warn", "Error", "Critical"]
+ENCODINGS = ["utf-8"]
+ROTATE_MODES = ["None", "Size", "Time", "Interval"]
+ROTATE_SIZE_UNITS = ["B", "KB", "MB", "GB"]
+ROTATE_INTERVAL_UNITS = ["second", "minute", "hour", "day"]
+RETENTION_UNITS = ["seconds", "minutes", "hours", "days"]
+COMPRESS_MODES = ["None", "zip"]
 
 
 class Config(QConfig):
-    global pre_log_config
     log_level = OptionsConfigItem("Log", "Log-Level", "Debug",
-                                  OptionsValidator(pre_log_config.log_levels.value),
+                                  OptionsValidator(LOG_LEVELS),
                                   restart=True)
 
     log_format = ConfigItem("Log", "Log-Format", "{time} | {level} | {message}")
@@ -58,7 +53,7 @@ class Config(QConfig):
                          restart=True)
 
     encoding = OptionsConfigItem("Log", "Encoding", "utf-8",
-                                 OptionsValidator(pre_log_config.encodings.value),
+                                 OptionsValidator(ENCODINGS),
                                  restart=True)
 
     backtrace = ConfigItem("Log", "Backtrace", True,
@@ -97,7 +92,7 @@ class Config(QConfig):
 
     # 当前使用的轮转模式，默认为 "None"（不轮转）
     rotate_mode = OptionsConfigItem("File", "Rotate-Mode", "None",
-                                    OptionsValidator(pre_log_config.rotate_modes.value),
+                                    OptionsValidator(ROTATE_MODES),
                                     restart=True)
 
     rotate_size = RangeConfigItem("File", "Rotate-Size", 1,
@@ -105,7 +100,7 @@ class Config(QConfig):
                                   restart=True)
 
     rotate_size_unit = OptionsConfigItem("File", "Rotate-Size-Unit", "MB",
-                                         OptionsValidator(pre_log_config.rotate_size_units.value),
+                                         OptionsValidator(ROTATE_SIZE_UNITS),
                                          restart=True)
 
     rotate_time = ConfigItem("File", "Rotate-Time",
@@ -119,7 +114,7 @@ class Config(QConfig):
                                       restart=True)
 
     rotate_interval_unit = OptionsConfigItem("File", "Rotate-Interval-Unit", "hour",
-                                             OptionsValidator(pre_log_config.rotate_interval_units.value),
+                                             OptionsValidator(ROTATE_INTERVAL_UNITS),
                                              restart=True)
 
     retention = RangeConfigItem("File", "Retention", 7,
@@ -127,11 +122,11 @@ class Config(QConfig):
                                 restart=True)
 
     retention_unit = OptionsConfigItem("File", "Retention-Unit", "days",
-                                       OptionsValidator(pre_log_config.retention_units.value),
+                                       OptionsValidator(RETENTION_UNITS),
                                        restart=True)
 
     compress_mode = OptionsConfigItem("File", "Compress-Mode", "None",
-                                      OptionsValidator(pre_log_config.compress_modes.value),
+                                      OptionsValidator(COMPRESS_MODES),
                                       restart=True)
 
 
@@ -140,7 +135,7 @@ log_config = Config()
 
 def load_log_config():
     global pre_log_config, log_config
-    qconfig.load("app/config/config-log.json5", pre_log_config, log_config)
 
+    qconfig.load("app/config/config-log.json5", log_config)
 
 load_log_config()
