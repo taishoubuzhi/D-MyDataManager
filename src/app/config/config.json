@@ -53,8 +53,8 @@
     },
     "MainWindow": {
         "DpiScale": "Auto",
-        "Language": "zh_CN",
-        "MicaEnabled": true
+        "Language": "en_US",
+        "MicaEnabled": false
     },
     "QFluentWidgets": {
         "FontFamilies": [

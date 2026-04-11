@@ -26,7 +26,6 @@ POOL_RECYCLE_RANGE = (0, 86400)
 
 class Language(Enum):
     CHINESE_SIMPLIFIED = QLocale(QLocale.Language.Chinese, QLocale.Country.China)
-    CHINESE_TRADITIONAL = QLocale(QLocale.Language.Chinese, QLocale.Country.HongKong)
     ENGLISH = QLocale(QLocale.Language.English)
     AUTO = QLocale()
 

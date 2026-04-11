@@ -1,5 +1,5 @@
 <RCC>
-    <qresource prefix="/d">
+    <qresource prefix="/app">
         <file>images/controls/Acrylic.png</file>
         <file>images/controls/AnimatedIcon.png</file>
         <file>images/controls/AnimatedVisualPlayer.png</file>

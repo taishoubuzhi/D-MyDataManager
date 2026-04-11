@@ -19,7 +19,7 @@ class BannerWidget(QWidget):
 
         self.vBoxLayout = QVBoxLayout(self)
         self.dLabel = QLabel('Fluent d', self)
-        self.banner = QPixmap(':/d/images/header1.png')
+        self.banner = QPixmap(':/app/images/header1.png')
         self.linkCardView = LinkCardView(self)
 
         self.dLabel.setObjectName('dLabel')
@@ -97,7 +97,7 @@ class HomeInterface(ScrollArea):
         basicInputView = SampleCardView(
             self.tr("Basic input samples"), self.view)
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/Button.png",
+            icon=":/app/images/controls/Button.png",
             title="Button",
             content=self.tr(
                 "A control that responds to user input and emit clicked signal."),
@@ -105,14 +105,14 @@ class HomeInterface(ScrollArea):
             index=0
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/Checkbox.png",
+            icon=":/app/images/controls/Checkbox.png",
             title="CheckBox",
             content=self.tr("A control that a user can select or clear."),
             routeKey="basicInputInterface",
             index=8
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/ComboBox.png",
+            icon=":/app/images/controls/ComboBox.png",
             title="ComboBox",
             content=self.tr(
                 "A drop-down list of items a user can select from."),
@@ -120,7 +120,7 @@ class HomeInterface(ScrollArea):
             index=10
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/DropDownButton.png",
+            icon=":/app/images/controls/DropDownButton.png",
             title="DropDownButton",
             content=self.tr(
                 "A button that displays a flyout of choices when clicked."),
@@ -128,7 +128,7 @@ class HomeInterface(ScrollArea):
             index=12
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/HyperlinkButton.png",
+            icon=":/app/images/controls/HyperlinkButton.png",
             title="HyperlinkButton",
             content=self.tr(
                 "A button that appears as hyperlink text, and can navigate to a URI or handle a Click event."),
@@ -136,7 +136,7 @@ class HomeInterface(ScrollArea):
             index=18
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/RadioButton.png",
+            icon=":/app/images/controls/RadioButton.png",
             title="RadioButton",
             content=self.tr(
                 "A control that allows a user to select a single option from a group of options."),
@@ -144,7 +144,7 @@ class HomeInterface(ScrollArea):
             index=19
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/Slider.png",
+            icon=":/app/images/controls/Slider.png",
             title="Slider",
             content=self.tr(
                 "A control that lets the user select from a range of values by moving a Thumb control along a track."),
@@ -152,7 +152,7 @@ class HomeInterface(ScrollArea):
             index=20
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/SplitButton.png",
+            icon=":/app/images/controls/SplitButton.png",
             title="SplitButton",
             content=self.tr(
                 "A two-part button that displays a flyout when its secondary part is clicked."),
@@ -160,7 +160,7 @@ class HomeInterface(ScrollArea):
             index=21
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/ToggleSwitch.png",
+            icon=":/app/images/controls/ToggleSwitch.png",
             title="SwitchButton",
             content=self.tr(
                 "A switch that can be toggled between 2 states."),
@@ -168,7 +168,7 @@ class HomeInterface(ScrollArea):
             index=25
         )
         basicInputView.addSampleCard(
-            icon=":/d/images/controls/ToggleButton.png",
+            icon=":/app/images/controls/ToggleButton.png",
             title="ToggleButton",
             content=self.tr(
                 "A button that can be switched between two states like a CheckBox."),
@@ -180,21 +180,21 @@ class HomeInterface(ScrollArea):
         # date time samples
         dateTimeView = SampleCardView(self.tr('Date & time samples'), self.view)
         dateTimeView.addSampleCard(
-            icon=":/d/images/controls/CalendarDatePicker.png",
+            icon=":/app/images/controls/CalendarDatePicker.png",
             title="CalendarPicker",
             content=self.tr("A control that lets a user pick a date value using a calendar."),
             routeKey="dateTimeInterface",
             index=0
         )
         dateTimeView.addSampleCard(
-            icon=":/d/images/controls/DatePicker.png",
+            icon=":/app/images/controls/DatePicker.png",
             title="DatePicker",
             content=self.tr("A control that lets a user pick a date value."),
             routeKey="dateTimeInterface",
             index=2
         )
         dateTimeView.addSampleCard(
-            icon=":/d/images/controls/TimePicker.png",
+            icon=":/app/images/controls/TimePicker.png",
             title="TimePicker",
             content=self.tr(
                 "A configurable control that lets a user pick a time value."),
@@ -206,35 +206,35 @@ class HomeInterface(ScrollArea):
         # dialog samples
         dialogView = SampleCardView(self.tr('Dialog samples'), self.view)
         dialogView.addSampleCard(
-            icon=":/d/images/controls/Flyout.png",
+            icon=":/app/images/controls/Flyout.png",
             title="Dialog",
             content=self.tr("A frameless message dialog."),
             routeKey="dialogInterface",
             index=0
         )
         dialogView.addSampleCard(
-            icon=":/d/images/controls/ContentDialog.png",
+            icon=":/app/images/controls/ContentDialog.png",
             title="MessageBox",
             content=self.tr("A message dialog with mask."),
             routeKey="dialogInterface",
             index=1
         )
         dialogView.addSampleCard(
-            icon=":/d/images/controls/ColorPicker.png",
+            icon=":/app/images/controls/ColorPicker.png",
             title="ColorDialog",
             content=self.tr("A dialog that allows user to select color."),
             routeKey="dialogInterface",
             index=2
         )
         dialogView.addSampleCard(
-            icon=":/d/images/controls/Flyout.png",
+            icon=":/app/images/controls/Flyout.png",
             title="Flyout",
             content=self.tr("Shows contextual information and enables user interaction."),
             routeKey="dialogInterface",
             index=3
         )
         dialogView.addSampleCard(
-            icon=":/d/images/controls/TeachingTip.png",
+            icon=":/app/images/controls/TeachingTip.png",
             title="TeachingTip",
             content=self.tr("A content-rich flyout for guiding users and enabling teaching moments."),
             routeKey="dialogInterface",
@@ -245,7 +245,7 @@ class HomeInterface(ScrollArea):
         # layout samples
         layoutView = SampleCardView(self.tr('Layout samples'), self.view)
         layoutView.addSampleCard(
-            icon=":/d/images/controls/Grid.png",
+            icon=":/app/images/controls/Grid.png",
             title="FlowLayout",
             content=self.tr(
                 "A layout arranges components in a left-to-right flow, wrapping to the next row when the current row is full."),
@@ -257,7 +257,7 @@ class HomeInterface(ScrollArea):
         # material samples
         materialView = SampleCardView(self.tr('Material samples'), self.view)
         materialView.addSampleCard(
-            icon=":/d/images/controls/Acrylic.png",
+            icon=":/app/images/controls/Acrylic.png",
             title="AcrylicLabel",
             content=self.tr(
                 "A translucent material recommended for panel background."),
@@ -269,7 +269,7 @@ class HomeInterface(ScrollArea):
         # menu samples
         menuView = SampleCardView(self.tr('Menu & toolbars samples'), self.view)
         menuView.addSampleCard(
-            icon=":/d/images/controls/MenuFlyout.png",
+            icon=":/app/images/controls/MenuFlyout.png",
             title="RoundMenu",
             content=self.tr(
                 "Shows a contextual list of simple commands or options."),
@@ -277,7 +277,7 @@ class HomeInterface(ScrollArea):
             index=0
         )
         menuView.addSampleCard(
-            icon=":/d/images/controls/CommandBar.png",
+            icon=":/app/images/controls/CommandBar.png",
             title="CommandBar",
             content=self.tr(
                 "Shows a contextual list of simple commands or options."),
@@ -285,7 +285,7 @@ class HomeInterface(ScrollArea):
             index=2
         )
         menuView.addSampleCard(
-            icon=":/d/images/controls/CommandBarFlyout.png",
+            icon=":/app/images/controls/CommandBarFlyout.png",
             title="CommandBarFlyout",
             content=self.tr(
                 "A mini-toolbar displaying proactive commands, and an optional menu of commands."),
@@ -297,7 +297,7 @@ class HomeInterface(ScrollArea):
         # navigation
         navigationView = SampleCardView(self.tr('Navigation'), self.view)
         navigationView.addSampleCard(
-            icon=":/d/images/controls/BreadcrumbBar.png",
+            icon=":/app/images/controls/BreadcrumbBar.png",
             title="BreadcrumbBar",
             content=self.tr(
                 "Shows the trail of navigation taken to the current location."),
@@ -305,7 +305,7 @@ class HomeInterface(ScrollArea):
             index=0
         )
         navigationView.addSampleCard(
-            icon=":/d/images/controls/Pivot.png",
+            icon=":/app/images/controls/Pivot.png",
             title="Pivot",
             content=self.tr(
                 "Presents information from different sources in a tabbed view."),
@@ -313,7 +313,7 @@ class HomeInterface(ScrollArea):
             index=1
         )
         navigationView.addSampleCard(
-            icon=":/d/images/controls/TabView.png",
+            icon=":/app/images/controls/TabView.png",
             title="TabView",
             content=self.tr(
                 "Presents information from different sources in a tabbed view."),
@@ -325,7 +325,7 @@ class HomeInterface(ScrollArea):
         # scroll samples
         scrollView = SampleCardView(self.tr('Scrolling samples'), self.view)
         scrollView.addSampleCard(
-            icon=":/d/images/controls/ScrollViewer.png",
+            icon=":/app/images/controls/ScrollViewer.png",
             title="ScrollArea",
             content=self.tr(
                 "A container control that lets the user pan and zoom its content smoothly."),
@@ -333,7 +333,7 @@ class HomeInterface(ScrollArea):
             index=0
         )
         scrollView.addSampleCard(
-            icon=":/d/images/controls/PipsPager.png",
+            icon=":/app/images/controls/PipsPager.png",
             title="PipsPager",
             content=self.tr(
                 "A control to let the user navigate through a paginated collection when the page numbers do not need to be visually known."),
@@ -345,7 +345,7 @@ class HomeInterface(ScrollArea):
         # state info samples
         stateInfoView = SampleCardView(self.tr('Status & info samples'), self.view)
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/ProgressRing.png",
+            icon=":/app/images/controls/ProgressRing.png",
             title="StateToolTip",
             content=self.tr(
                 "Shows the apps progress on a task, or that the app is performing ongoing work that does block user interaction."),
@@ -353,7 +353,7 @@ class HomeInterface(ScrollArea):
             index=0
         )
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/InfoBadge.png",
+            icon=":/app/images/controls/InfoBadge.png",
             title="InfoBadge",
             content=self.tr(
                 "An non-intrusive Ul to display notifications or bring focus to an area."),
@@ -361,7 +361,7 @@ class HomeInterface(ScrollArea):
             index=3
         )
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/InfoBar.png",
+            icon=":/app/images/controls/InfoBar.png",
             title="InfoBar",
             content=self.tr(
                 "An inline message to display app-wide status change information."),
@@ -369,7 +369,7 @@ class HomeInterface(ScrollArea):
             index=4
         )
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/ProgressBar.png",
+            icon=":/app/images/controls/ProgressBar.png",
             title="ProgressBar",
             content=self.tr(
                 "Shows the apps progress on a task, or that the app is performing ongoing work that doesn't block user interaction."),
@@ -377,7 +377,7 @@ class HomeInterface(ScrollArea):
             index=8
         )
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/ProgressRing.png",
+            icon=":/app/images/controls/ProgressRing.png",
             title="ProgressRing",
             content=self.tr(
                 "Shows the apps progress on a task, or that the app is performing ongoing work that doesn't block user interaction."),
@@ -385,7 +385,7 @@ class HomeInterface(ScrollArea):
             index=10
         )
         stateInfoView.addSampleCard(
-            icon=":/d/images/controls/ToolTip.png",
+            icon=":/app/images/controls/ToolTip.png",
             title="ToolTip",
             content=self.tr(
                 "Displays information for an element in a pop-up window."),
@@ -397,21 +397,21 @@ class HomeInterface(ScrollArea):
         # text samples
         textView = SampleCardView(self.tr('Text samples'), self.view)
         textView.addSampleCard(
-            icon=":/d/images/controls/TextBox.png",
+            icon=":/app/images/controls/TextBox.png",
             title="LineEdit",
             content=self.tr("A single-line plain text field."),
             routeKey="textInterface",
             index=0
         )
         textView.addSampleCard(
-            icon=":/d/images/controls/PasswordBox.png",
+            icon=":/app/images/controls/PasswordBox.png",
             title="PasswordLineEdit",
             content=self.tr("A control for entering passwords."),
             routeKey="textInterface",
             index=2
         )
         textView.addSampleCard(
-            icon=":/d/images/controls/NumberBox.png",
+            icon=":/app/images/controls/NumberBox.png",
             title="SpinBox",
             content=self.tr(
                 "A text control used for numeric input and evaluation of algebraic equations."),
@@ -419,7 +419,7 @@ class HomeInterface(ScrollArea):
             index=3
         )
         textView.addSampleCard(
-            icon=":/d/images/controls/RichEditBox.png",
+            icon=":/app/images/controls/RichEditBox.png",
             title="TextEdit",
             content=self.tr(
                 "A rich text editing control that supports formatted text, hyperlinks, and other rich content."),
@@ -431,7 +431,7 @@ class HomeInterface(ScrollArea):
         # view samples
         collectionView = SampleCardView(self.tr('View samples'), self.view)
         collectionView.addSampleCard(
-            icon=":/d/images/controls/ListView.png",
+            icon=":/app/images/controls/ListView.png",
             title="ListView",
             content=self.tr(
                 "A control that presents a collection of items in a vertical list."),
@@ -439,7 +439,7 @@ class HomeInterface(ScrollArea):
             index=0
         )
         collectionView.addSampleCard(
-            icon=":/d/images/controls/DataGrid.png",
+            icon=":/app/images/controls/DataGrid.png",
             title="TableView",
             content=self.tr(
                 "The DataGrid control provides a flexible way to display a collection of data in rows and columns."),
@@ -447,7 +447,7 @@ class HomeInterface(ScrollArea):
             index=1
         )
         collectionView.addSampleCard(
-            icon=":/d/images/controls/TreeView.png",
+            icon=":/app/images/controls/TreeView.png",
             title="TreeView",
             content=self.tr(
                 "The TreeView control is a hierarchical list pattern with expanding and collapsing nodes that contain nested items."),
@@ -455,7 +455,7 @@ class HomeInterface(ScrollArea):
             index=2
         )
         collectionView.addSampleCard(
-            icon=":/d/images/controls/FlipView.png",
+            icon=":/app/images/controls/FlipView.png",
             title="FlipView",
             content=self.tr(
                 "Presents a collection of items that the user can flip through,one item at a time."),
