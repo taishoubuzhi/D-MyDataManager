@@ -1,5 +1,5 @@
 import Base
-from sqlalchemy import (Column, String, Int, Enum, ARRAY, ForeignKey)
+from sqlalchemy import (Column, String, Int, Enum, ARRAY, ForeignKey,Boolean)
 
 
 class DataType(Enum):
@@ -22,5 +22,6 @@ class Data(Base):
     keywords = Column(ARRAY(String(10)))
     tag = Column(ARRAY(String(20)))
     size = Column(Int)
+    is_hidden = Column(Boolean)
 
     user_id = Column(String(20), ForeignKey('users.id'))
