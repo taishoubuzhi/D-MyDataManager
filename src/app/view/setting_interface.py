@@ -203,6 +203,15 @@ class SettingInterface(ScrollArea):
             self.tr('Set the rotate size of log file'),
             self.logGroup
         )
+
+        self.rotateSizeUnitCard = ComboBoxSettingCard(
+            config.rotate_size_unit,
+            FIF.UNIT,
+            self.tr('Rotate size unit'),
+            self.tr('Set the rotate size unit of log file'),
+            texts=ROTATE_SIZE_UNITS,
+            parent=self.logGroup
+        )
         self.rotateTimeCard = PushSettingCard(
             self.tr('Rotate time'),
             FIF.CALENDAR,
@@ -303,6 +312,7 @@ class SettingInterface(ScrollArea):
         self.logGroup.addSettingCard(self.fileOverrideCard)
         self.logGroup.addSettingCard(self.rotateModeCard)
         self.logGroup.addSettingCard(self.rotateSizeCard)
+        self.logGroup.addSettingCard(self.rotateSizeUnitCard)
         self.logGroup.addSettingCard(self.rotateTimeCard)
         self.logGroup.addSettingCard(self.rotateIntervalCard)
         self.logGroup.addSettingCard(self.rotateIntervalUnitCard)

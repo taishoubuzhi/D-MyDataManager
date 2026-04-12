@@ -53,7 +53,7 @@
     },
     "MainWindow": {
         "DpiScale": "Auto",
-        "Language": "en_US",
+        "Language": "zh_CN",
         "MicaEnabled": false
     },
     "QFluentWidgets": {
