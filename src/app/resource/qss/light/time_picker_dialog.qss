@@ -1,0 +1,57 @@
+TimePickerDialog {
+    background-color: white;
+    border: 1px solid rgb(229, 229, 229);
+    border-radius: 10px;
+}
+
+#timeEdit {
+    background-color: rgb(249, 249, 249);
+    border: 1px solid rgb(204, 204, 204);
+    border-radius: 6px;
+    color: black;
+    font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+    padding: 8px 12px;
+}
+
+#timeEdit:hover {
+    border: 1px solid rgb(160, 160, 160);
+}
+
+#timeEdit:focus {
+    border: 2px solid rgb(0, 120, 215);
+}
+
+#okButton {
+    background-color: rgb(0, 120, 215);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+    font-weight: 500;
+    padding: 8px 24px;
+}
+
+#okButton:hover {
+    background-color: rgb(0, 102, 184);
+}
+
+#okButton:pressed {
+    background-color: rgb(0, 84, 153);
+}
+
+#cancelButton {
+    background-color: rgb(245, 245, 245);
+    border: none;
+    border-radius: 6px;
+    color: black;
+    font: 14px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+    padding: 8px 24px;
+}
+
+#cancelButton:hover {
+    background-color: rgb(230, 230, 230);
+}
+
+#cancelButton:pressed {
+    background-color: rgb(215, 215, 215);
+}
