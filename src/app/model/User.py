@@ -3,7 +3,7 @@ import Base
 from sqlalchemy import (Column, String)
 
 class User(Base):
-    __tablename__ = 'user'
+    __tablename__ = 'users'
 
     id = Column(String(20), primary_key=True)
     name = Column(String(20),)
