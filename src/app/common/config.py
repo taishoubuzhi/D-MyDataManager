@@ -63,6 +63,7 @@ class Config(QConfig):
         "MainWindow", "DpiScale", "Auto", OptionsValidator([1, 1.25, 1.5, 1.75, 2, "Auto"]), restart=True)
     language = OptionsConfigItem(
         "MainWindow", "Language", Language.AUTO, OptionsValidator(Language), LanguageSerializer(), restart=True)
+    dynamic_config_display = ConfigItem("MainWindow", "DynamicConfigDisplay", False, BoolValidator())
     # software update
     check_update_at_start_up = ConfigItem("Update", "CheckUpdateAtStartUp", True, BoolValidator())
 
@@ -103,8 +104,7 @@ class Config(QConfig):
                           restart=True)
 
     output_file = ConfigItem("File", "Output-File", True,
-                             BoolValidator(),
-                             restart=True)
+                             BoolValidator())
 
     different_level_file = ConfigItem("File", "Different-Level-Files", True,
                                       BoolValidator(),
@@ -130,8 +130,7 @@ class Config(QConfig):
 
     # 当前使用的轮转模式，默认为 "None"（不轮转）
     rotate_mode = OptionsConfigItem("Log-File", "Rotate-Mode", "None",
-                                    OptionsValidator(ROTATE_MODES),
-                                    restart=True)
+                                    OptionsValidator(ROTATE_MODES))
 
     rotate_size = RangeConfigItem("Log-File", "Rotate-Size", 1,
                                   RangeValidator(1, 1024),

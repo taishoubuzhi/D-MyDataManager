@@ -56,6 +56,13 @@ class SettingInterface(ScrollArea):
             self.tr('Change the theme color of you application'),
             self.personalGroup
         )
+        self.dynamicConfigDisplayCard = SwitchSettingCard(
+            FIF.SYNC,
+            self.tr('Dynamic config display'),
+            self.tr('Dynamically display configuration changes'),
+            config.dynamic_config_display,
+            self.personalGroup
+        )
         self.zoomCard = ComboBoxSettingCard(
             config.dpi_scale,
             FIF.ZOOM,
@@ -282,6 +289,9 @@ class SettingInterface(ScrollArea):
         # initialize layout
         self.__initLayout()
         self.__connectSignalToSlot()
+        
+        # Update card visibility initially
+        self.__updateConfigCardVisibility()
 
     def __initLayout(self):
         self.settingLabel.move(36, 30)
@@ -291,6 +301,7 @@ class SettingInterface(ScrollArea):
         self.personalGroup.addSettingCard(self.micaCard)
         self.personalGroup.addSettingCard(self.themeCard)
         self.personalGroup.addSettingCard(self.themeColorCard)
+        self.personalGroup.addSettingCard(self.dynamicConfigDisplayCard)
         self.personalGroup.addSettingCard(self.zoomCard)
         self.personalGroup.addSettingCard(self.languageCard)
 
@@ -360,6 +371,69 @@ class SettingInterface(ScrollArea):
         dialog.timeSelected.connect(on_time_selected)
         dialog.exec()
 
+    def __updateConfigCardVisibility(self):
+        """ Update the visibility of configuration cards based on settings """
+        dynamic_display = config.get(config.dynamic_config_display)
+        output_file = config.get(config.output_file)
+        rotate_mode = config.get(config.rotate_mode)
+
+        # All cards
+        all_cards = [
+            self.differentLevelFileCard,
+            self.filePathCard,
+            self.fileOverrideCard,
+            self.rotateModeCard,
+            self.rotateSizeCard,
+            self.rotateSizeUnitCard,
+            self.rotateTimeCard,
+            self.rotateIntervalCard,
+            self.rotateIntervalUnitCard,
+            self.retentionCard,
+            self.retentionUnitCard,
+            self.compressModeCard
+        ]
+
+        # Show all cards when dynamic_config_display is False
+        if not dynamic_display:
+            for card in all_cards:
+                card.setVisible(True)
+            return
+
+        # When output_file is False, hide all cards after differentLevelFileCard
+        if not output_file:
+            self.differentLevelFileCard.setVisible(True)
+            for card in all_cards[1:]:
+                card.setVisible(False)
+            return
+
+        # When output_file is True, show all first few cards
+        self.differentLevelFileCard.setVisible(True)
+        self.filePathCard.setVisible(True)
+        self.fileOverrideCard.setVisible(True)
+        self.rotateModeCard.setVisible(True)
+
+        # Rotate related cards
+        self.retentionCard.setVisible(True)
+        self.retentionUnitCard.setVisible(True)
+        self.compressModeCard.setVisible(True)
+
+        # Hide all rotate-specific cards first
+        self.rotateSizeCard.setVisible(False)
+        self.rotateSizeUnitCard.setVisible(False)
+        self.rotateTimeCard.setVisible(False)
+        self.rotateIntervalCard.setVisible(False)
+        self.rotateIntervalUnitCard.setVisible(False)
+
+        # Show relevant cards based on rotate_mode
+        if rotate_mode == "Size":
+            self.rotateSizeCard.setVisible(True)
+            self.rotateSizeUnitCard.setVisible(True)
+        elif rotate_mode == "Time":
+            self.rotateTimeCard.setVisible(True)
+        elif rotate_mode == "Interval":
+            self.rotateIntervalCard.setVisible(True)
+            self.rotateIntervalUnitCard.setVisible(True)
+
     def __connectSignalToSlot(self):
         """ connect signal to slot """
         config.appRestartSig.connect(self.__showRestartTooltip)
@@ -374,3 +448,8 @@ class SettingInterface(ScrollArea):
             self.__onFilePathCardClicked)
         self.rotateTimeCard.clicked.connect(
             self.__onRotateTimeCardClicked)
+        # Connect signals for dynamic config card visibility
+        self.dynamicConfigDisplayCard.checkedChanged.connect(self.__updateConfigCardVisibility)
+        self.outputFileCard.checkedChanged.connect(self.__updateConfigCardVisibility)
+        # Connect to internal comboBox's currentIndexChanged signal
+        self.rotateModeCard.comboBox.currentIndexChanged.connect(self.__updateConfigCardVisibility)

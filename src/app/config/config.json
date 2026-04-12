@@ -31,7 +31,7 @@
         "Rotate-Interval": 1,
         "Rotate-Interval-Unit": "hour",
         "Rotate-Mode": "None",
-        "Rotate-Size": 10,
+        "Rotate-Size": 1,
         "Rotate-Size-Unit": "MB",
         "Rotate-Time": "00:00",
         "File-Success": "success.log",
@@ -53,6 +53,7 @@
     },
     "MainWindow": {
         "DpiScale": "Auto",
+        "DynamicConfigDisplay": true,
         "Language": "zh_CN",
         "MicaEnabled": false
     },
