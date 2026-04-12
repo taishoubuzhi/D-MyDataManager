@@ -6,15 +6,15 @@ from qfluentwidgets import (SettingCardGroup, SwitchSettingCard, FolderListSetti
                             setTheme, setThemeColor, RangeSettingCard, isDarkTheme)
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import InfoBar
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths, QTime
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog, QTimeEdit, QDialog, QVBoxLayout, QHBoxLayout, QPushButton
-import datetime
+from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog
 
 from ..common.config import config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_SIZE_UNITS,ROTATE_INTERVAL_UNITS,RETENTION_UNITS,COMPRESS_MODES
 from ..common.util import is_win11
 from ..common.signal_bus import signalBus
 from ..common.style_sheet import StyleSheet
+from ..components import TimePickerDialog
 
 class SettingInterface(ScrollArea):
     """ Setting interface """
@@ -216,7 +216,7 @@ class SettingInterface(ScrollArea):
             self.tr('Rotate time'),
             FIF.CALENDAR,
             self.tr('Set the rotate time of log file'),
-            str(config.get(config.rotate_time)),
+            config.get(config.rotate_time).strftime("%H:%M"),
             self.logGroup
         )
 
@@ -344,8 +344,21 @@ class SettingInterface(ScrollArea):
         config.set(config.downloadFolder, folder)
         self.filePathCard.setContent(folder)
 
-    def __onRotateTimeCard(self):
-        return
+    def __onRotateTimeCardClicked(self):
+        current_time = config.get(config.rotate_time)
+        dialog = TimePickerDialog(
+            current_time=current_time,
+            title=self.tr("Select Rotate Time"),
+            time_format="HH:mm",
+            parent=self
+        )
+        
+        def on_time_selected(new_time):
+            config.set(config.rotate_time, new_time)
+            self.rotateTimeCard.setContent(new_time.strftime("%H:%M"))
+        
+        dialog.timeSelected.connect(on_time_selected)
+        dialog.exec()
 
     def __connectSignalToSlot(self):
         """ connect signal to slot """
@@ -360,4 +373,4 @@ class SettingInterface(ScrollArea):
         self.filePathCard.clicked.connect(
             self.__onFilePathCardClicked)
         self.rotateTimeCard.clicked.connect(
-            self.__onRotateTimeCard)
+            self.__onRotateTimeCardClicked)

@@ -11,6 +11,7 @@ class StyleSheet(StyleSheetBase, Enum):
     SAMPLE_CARD = "sample_card"
     HOME_INTERFACE = "home_interface"
     SETTING_INTERFACE = "setting_interface"
+    TIME_PICKER_DIALOG = "time_picker_dialog"
 
     def path(self, theme=Theme.AUTO):
         theme = qconfig.theme if theme == Theme.AUTO else theme
