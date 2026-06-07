@@ -1,8 +1,8 @@
-- [ ] config.py 正确导出 log_config 和 db_config 别名
-- [ ] init_db.py 不再有模块级副作用，engine 和 DBSession 初始为 None
-- [ ] init_db.py 的 get_engine() 和 get_session() 实现延迟初始化
-- [ ] init_log.py 的 init_log() 可正常调用，日志输出到控制台和文件
-- [ ] init/__init__.py 导出 get_engine、get_session、init_log、init_db
-- [ ] db.py 的 create_session() 通过 get_session() 获取会话工厂
-- [ ] demo.py 在创建窗口前调用 init_log() 和 init_db()
-- [ ] 应用启动后控制台可见日志输出
+- [x] config.py 正确导出 log_config 和 db_config 别名
+- [x] init_db.py 不再有模块级副作用，engine 和 DBSession 初始为 None
+- [x] init_db.py 的 get_engine() 和 get_session() 实现延迟初始化
+- [x] init_log.py 的 init_log() 可正常调用，日志输出到控制台和文件
+- [x] init/__init__.py 导出 get_engine、get_session、init_log、init_db
+- [x] db.py 的 create_session() 通过 get_session() 获取会话工厂
+- [x] demo.py 在创建窗口前调用 init_log() 和 init_db()
+- [x] 应用启动后控制台可见日志输出

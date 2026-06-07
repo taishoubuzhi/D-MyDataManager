@@ -8,7 +8,7 @@
         "Format-To-JSON": false,
         "JSON-Format": "{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | {message}",
         "Log-Format": "{time} | {level} | {message}",
-        "Log-Level": "Debug",
+        "Log-Level": "DEBUG",
         "Output-Console": true
     },
     "Material": {

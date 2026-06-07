@@ -1,35 +1,35 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from ..config import (db_config)
+from ..config import config
 
 
-def _init_engine(db_config_item):
+engine = None
+DBSession = None
+
+
+def get_engine():
     global engine
-
     if engine is not None:
         return engine
-    engine = create_engine(db_config_item.get(db_config_item.url),
-                           echo=db_config_item.get(db_config.echo),
-                           pool_size=db_config_item.get(db_config.pool_size),
-                           max_overflow=db_config_item.get(db_config.max_overflow),
-                           pool_recycle=db_config_item.get(db_config.pool_recycle),
-                           pool_pre_ping=db_config_item.get(db_config.pool_pre_ping),
-                           connect_args=db_config_item.get(db_config.connect_args))
-    if engine is None:
-        return None
+    engine = create_engine(config.get(config.url),
+                           echo=config.get(config.echo),
+                           pool_size=config.get(config.pool_size),
+                           max_overflow=config.get(config.max_overflow),
+                           pool_recycle=config.get(config.pool_recycle),
+                           pool_pre_ping=config.get(config.pool_pre_ping),
+                           connect_args=config.get(config.connect_args))
     return engine
 
 
-def _init_dbsession():
+def get_session():
     global DBSession
     if DBSession is not None:
         return DBSession
-    DBSession = sessionmaker(bind=engine)
-    if DBSession is None:
-        return None
+    DBSession = sessionmaker(bind=get_engine())
     return DBSession
 
 
-engine = _init_engine(db_config)
-DBSession = _init_dbsession()
+def init_db():
+    get_engine()
+    get_session()

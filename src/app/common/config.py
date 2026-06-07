@@ -12,7 +12,7 @@ YEAR = 2026
 AUTHOR = "taishoubuzhi"
 VERSION = "v0.0.0"
 
-LOG_LEVELS = ["Trace", "Debug", "Info", "Success", "Warn", "Error", "Critical"]
+LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
 ENCODINGS = ["utf-8"]
 ROTATE_MODES = ["None", "Size", "Time", "Interval"]
 ROTATE_SIZE_UNITS = ["B", "KB", "MB", "GB"]

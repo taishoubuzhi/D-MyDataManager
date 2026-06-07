@@ -7,8 +7,12 @@ from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import FluentTranslator
 
 from app.common.config import config
+from app.common.init import init_log, init_db
 
 from app.view.main_window import MainWindow
+
+init_log()
+init_db()
 
 if config.get(config.dpi_scale) != "Auto":
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
