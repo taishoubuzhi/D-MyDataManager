@@ -44,13 +44,13 @@ class MainWindow(FluentWindow):
 
     def initNavigation(self):
         t = Translator()
-        self.addSubInterface(self.homeInterface, FIF.HOME, self.tr('Home'))
+        self.addSubInterface(self.homeInterface, FIF.HOME, self.tr('首页'))
         self.navigationInterface.addSeparator()
 
         self.addSubInterface(
-            self.settingInterface, FIF.SETTING, self.tr('Settings'), NavigationItemPosition.BOTTOM)
+            self.settingInterface, FIF.SETTING, self.tr('设置'), NavigationItemPosition.BOTTOM)
 
-        logger.info("主窗口导航初始化完成")
+        logger.info("Main window navigation initialized")
 
 
     def initWindow(self):
@@ -80,7 +80,7 @@ class MainWindow(FluentWindow):
             self.splashScreen.resize(self.size())
 
     def closeEvent(self, e):
-        logger.info("应用关闭")
+        logger.info("Application closed")
         self.themeListener.terminate()
         self.themeListener.deleteLater()
         super().closeEvent(e)

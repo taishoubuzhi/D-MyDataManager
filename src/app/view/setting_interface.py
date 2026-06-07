@@ -25,190 +25,190 @@ class SettingInterface(ScrollArea):
         self.expandLayout = ExpandLayout(self.scrollWidget)
 
         # setting label
-        self.settingLabel = QLabel(self.tr("Settings"), self)
+        self.settingLabel = QLabel(self.tr("设置"), self)
 
 
         # personalization
         self.personalGroup = SettingCardGroup(
-            self.tr('Personalization'), self.scrollWidget)
+            self.tr('个性化'), self.scrollWidget)
         self.micaCard = SwitchSettingCard(
             FIF.TRANSPARENT,
-            self.tr('Mica effect'),
-            self.tr('Apply semi transparent to windows and surfaces'),
+            self.tr('云母效果'),
+            self.tr('窗口和表面显示半透明'),
             config.micaEnabled,
             self.personalGroup
         )
         self.themeCard = ComboBoxSettingCard(
             config.themeMode,
             FIF.BRUSH,
-            self.tr('Application theme'),
-            self.tr("Change the appearance of your application"),
+            self.tr('应用主题'),
+            self.tr("调整应用的外观"),
             texts=[
-                self.tr('Light'), self.tr('Dark'),
-                self.tr('Use system setting')
+                self.tr('浅色'), self.tr('深色'),
+                self.tr('跟随系统设置')
             ],
             parent=self.personalGroup
         )
         self.themeColorCard = CustomColorSettingCard(
             config.themeColor,
             FIF.PALETTE,
-            self.tr('Theme color'),
-            self.tr('Change the theme color of you application'),
+            self.tr('主题色'),
+            self.tr('调整应用的主题色'),
             self.personalGroup
         )
         self.dynamicConfigDisplayCard = SwitchSettingCard(
             FIF.SYNC,
-            self.tr('Dynamic config display'),
-            self.tr('Dynamically display configuration changes'),
+            self.tr('动态配置显示'),
+            self.tr('动态显示配置变更'),
             config.dynamic_config_display,
             self.personalGroup
         )
         self.zoomCard = ComboBoxSettingCard(
             config.dpi_scale,
             FIF.ZOOM,
-            self.tr("Interface zoom"),
-            self.tr("Change the size of widgets and fonts"),
+            self.tr("界面缩放"),
+            self.tr("调整小部件和字体的大小"),
             texts=[
                 "100%", "125%", "150%", "175%", "200%",
-                self.tr("Use system setting")
+                self.tr("跟随系统设置")
             ],
             parent=self.personalGroup
         )
         self.languageCard = ComboBoxSettingCard(
             config.language,
             FIF.LANGUAGE,
-            self.tr('Language'),
-            self.tr('Set your preferred language for UI'),
-            texts=['简体中文', 'English', self.tr('Use system setting')],
+            self.tr('语言'),
+            self.tr('选择界面所使用的语言'),
+            texts=['简体中文', 'English', self.tr('跟随系统设置')],
             parent=self.personalGroup
         )
 
         # material
         self.materialGroup = SettingCardGroup(
-            self.tr('Material'), self.scrollWidget)
+            self.tr('材料'), self.scrollWidget)
         self.blurRadiusCard = RangeSettingCard(
             config.blurRadius,
             FIF.ALBUM,
-            self.tr('Acrylic blur radius'),
-            self.tr('The greater the radius, the more blurred the image'),
+            self.tr('亚克力磨砂半径'),
+            self.tr('磨砂半径越大，图像越模糊'),
             self.materialGroup
         )
 
         # update software
         self.updateSoftwareGroup = SettingCardGroup(
-            self.tr("Software update"), self.scrollWidget)
+            self.tr("软件更新"), self.scrollWidget)
         self.updateOnStartUpCard = SwitchSettingCard(
             FIF.UPDATE,
-            self.tr('Check for updates when the application starts'),
-            self.tr('The new version will be more stable and have more features'),
+            self.tr('应用启动时检查更新'),
+            self.tr('新版本将更加稳定并拥有更多功能'),
             configItem=config.check_update_at_start_up,
             parent=self.updateSoftwareGroup
         )
 
         # log
         self.logGroup = SettingCardGroup(
-            self.tr('Log'), self.scrollWidget)
+            self.tr('日志'), self.scrollWidget)
         self.logLevelCard = ComboBoxSettingCard(
             config.log_level,
             FIF.INFO,
-            self.tr('Log level'),
-            self.tr('Set the log level'),
+            self.tr('日志级别'),
+            self.tr('设置日志级别'),
             texts=LOG_LEVELS,
             parent=self.logGroup
         )
         self.formatToJsonCard = SwitchSettingCard(
             FIF.DOCUMENT,
-            self.tr('Format to JSON'),
-            self.tr('Format log to JSON'),
+            self.tr('格式化为JSON'),
+            self.tr('将日志格式化为JSON'),
             config.format_to_json,
             self.logGroup
         )
         self.catchCard = SwitchSettingCard(
             FIF.CANCEL,
-            self.tr('Catch'),
-            self.tr('Catch exceptions'),
+            self.tr('捕获'),
+            self.tr('捕获异常'),
             config.catch,
             self.logGroup
         )
         self.outputConsoleCard = SwitchSettingCard(
             FIF.COMMAND_PROMPT,
-            self.tr('Output to console'),
-            self.tr('Output log to console'),
+            self.tr('输出到控制台'),
+            self.tr('将日志输出到控制台'),
             config.output_console,
             self.logGroup
         )
         self.enqueueCard = SwitchSettingCard(
             FIF.MORE,
-            self.tr('Enqueue'),
-            self.tr('Enqueue log'),
+            self.tr('入队'),
+            self.tr('将日志入队'),
             config.enqueue,
             self.logGroup
         )
         self.encodingCard = ComboBoxSettingCard(
             config.encoding,
             FIF.FONT,
-            self.tr('Encoding'),
-            self.tr('Set the encoding of log'),
+            self.tr('编码'),
+            self.tr('设置日志编码'),
             texts=ENCODINGS,
             parent=self.logGroup
         )
         self.backtraceCard = SwitchSettingCard(
             FIF.HISTORY,
-            self.tr('Backtrace'),
-            self.tr('Backtrace exceptions'),
+            self.tr('回溯'),
+            self.tr('回溯异常'),
             config.backtrace,
             self.logGroup
         )
         self.diagnoseCard = SwitchSettingCard(
             FIF.DEVELOPER_TOOLS,
-            self.tr('Diagnose'),
-            self.tr('Diagnose problems'),
+            self.tr('诊断'),
+            self.tr('诊断问题'),
             config.diagnose,
             self.logGroup
         )
 
         self.outputFileCard = SwitchSettingCard(
             FIF.SAVE_AS,
-            self.tr('Output to file'),
-            self.tr('Output log to file'),
+            self.tr('输出到文件'),
+            self.tr('将日志输出到文件'),
             config.output_file,
             self.logGroup
         )
         self.filePathCard = PushSettingCard(
-            self.tr('File path'),
+            self.tr('文件路径'),
             FIF.FOLDER,
-            self.tr('Set the path of log file'),
+            self.tr('设置日志文件路径'),
             config.get(config.file_path),
             self.logGroup
         )
         self.rotateModeCard = ComboBoxSettingCard(
             config.rotate_mode,
             FIF.ROTATE,
-            self.tr('Rotate mode'),
-            self.tr('Set the rotate mode of log file'),
+            self.tr('轮转模式'),
+            self.tr('设置日志文件轮转模式'),
             texts=ROTATE_MODES,
             parent=self.logGroup
         )
         self.rotateIntervalCard = RangeSettingCard(
             config.rotate_interval,
             FIF.DATE_TIME,
-            self.tr('Rotate interval'),
-            self.tr('Create a new log file at the specified time interval'),
+            self.tr('轮转间隔'),
+            self.tr('按指定时间间隔创建新的日志文件'),
             self.logGroup
         )
         self.rotateIntervalUnitCard = ComboBoxSettingCard(
             config.rotate_interval_unit,
             FIF.UNIT,
-            self.tr('Rotate interval unit'),
-            self.tr('Set the time unit for rotation interval'),
+            self.tr('轮转间隔单位'),
+            self.tr('设置轮转间隔的时间单位'),
             texts=ROTATE_INTERVAL_UNITS,
             parent=self.logGroup
         )
         self.rotateCountCard = RangeSettingCard(
             config.rotate_count,
             FIF.LIBRARY,
-            self.tr('Log file count'),
-            self.tr('Automatically delete oldest log files when count exceeds this limit'),
+            self.tr('日志文件数量'),
+            self.tr('当日志文件数量超过此限制时，自动删除最旧的日志文件'),
             self.logGroup
         )
 
@@ -278,20 +278,20 @@ class SettingInterface(ScrollArea):
     def __showRestartTooltip(self):
         """ show restart tooltip """
         InfoBar.success(
-            self.tr('Updated successfully'),
-            self.tr('Configuration takes effect after restart'),
+            self.tr('更新成功'),
+            self.tr('配置在重启软件后生效'),
             duration=1500,
             parent=self
         )
 
     def __onFilePathCardClicked(self):
-        folder = QFileDialog.getExistingDirectory(self, self.tr("Choose folder"), "./")
+        folder = QFileDialog.getExistingDirectory(self, self.tr("选择文件夹"), "./")
         if not folder or config.get(config.file_path) == folder:
             return
         old_path = config.get(config.file_path)
         config.set(config.file_path, folder)
         self.filePathCard.setContent(folder)
-        logger.info(f"日志路径变更: {old_path} -> {folder}")
+        logger.info(f"Log path changed: {old_path} -> {folder}")
 
     def __updateConfigCardVisibility(self):
         """ Update the visibility of configuration cards based on settings """
@@ -342,8 +342,8 @@ class SettingInterface(ScrollArea):
 
         # personalization
         config.themeChanged.connect(setTheme)
-        self.themeColorCard.colorChanged.connect(lambda c: (setThemeColor(c), logger.info(f"主题颜色变更: {c.name()}")))
-        self.micaCard.checkedChanged.connect(lambda e: (signalBus.micaEnableChanged.emit(e), logger.info(f"Mica效果变更: {'开启' if e else '关闭'}")))
+        self.themeColorCard.colorChanged.connect(lambda c: (setThemeColor(c), logger.info(f"Theme color changed: {c.name()}")))
+        self.micaCard.checkedChanged.connect(lambda e: (signalBus.micaEnableChanged.emit(e), logger.info(f"Mica effect changed: {'enabled' if e else 'disabled'}")))
 
         # log
         self.filePathCard.clicked.connect(

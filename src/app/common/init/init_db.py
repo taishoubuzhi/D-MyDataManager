@@ -20,7 +20,7 @@ def get_engine():
                            pool_recycle=config.get(config.pool_recycle),
                            pool_pre_ping=config.get(config.pool_pre_ping),
                            connect_args=config.get(config.connect_args))
-    logger.info("数据库引擎创建成功")
+    logger.info("Database engine created")
     return engine
 
 
@@ -29,11 +29,11 @@ def get_session():
     if DBSession is not None:
         return DBSession
     DBSession = sessionmaker(bind=get_engine())
-    logger.info("数据库会话工厂创建成功")
+    logger.info("Database session factory created")
     return DBSession
 
 
 def init_db():
     get_engine()
     get_session()
-    logger.debug(f"数据库URL: {config.get(config.url)}")
+    logger.debug(f"Database URL: {config.get(config.url)}")

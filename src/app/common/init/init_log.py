@@ -16,7 +16,7 @@ def _cleanup_old_logs(log_dir, max_count):
     delete_count = len(log_files) - max_count
     for f in log_files[:delete_count]:
         os.remove(os.path.join(log_dir, f))
-        logger.debug(f"删除旧日志文件: {f}")
+        logger.debug(f"Deleted old log file: {f}")
 
 
 def _set_logger_config(sink, rotation, retention, config_item):
@@ -72,13 +72,13 @@ def init_log():
     if config.get(config.output_console):
         _set_logger_config(sys.stderr, rotation, retention, config)
 
-    logger.info("日志系统初始化完成")
-    logger.debug(f"日志级别: {config.get(config.log_level)}")
-    logger.debug(f"控制台输出: {config.get(config.output_console)}")
-    logger.debug(f"文件输出: {config.get(config.output_file)}")
+    logger.info("Log system initialized")
+    logger.debug(f"Log level: {config.get(config.log_level)}")
+    logger.debug(f"Console output: {config.get(config.output_console)}")
+    logger.debug(f"File output: {config.get(config.output_file)}")
     if config.get(config.output_file):
-        logger.debug(f"日志目录: {config.get(config.file_path)}")
+        logger.debug(f"Log directory: {config.get(config.file_path)}")
     if rotation is not None:
-        logger.debug(f"日志轮转: {rotation}")
+        logger.debug(f"Log rotation: {rotation}")
     if retention is not None:
-        logger.debug(f"日志保留数量: {retention}")
+        logger.debug(f"Log retention count: {retention}")

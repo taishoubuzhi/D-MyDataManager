@@ -14,7 +14,7 @@ from app.view.main_window import MainWindow
 from loguru import logger
 
 init_log()
-logger.info("应用启动中...")
+logger.info("Application starting...")
 init_db()
 
 if config.get(config.dpi_scale) != "Auto":

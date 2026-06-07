@@ -34,10 +34,10 @@ class TimePickerDialog(QDialog):
         
         button_layout = QHBoxLayout()
         
-        self.ok_button = QPushButton(self.tr("OK"))
+        self.ok_button = QPushButton(self.tr("确定"))
         self.ok_button.setObjectName("okButton")
         
-        self.cancel_button = QPushButton(self.tr("Cancel"))
+        self.cancel_button = QPushButton(self.tr("取消"))
         self.cancel_button.setObjectName("cancelButton")
         
         self.ok_button.clicked.connect(self.__on_ok)

@@ -6,7 +6,7 @@ def create_session():
     session_factory = get_session()
     session = session_factory()
     if session is None:
-        logger.error("session create fail")
+        logger.error("Session create failed")
         return None
-    logger.success("session create success")
+    logger.success("Session created successfully")
     return session

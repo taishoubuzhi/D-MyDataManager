@@ -95,19 +95,19 @@ class HomeInterface(ScrollArea):
         """ load samples """
         # basic input samples
         basicInputView = SampleCardView(
-            self.tr("Basic input samples"), self.view)
+            self.tr("基本输入示例"), self.view)
         basicInputView.addSampleCard(
             icon=":/app/images/controls/Button.png",
             title="Button",
             content=self.tr(
-                "A control that responds to user input and emit clicked signal."),
+                "响应用户输入并发出点击信号的控件。"),
             routeKey="basicInputInterface",
             index=0
         )
         basicInputView.addSampleCard(
             icon=":/app/images/controls/Checkbox.png",
             title="CheckBox",
-            content=self.tr("A control that a user can select or clear."),
+            content=self.tr("用户可以选择或清除的控件。"),
             routeKey="basicInputInterface",
             index=8
         )
@@ -115,7 +115,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ComboBox.png",
             title="ComboBox",
             content=self.tr(
-                "A drop-down list of items a user can select from."),
+                "用户可以从中选择项的下拉列表。"),
             routeKey="basicInputInterface",
             index=10
         )
@@ -123,7 +123,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/DropDownButton.png",
             title="DropDownButton",
             content=self.tr(
-                "A button that displays a flyout of choices when clicked."),
+                "点击时显示选项弹出框的按钮。"),
             routeKey="basicInputInterface",
             index=12
         )
@@ -131,7 +131,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/HyperlinkButton.png",
             title="HyperlinkButton",
             content=self.tr(
-                "A button that appears as hyperlink text, and can navigate to a URI or handle a Click event."),
+                "显示为超链接文本的按钮，可以导航到URI或处理点击事件。"),
             routeKey="basicInputInterface",
             index=18
         )
@@ -139,7 +139,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/RadioButton.png",
             title="RadioButton",
             content=self.tr(
-                "A control that allows a user to select a single option from a group of options."),
+                "允许用户从一组选项中选择单个选项的控件。"),
             routeKey="basicInputInterface",
             index=19
         )
@@ -147,7 +147,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/Slider.png",
             title="Slider",
             content=self.tr(
-                "A control that lets the user select from a range of values by moving a Thumb control along a track."),
+                "通过沿轨道移动滑块来让用户从值范围中选择的控件。"),
             routeKey="basicInputInterface",
             index=20
         )
@@ -155,7 +155,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/SplitButton.png",
             title="SplitButton",
             content=self.tr(
-                "A two-part button that displays a flyout when its secondary part is clicked."),
+                "由两部分组成的按钮，点击次要部分时显示弹出框。"),
             routeKey="basicInputInterface",
             index=21
         )
@@ -163,7 +163,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ToggleSwitch.png",
             title="SwitchButton",
             content=self.tr(
-                "A switch that can be toggled between 2 states."),
+                "可以在两种状态之间切换的开关。"),
             routeKey="basicInputInterface",
             index=25
         )
@@ -171,25 +171,25 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ToggleButton.png",
             title="ToggleButton",
             content=self.tr(
-                "A button that can be switched between two states like a CheckBox."),
+                "可以像复选框一样在两种状态之间切换的按钮。"),
             routeKey="basicInputInterface",
             index=26
         )
         self.vBoxLayout.addWidget(basicInputView)
 
         # date time samples
-        dateTimeView = SampleCardView(self.tr('Date & time samples'), self.view)
+        dateTimeView = SampleCardView(self.tr('日期和时间示例'), self.view)
         dateTimeView.addSampleCard(
             icon=":/app/images/controls/CalendarDatePicker.png",
             title="CalendarPicker",
-            content=self.tr("A control that lets a user pick a date value using a calendar."),
+            content=self.tr("允许用户使用日历选择日期值的控件。"),
             routeKey="dateTimeInterface",
             index=0
         )
         dateTimeView.addSampleCard(
             icon=":/app/images/controls/DatePicker.png",
             title="DatePicker",
-            content=self.tr("A control that lets a user pick a date value."),
+            content=self.tr("允许用户选择日期值的控件。"),
             routeKey="dateTimeInterface",
             index=2
         )
@@ -197,82 +197,82 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/TimePicker.png",
             title="TimePicker",
             content=self.tr(
-                "A configurable control that lets a user pick a time value."),
+                "可配置的允许用户选择时间值的控件。"),
             routeKey="dateTimeInterface",
             index=4
         )
         self.vBoxLayout.addWidget(dateTimeView)
 
         # dialog samples
-        dialogView = SampleCardView(self.tr('Dialog samples'), self.view)
+        dialogView = SampleCardView(self.tr('对话框示例'), self.view)
         dialogView.addSampleCard(
             icon=":/app/images/controls/Flyout.png",
             title="Dialog",
-            content=self.tr("A frameless message dialog."),
+            content=self.tr("无边框消息对话框。"),
             routeKey="dialogInterface",
             index=0
         )
         dialogView.addSampleCard(
             icon=":/app/images/controls/ContentDialog.png",
             title="MessageBox",
-            content=self.tr("A message dialog with mask."),
+            content=self.tr("带遮罩的消息对话框。"),
             routeKey="dialogInterface",
             index=1
         )
         dialogView.addSampleCard(
             icon=":/app/images/controls/ColorPicker.png",
             title="ColorDialog",
-            content=self.tr("A dialog that allows user to select color."),
+            content=self.tr("允许用户选择颜色的对话框。"),
             routeKey="dialogInterface",
             index=2
         )
         dialogView.addSampleCard(
             icon=":/app/images/controls/Flyout.png",
             title="Flyout",
-            content=self.tr("Shows contextual information and enables user interaction."),
+            content=self.tr("显示上下文信息并启用用户交互。"),
             routeKey="dialogInterface",
             index=3
         )
         dialogView.addSampleCard(
             icon=":/app/images/controls/TeachingTip.png",
             title="TeachingTip",
-            content=self.tr("A content-rich flyout for guiding users and enabling teaching moments."),
+            content=self.tr("内容丰富的弹出框，用于引导用户和实现教学时刻。"),
             routeKey="dialogInterface",
             index=5
         )
         self.vBoxLayout.addWidget(dialogView)
 
         # layout samples
-        layoutView = SampleCardView(self.tr('Layout samples'), self.view)
+        layoutView = SampleCardView(self.tr('布局示例'), self.view)
         layoutView.addSampleCard(
             icon=":/app/images/controls/Grid.png",
             title="FlowLayout",
             content=self.tr(
-                "A layout arranges components in a left-to-right flow, wrapping to the next row when the current row is full."),
+                "从左到右排列组件的布局，当当前行满时换行到下一行。"),
             routeKey="layoutInterface",
             index=0
         )
         self.vBoxLayout.addWidget(layoutView)
 
         # material samples
-        materialView = SampleCardView(self.tr('Material samples'), self.view)
+        materialView = SampleCardView(self.tr('材料示例'), self.view)
         materialView.addSampleCard(
             icon=":/app/images/controls/Acrylic.png",
             title="AcrylicLabel",
             content=self.tr(
-                "A translucent material recommended for panel background."),
+                "推荐用于面板背景的半透明材料。"),
             routeKey="materialInterface",
             index=0
         )
         self.vBoxLayout.addWidget(materialView)
 
         # menu samples
-        menuView = SampleCardView(self.tr('Menu & toolbars samples'), self.view)
+        menuView = SampleCardView(self.tr('菜单和工具栏示例'), self.view)
         menuView.addSampleCard(
             icon=":/app/images/controls/MenuFlyout.png",
             title="RoundMenu",
             content=self.tr(
-                "Shows a contextual list of simple commands or options."),
+                "显示简单命令或选项的上下文列表。"),
             routeKey="menuInterface",
             index=0
         )
@@ -280,7 +280,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/CommandBar.png",
             title="CommandBar",
             content=self.tr(
-                "Shows a contextual list of simple commands or options."),
+                "显示简单命令或选项的上下文列表。"),
             routeKey="menuInterface",
             index=2
         )
@@ -288,19 +288,19 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/CommandBarFlyout.png",
             title="CommandBarFlyout",
             content=self.tr(
-                "A mini-toolbar displaying proactive commands, and an optional menu of commands."),
+                "显示主动命令的迷你工具栏，以及可选的命令菜单。"),
             routeKey="menuInterface",
             index=3
         )
         self.vBoxLayout.addWidget(menuView)
 
         # navigation
-        navigationView = SampleCardView(self.tr('Navigation'), self.view)
+        navigationView = SampleCardView(self.tr('导航'), self.view)
         navigationView.addSampleCard(
             icon=":/app/images/controls/BreadcrumbBar.png",
             title="BreadcrumbBar",
             content=self.tr(
-                "Shows the trail of navigation taken to the current location."),
+                "显示到达当前位置的导航路径。"),
             routeKey="navigationViewInterface",
             index=0
         )
@@ -308,7 +308,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/Pivot.png",
             title="Pivot",
             content=self.tr(
-                "Presents information from different sources in a tabbed view."),
+                "在选项卡视图中呈现来自不同来源的信息。"),
             routeKey="navigationViewInterface",
             index=1
         )
@@ -316,19 +316,19 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/TabView.png",
             title="TabView",
             content=self.tr(
-                "Presents information from different sources in a tabbed view."),
+                "在选项卡视图中呈现来自不同来源的信息。"),
             routeKey="navigationViewInterface",
             index=3
         )
         self.vBoxLayout.addWidget(navigationView)
 
         # scroll samples
-        scrollView = SampleCardView(self.tr('Scrolling samples'), self.view)
+        scrollView = SampleCardView(self.tr('滚动示例'), self.view)
         scrollView.addSampleCard(
             icon=":/app/images/controls/ScrollViewer.png",
             title="ScrollArea",
             content=self.tr(
-                "A container control that lets the user pan and zoom its content smoothly."),
+                "允许用户平滑平移和缩放内容的容器控件。"),
             routeKey="scrollInterface",
             index=0
         )
@@ -336,19 +336,19 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/PipsPager.png",
             title="PipsPager",
             content=self.tr(
-                "A control to let the user navigate through a paginated collection when the page numbers do not need to be visually known."),
+                "当页码不需要视觉显示时，允许用户浏览分页集合的控件。"),
             routeKey="scrollInterface",
             index=3
         )
         self.vBoxLayout.addWidget(scrollView)
 
         # state info samples
-        stateInfoView = SampleCardView(self.tr('Status & info samples'), self.view)
+        stateInfoView = SampleCardView(self.tr('状态和信息示例'), self.view)
         stateInfoView.addSampleCard(
             icon=":/app/images/controls/ProgressRing.png",
             title="StateToolTip",
             content=self.tr(
-                "Shows the apps progress on a task, or that the app is performing ongoing work that does block user interaction."),
+                "显示应用在任务上的进度，或应用正在执行阻止用户交互的持续工作。"),
             routeKey="statusInfoInterface",
             index=0
         )
@@ -356,7 +356,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/InfoBadge.png",
             title="InfoBadge",
             content=self.tr(
-                "An non-intrusive Ul to display notifications or bring focus to an area."),
+                "一种非侵入式UI，用于显示通知或将焦点带到某个区域。"),
             routeKey="statusInfoInterface",
             index=3
         )
@@ -364,7 +364,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/InfoBar.png",
             title="InfoBar",
             content=self.tr(
-                "An inline message to display app-wide status change information."),
+                "用于显示应用范围状态变更信息的内联消息。"),
             routeKey="statusInfoInterface",
             index=4
         )
@@ -372,7 +372,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ProgressBar.png",
             title="ProgressBar",
             content=self.tr(
-                "Shows the apps progress on a task, or that the app is performing ongoing work that doesn't block user interaction."),
+                "显示应用在任务上的进度，或应用正在执行不阻止用户交互的持续工作。"),
             routeKey="statusInfoInterface",
             index=8
         )
@@ -380,7 +380,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ProgressRing.png",
             title="ProgressRing",
             content=self.tr(
-                "Shows the apps progress on a task, or that the app is performing ongoing work that doesn't block user interaction."),
+                "显示应用在任务上的进度，或应用正在执行不阻止用户交互的持续工作。"),
             routeKey="statusInfoInterface",
             index=10
         )
@@ -388,25 +388,25 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/ToolTip.png",
             title="ToolTip",
             content=self.tr(
-                "Displays information for an element in a pop-up window."),
+                "在弹出窗口中显示元素的信息。"),
             routeKey="statusInfoInterface",
             index=1
         )
         self.vBoxLayout.addWidget(stateInfoView)
 
         # text samples
-        textView = SampleCardView(self.tr('Text samples'), self.view)
+        textView = SampleCardView(self.tr('文本示例'), self.view)
         textView.addSampleCard(
             icon=":/app/images/controls/TextBox.png",
             title="LineEdit",
-            content=self.tr("A single-line plain text field."),
+            content=self.tr("单行纯文本字段。"),
             routeKey="textInterface",
             index=0
         )
         textView.addSampleCard(
             icon=":/app/images/controls/PasswordBox.png",
             title="PasswordLineEdit",
-            content=self.tr("A control for entering passwords."),
+            content=self.tr("用于输入密码的控件。"),
             routeKey="textInterface",
             index=2
         )
@@ -414,7 +414,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/NumberBox.png",
             title="SpinBox",
             content=self.tr(
-                "A text control used for numeric input and evaluation of algebraic equations."),
+                "用于数字输入和代数方程求值的文本控件。"),
             routeKey="textInterface",
             index=3
         )
@@ -422,19 +422,19 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/RichEditBox.png",
             title="TextEdit",
             content=self.tr(
-                "A rich text editing control that supports formatted text, hyperlinks, and other rich content."),
+                "支持格式化文本、超链接和其他富内容的富文本编辑控件。"),
             routeKey="textInterface",
             index=8
         )
         self.vBoxLayout.addWidget(textView)
 
         # view samples
-        collectionView = SampleCardView(self.tr('View samples'), self.view)
+        collectionView = SampleCardView(self.tr('视图示例'), self.view)
         collectionView.addSampleCard(
             icon=":/app/images/controls/ListView.png",
             title="ListView",
             content=self.tr(
-                "A control that presents a collection of items in a vertical list."),
+                "在垂直列表中呈现项目集合的控件。"),
             routeKey="viewInterface",
             index=0
         )
@@ -442,7 +442,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/DataGrid.png",
             title="TableView",
             content=self.tr(
-                "The DataGrid control provides a flexible way to display a collection of data in rows and columns."),
+                "DataGrid控件提供了以行和列显示数据集合的灵活方式。"),
             routeKey="viewInterface",
             index=1
         )
@@ -450,7 +450,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/TreeView.png",
             title="TreeView",
             content=self.tr(
-                "The TreeView control is a hierarchical list pattern with expanding and collapsing nodes that contain nested items."),
+                "TreeView控件是具有展开和折叠节点的分层列表模式，包含嵌套项。"),
             routeKey="viewInterface",
             index=2
         )
@@ -458,7 +458,7 @@ class HomeInterface(ScrollArea):
             icon=":/app/images/controls/FlipView.png",
             title="FlipView",
             content=self.tr(
-                "Presents a collection of items that the user can flip through,one item at a time."),
+                "呈现用户可以逐项翻转的项目集合。"),
             routeKey="viewInterface",
             index=4
         )
