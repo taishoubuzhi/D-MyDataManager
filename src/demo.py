@@ -43,7 +43,6 @@ def _setup_translators():
     app.installTranslator(_appTranslator)
 
 
-
 _setup_translators()
 _window = MainWindow()
 _window.show()

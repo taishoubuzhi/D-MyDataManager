@@ -441,8 +441,8 @@
             <translation>Choose folder</translation>
         </message>
         <message>
-            <source>重启应用</source>
-            <translation>Restart App</translation>
+            <source>关闭程序</source>
+            <translation>Close App</translation>
         </message>
         <message>
             <source>还原配置</source>

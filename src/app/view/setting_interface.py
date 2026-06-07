@@ -233,7 +233,7 @@ class SettingInterface(ScrollArea):
         self.micaCard.setEnabled(is_win11())
 
         # floating buttons (bottom-right)
-        self.restartButton = PushButton(FIF.SYNC, self.tr('重启应用'), self)
+        self.restartButton = PushButton(FIF.CLOSE, self.tr('关闭程序'), self)
         self.restartButton.setFixedHeight(36)
         self.restartButton.clicked.connect(self.__restartApp)
         self.restartButton.hide()
@@ -387,7 +387,8 @@ class SettingInterface(ScrollArea):
         self.__updateFloatingButtonsVisibility()
 
     def __restartApp(self):
-        logger.info("自动重启ing")
+        logger.info("Closing application...")
+        QApplication.quit()
 
     def __reinitLog(self, *args):
         """ Reinitialize log system when log config changes """

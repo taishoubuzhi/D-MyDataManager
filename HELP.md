@@ -14,3 +14,6 @@ from PyQt6 import QtCore
 ```cmd
 pyside6-lrelease src\app\resource\i18n\app.zh_CN.ts -qm src\app\resource\i18n\app.zh_CN.qm             
 ```
+```cmd
+pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.en.qm             
+```
