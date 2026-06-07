@@ -1,0 +1,7 @@
+- [x] config.py 已移除 different_level_file、file_override、log_file 及各级别文件名配置项
+- [x] config.py 的 file_path 默认值指向项目根目录 logs
+- [x] config.json 已移除废弃字段，Log-Path 指向项目根目录 logs
+- [x] init_log.py 文件输出以运行时间命名（格式 YYYY-MM-DD_HH-MM-SS.log）
+- [x] init_log.py 所有级别日志统一输出到单一文件，与控制台同步
+- [x] setting_interface.py 已移除 differentLevelFileCard 和 fileOverrideCard
+- [x] setting_interface.py 的 __updateConfigCardVisibility 和 __initLayout 不再引用已删除卡片

@@ -1,67 +1,84 @@
 import sys
+import os
 import datetime
 from ..config import config
 
 from loguru import logger
 
 
-def _set_logger_config(sink, rotation, config_item):
+def _cleanup_old_logs(log_dir, max_count):
+    """启动时检查日志目录，删除超出数量限制的旧日志文件"""
+    log_files = [f for f in os.listdir(log_dir) if f.endswith(".log")]
+    if len(log_files) <= max_count:
+        return
+    # 按修改时间排序，最旧的在前
+    log_files.sort(key=lambda f: os.path.getmtime(os.path.join(log_dir, f)))
+    delete_count = len(log_files) - max_count
+    for f in log_files[:delete_count]:
+        os.remove(os.path.join(log_dir, f))
+        logger.debug(f"删除旧日志文件: {f}")
+
+
+def _set_logger_config(sink, rotation, retention, config_item):
+    fmt = config_item.get(config_item.json_format) if config_item.get(config_item.format_to_json) else config_item.get(config_item.log_format)
+    # 控制台使用整行带颜色的格式
+    if not isinstance(sink, str):
+        fmt = "<level>" + fmt + "</level>"
     kwargs = dict(
         sink=sink,
         level=config_item.get(config_item.log_level),
         enqueue=config_item.get(config_item.enqueue),
         backtrace=config_item.get(config_item.backtrace),
         diagnose=config_item.get(config_item.diagnose),
-        format=config_item.get(config_item.json_format) if config_item.get(config_item.format_to_json) else config_item.get(config_item.log_format),
+        format=fmt,
         serialize=config_item.get(config_item.format_to_json),
         catch=config_item.get(config_item.catch))
     if isinstance(sink, str):
         kwargs["encoding"] = config_item.get(config_item.encoding)
-    if rotation is not None:
-        kwargs["rotation"] = rotation
-        kwargs["retention"] = str(config_item.get(config_item.retention)) + " " + config_item.get(config_item.retention_unit)
+        if rotation is not None:
+            kwargs["rotation"] = rotation
+        if retention is not None:
+            kwargs["retention"] = retention
     logger.add(**kwargs)
-
-
-def _get_log_file_path(file_name, config_item):
-    if not config_item.get(config_item.file_override):
-        original_file = file_name
-        dot_index = file_name.rfind('.')
-        if dot_index != -1:
-            name_part = original_file[:dot_index]
-            ext_part = original_file[dot_index:]
-            file_name = f"{name_part}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}{ext_part}"
-
-    return config_item.get(config_item.file_path) + "/" + file_name
 
 
 def init_log():
     rotation = None
+    retention = None
     match config.get(config.rotate_mode):
-        case "Size":
-            rotation = str(config.get(config.rotate_size)) + " " + config.get(config.rotate_size_unit)
         case "Time":
-            rotation = config.get(config.rotate_time)
-        case "Interval":
             rotation = str(config.get(config.rotate_interval)) + " " + config.get(config.rotate_interval_unit)
+        case "Count":
+            # 每日轮转触发 + retention 控制保留数量
+            rotation = "1 day"
+            retention = config.get(config.rotate_count)
         case _:
             rotation = None
 
     logger.remove()
 
-    if config.get(config.output_console):
-        _set_logger_config(sys.stderr, rotation, config)
-
     if config.get(config.output_file):
-        file_path = _get_log_file_path(config.get(config.log_file), config)
-        _set_logger_config(file_path, rotation, config)
-        if config.get(config.different_level_file):
-            for file in [config.get(config.trace_level_file),
-                         config.get(config.debug_level_file),
-                         config.get(config.info_level_file),
-                         config.get(config.success_level_file),
-                         config.get(config.warning_level_file),
-                         config.get(config.error_level_file),
-                         config.get(config.critical_level_file)]:
-                file_path = _get_log_file_path(file, config)
-                _set_logger_config(file_path, rotation, config)
+        log_dir = config.get(config.file_path)
+        os.makedirs(log_dir, exist_ok=True)
+
+        # 轮转模式不为 None 时，启动时额外进行一次手动清理
+        if config.get(config.rotate_mode) != "None":
+            _cleanup_old_logs(log_dir, config.get(config.rotate_count))
+
+        file_name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".log"
+        file_path = os.path.join(log_dir, file_name)
+        _set_logger_config(file_path, rotation, retention, config)
+
+    if config.get(config.output_console):
+        _set_logger_config(sys.stderr, rotation, retention, config)
+
+    logger.info("日志系统初始化完成")
+    logger.debug(f"日志级别: {config.get(config.log_level)}")
+    logger.debug(f"控制台输出: {config.get(config.output_console)}")
+    logger.debug(f"文件输出: {config.get(config.output_file)}")
+    if config.get(config.output_file):
+        logger.debug(f"日志目录: {config.get(config.file_path)}")
+    if rotation is not None:
+        logger.debug(f"日志轮转: {rotation}")
+    if retention is not None:
+        logger.debug(f"日志保留数量: {retention}")

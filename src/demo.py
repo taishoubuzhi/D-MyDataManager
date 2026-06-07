@@ -11,7 +11,10 @@ from app.common.init import init_log, init_db
 
 from app.view.main_window import MainWindow
 
+from loguru import logger
+
 init_log()
+logger.info("应用启动中...")
 init_db()
 
 if config.get(config.dpi_scale) != "Auto":

@@ -14,6 +14,7 @@ from ..common.translator import Translator
 from ..common.icon import Icon
 from ..common.signal_bus import signalBus
 from src.app.resource import resource
+from loguru import logger
 
 
 class MainWindow(FluentWindow):
@@ -49,6 +50,8 @@ class MainWindow(FluentWindow):
         self.addSubInterface(
             self.settingInterface, FIF.SETTING, self.tr('Settings'), NavigationItemPosition.BOTTOM)
 
+        logger.info("主窗口导航初始化完成")
+
 
     def initWindow(self):
         self.resize(960, 780)
@@ -77,6 +80,7 @@ class MainWindow(FluentWindow):
             self.splashScreen.resize(self.size())
 
     def closeEvent(self, e):
+        logger.info("应用关闭")
         self.themeListener.terminate()
         self.themeListener.deleteLater()
         super().closeEvent(e)

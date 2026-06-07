@@ -1,4 +1,4 @@
-import datetime
+import os
 
 from PyQt6.QtCore import QLocale
 
@@ -14,11 +14,8 @@ VERSION = "v0.0.0"
 
 LOG_LEVELS = ["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
 ENCODINGS = ["utf-8"]
-ROTATE_MODES = ["None", "Size", "Time", "Interval"]
-ROTATE_SIZE_UNITS = ["B", "KB", "MB", "GB"]
+ROTATE_MODES = ["None", "Time", "Count"]
 ROTATE_INTERVAL_UNITS = ["second", "minute", "hour", "day"]
-RETENTION_UNITS = ["seconds", "minutes", "hours", "days"]
-COMPRESS_MODES = ["None", "zip"]
 
 POOL_SIZE_RANGE = (0,20)
 MAX_OVERFLOW_RANGE = (0,20)
@@ -36,21 +33,6 @@ class LanguageSerializer(ConfigSerializer):
 
     def deserialize(self, value: str):
         return Language(QLocale(value)) if value != "Auto" else Language.AUTO
-
-
-class FileTimeSerializer(ConfigSerializer):
-
-    def serialize(self, value: datetime.time):
-        return value.strftime("%H:%M")
-
-    def deserialize(self, value: str):
-        try:
-            return datetime.datetime.strptime(value, "%H:%M").time()
-        except ValueError:
-            try:
-                return datetime.datetime.strptime(value, "%HH:%MM").time()
-            except ValueError:
-                return datetime.time(0, 0)
 
 
 class Config(QConfig):
@@ -71,7 +53,7 @@ class Config(QConfig):
                                   OptionsValidator(LOG_LEVELS),
                                   restart=True)
 
-    log_format = ConfigItem("Log", "Log-Format", "{time} | {level} | {message}")
+    log_format = ConfigItem("Log", "Log-Format", "{time} [{level:<8}] : {message}")
 
     format_to_json = ConfigItem("Log", "Format-To-JSON", False,
                                 BoolValidator(),
@@ -106,76 +88,31 @@ class Config(QConfig):
     output_file = ConfigItem("File", "Output-File", True,
                              BoolValidator())
 
-    different_level_file = ConfigItem("File", "Different-Level-Files", True,
-                                      BoolValidator(),
-                                      restart=True)
-
-    file_path = ConfigItem("Log-File", "Log-Path", "logs",
+    file_path = ConfigItem("Log-File", "Log-Path",
+                           os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "logs")),
                            FolderValidator(),
                            restart=True)
-
-    trace_level_file = ConfigItem("Log-File", "File-Trace", "trace.log")  # Trace 等级日志文件名
-    debug_level_file = ConfigItem("Log-File", "File-Debug", "debug.log")  # Debug 等级日志文件名
-    info_level_file = ConfigItem("Log-File", "File-Info", "info.log")  # Info 等级日志文件名
-    success_level_file = ConfigItem("Log-File", "File-Success", "success.log")  # Success 等级日志文件名
-    warning_level_file = ConfigItem("Log-File", "File-Warn", "warn.log")  # Warning 等级日志文件名
-    error_level_file = ConfigItem("Log-File", "File-Error", "error.log")  # Error 等级日志文件名
-    critical_level_file = ConfigItem("Log-File", "File-Critical", "critical.log")  # Critical 等级日志文件名
-
-    log_file = ConfigItem("Log-File", "File-Log", "log.log")
-
-    file_override = ConfigItem("Log-File", "File-Overwrite", True,
-                               BoolValidator(),
-                               restart=True)
 
     # 当前使用的轮转模式，默认为 "None"（不轮转）
     rotate_mode = OptionsConfigItem("Log-File", "Rotate-Mode", "None",
                                     OptionsValidator(ROTATE_MODES))
 
-    rotate_size = RangeConfigItem("Log-File", "Rotate-Size", 1,
-                                  RangeValidator(1, 1024),
-                                  restart=True)
-
-    rotate_size_unit = OptionsConfigItem("Log-File", "Rotate-Size-Unit", "MB",
-                                         OptionsValidator(ROTATE_SIZE_UNITS),
-                                         restart=True)
-
-    rotate_time = ConfigItem("Log-File", "Rotate-Time",
-                             datetime.time(0, 0),
-                             serializer=FileTimeSerializer(),
-                             restart=True
-                             )
-
     rotate_interval = RangeConfigItem("Log-File", "Rotate-Interval", 1,
-                                      RangeValidator(1, 24),
-                                      restart=True)
+                                      RangeValidator(1, 24))
 
     rotate_interval_unit = OptionsConfigItem("Log-File", "Rotate-Interval-Unit", "hour",
-                                             OptionsValidator(ROTATE_INTERVAL_UNITS),
-                                             restart=True)
+                                             OptionsValidator(ROTATE_INTERVAL_UNITS))
 
-    retention = RangeConfigItem("Log-File", "Retention", 7,
-                                RangeValidator(1, 365),
-                                restart=True)
-
-    retention_unit = OptionsConfigItem("Log-File", "Retention-Unit", "days",
-                                       OptionsValidator(RETENTION_UNITS),
-                                       restart=True)
-
-    compress_mode = OptionsConfigItem("Log-File", "Compress-Mode", "None",
-                                      OptionsValidator(COMPRESS_MODES),
-                                      restart=True)
+    rotate_count = RangeConfigItem("Log-File", "Rotate-Count", 10,
+                                   RangeValidator(1, 100))
 
     url = ConfigItem("DB", "URL", "sqlite:///data.db")
     echo = ConfigItem("DB", "Echo", True, BoolValidator(), restart=True)
-    pool_size = RangeConfigItem("DB", "Pool-Size", 10, RangeValidator(*POOL_SIZE_RANGE),
-                                restart=True)
+    pool_size = RangeConfigItem("DB", "Pool-Size", 10, RangeValidator(*POOL_SIZE_RANGE))
     max_overflow = RangeConfigItem("DB", "Max-Overflow", 20,
-                                   RangeValidator(*MAX_OVERFLOW_RANGE),
-                                   restart=True)
+                                   RangeValidator(*MAX_OVERFLOW_RANGE))
     pool_recycle = RangeConfigItem("DB", "Pool-Recycle", 3600,
-                                   RangeValidator(*POOL_RECYCLE_RANGE),
-                                   restart=True)
+                                   RangeValidator(*POOL_RECYCLE_RANGE))
     pool_pre_ping = ConfigItem("DB", "Pool-Pre-Ping", True, BoolValidator(), restart=True)
     connect_args = ConfigItem("DB", "Connect-Args", {})
 

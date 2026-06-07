@@ -10,11 +10,11 @@ from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog
 
-from ..common.config import config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_SIZE_UNITS,ROTATE_INTERVAL_UNITS,RETENTION_UNITS,COMPRESS_MODES
+from ..common.config import config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_INTERVAL_UNITS
 from ..common.util import is_win11
 from ..common.signal_bus import signalBus
 from ..common.style_sheet import StyleSheet
-from ..components import TimePickerDialog
+from loguru import logger
 
 class SettingInterface(ScrollArea):
     """ Setting interface """
@@ -174,25 +174,11 @@ class SettingInterface(ScrollArea):
             config.output_file,
             self.logGroup
         )
-        self.differentLevelFileCard = SwitchSettingCard(
-            FIF.FILTER,
-            self.tr('Different level files'),
-            self.tr('Output log to different level files'),
-            config.different_level_file,
-            self.logGroup
-        )
         self.filePathCard = PushSettingCard(
             self.tr('File path'),
             FIF.FOLDER,
             self.tr('Set the path of log file'),
             config.get(config.file_path),
-            self.logGroup
-        )
-        self.fileOverrideCard = SwitchSettingCard(
-            FIF.SYNC,
-            self.tr('File override'),
-            self.tr('Override log file'),
-            config.file_override,
             self.logGroup
         )
         self.rotateModeCard = ComboBoxSettingCard(
@@ -203,70 +189,27 @@ class SettingInterface(ScrollArea):
             texts=ROTATE_MODES,
             parent=self.logGroup
         )
-        self.rotateSizeCard = RangeSettingCard(
-            config.rotate_size,
-            FIF.ZOOM,
-            self.tr('Rotate size'),
-            self.tr('Set the rotate size of log file'),
-            self.logGroup
-        )
-
-        self.rotateSizeUnitCard = ComboBoxSettingCard(
-            config.rotate_size_unit,
-            FIF.UNIT,
-            self.tr('Rotate size unit'),
-            self.tr('Set the rotate size unit of log file'),
-            texts=ROTATE_SIZE_UNITS,
-            parent=self.logGroup
-        )
-        self.rotateTimeCard = PushSettingCard(
-            self.tr('Rotate time'),
-            FIF.CALENDAR,
-            self.tr('Set the rotate time of log file'),
-            config.get(config.rotate_time).strftime("%H:%M"),
-            self.logGroup
-        )
-
         self.rotateIntervalCard = RangeSettingCard(
             config.rotate_interval,
             FIF.DATE_TIME,
             self.tr('Rotate interval'),
-            self.tr('Set the rotate interval of log file'),
+            self.tr('Create a new log file at the specified time interval'),
             self.logGroup
         )
         self.rotateIntervalUnitCard = ComboBoxSettingCard(
             config.rotate_interval_unit,
             FIF.UNIT,
             self.tr('Rotate interval unit'),
-            self.tr('Set the rotate interval unit of log file'),
+            self.tr('Set the time unit for rotation interval'),
             texts=ROTATE_INTERVAL_UNITS,
             parent=self.logGroup
         )
-
-        self.retentionCard = RangeSettingCard(
-            config.retention,
+        self.rotateCountCard = RangeSettingCard(
+            config.rotate_count,
             FIF.LIBRARY,
-            self.tr('Retention'),
-            self.tr('Set the retention of log file'),
+            self.tr('Log file count'),
+            self.tr('Automatically delete oldest log files when count exceeds this limit'),
             self.logGroup
-        )
-
-        self.retentionUnitCard = ComboBoxSettingCard(
-            config.retention_unit,
-            FIF.UNIT,
-            self.tr('Retention unit'),
-            self.tr('Set the retention unit of log file'),
-                texts=RETENTION_UNITS,
-            parent=self.logGroup
-        )
-
-        self.compressModeCard = ComboBoxSettingCard(
-            config.compress_mode,
-            FIF.ZIP_FOLDER,
-            self.tr('Compress mode'),
-            self.tr('Set the compress mode of log file'),
-            texts=COMPRESS_MODES,
-            parent=self.logGroup
         )
 
         self.__initWidget()
@@ -318,18 +261,11 @@ class SettingInterface(ScrollArea):
         self.logGroup.addSettingCard(self.backtraceCard)
         self.logGroup.addSettingCard(self.diagnoseCard)
         self.logGroup.addSettingCard(self.outputFileCard)
-        self.logGroup.addSettingCard(self.differentLevelFileCard)
         self.logGroup.addSettingCard(self.filePathCard)
-        self.logGroup.addSettingCard(self.fileOverrideCard)
         self.logGroup.addSettingCard(self.rotateModeCard)
-        self.logGroup.addSettingCard(self.rotateSizeCard)
-        self.logGroup.addSettingCard(self.rotateSizeUnitCard)
-        self.logGroup.addSettingCard(self.rotateTimeCard)
         self.logGroup.addSettingCard(self.rotateIntervalCard)
         self.logGroup.addSettingCard(self.rotateIntervalUnitCard)
-        self.logGroup.addSettingCard(self.retentionCard)
-        self.logGroup.addSettingCard(self.retentionUnitCard)
-        self.logGroup.addSettingCard(self.compressModeCard)
+        self.logGroup.addSettingCard(self.rotateCountCard)
 
         # add setting card group to layout
         self.expandLayout.setSpacing(28)
@@ -352,24 +288,10 @@ class SettingInterface(ScrollArea):
         folder = QFileDialog.getExistingDirectory(self, self.tr("Choose folder"), "./")
         if not folder or config.get(config.file_path) == folder:
             return
-        config.set(config.downloadFolder, folder)
+        old_path = config.get(config.file_path)
+        config.set(config.file_path, folder)
         self.filePathCard.setContent(folder)
-
-    def __onRotateTimeCardClicked(self):
-        current_time = config.get(config.rotate_time)
-        dialog = TimePickerDialog(
-            current_time=current_time,
-            title=self.tr("Select Rotate Time"),
-            time_format="HH:mm",
-            parent=self
-        )
-        
-        def on_time_selected(new_time):
-            config.set(config.rotate_time, new_time)
-            self.rotateTimeCard.setContent(new_time.strftime("%H:%M"))
-        
-        dialog.timeSelected.connect(on_time_selected)
-        dialog.exec()
+        logger.info(f"日志路径变更: {old_path} -> {folder}")
 
     def __updateConfigCardVisibility(self):
         """ Update the visibility of configuration cards based on settings """
@@ -379,18 +301,11 @@ class SettingInterface(ScrollArea):
 
         # All cards
         all_cards = [
-            self.differentLevelFileCard,
             self.filePathCard,
-            self.fileOverrideCard,
             self.rotateModeCard,
-            self.rotateSizeCard,
-            self.rotateSizeUnitCard,
-            self.rotateTimeCard,
             self.rotateIntervalCard,
             self.rotateIntervalUnitCard,
-            self.retentionCard,
-            self.retentionUnitCard,
-            self.compressModeCard
+            self.rotateCountCard
         ]
 
         # Show all cards when dynamic_config_display is False
@@ -399,40 +314,27 @@ class SettingInterface(ScrollArea):
                 card.setVisible(True)
             return
 
-        # When output_file is False, hide all cards after differentLevelFileCard
+        # When output_file is False, hide all file-related cards
         if not output_file:
-            self.differentLevelFileCard.setVisible(True)
-            for card in all_cards[1:]:
+            for card in all_cards:
                 card.setVisible(False)
             return
 
-        # When output_file is True, show all first few cards
-        self.differentLevelFileCard.setVisible(True)
+        # When output_file is True, show common cards
         self.filePathCard.setVisible(True)
-        self.fileOverrideCard.setVisible(True)
         self.rotateModeCard.setVisible(True)
 
-        # Rotate related cards
-        self.retentionCard.setVisible(True)
-        self.retentionUnitCard.setVisible(True)
-        self.compressModeCard.setVisible(True)
-
-        # Hide all rotate-specific cards first
-        self.rotateSizeCard.setVisible(False)
-        self.rotateSizeUnitCard.setVisible(False)
-        self.rotateTimeCard.setVisible(False)
+        # Hide mode-specific cards first
         self.rotateIntervalCard.setVisible(False)
         self.rotateIntervalUnitCard.setVisible(False)
+        self.rotateCountCard.setVisible(False)
 
         # Show relevant cards based on rotate_mode
-        if rotate_mode == "Size":
-            self.rotateSizeCard.setVisible(True)
-            self.rotateSizeUnitCard.setVisible(True)
-        elif rotate_mode == "Time":
-            self.rotateTimeCard.setVisible(True)
-        elif rotate_mode == "Interval":
+        if rotate_mode == "Time":
             self.rotateIntervalCard.setVisible(True)
             self.rotateIntervalUnitCard.setVisible(True)
+        elif rotate_mode == "Count":
+            self.rotateCountCard.setVisible(True)
 
     def __connectSignalToSlot(self):
         """ connect signal to slot """
@@ -440,14 +342,12 @@ class SettingInterface(ScrollArea):
 
         # personalization
         config.themeChanged.connect(setTheme)
-        self.themeColorCard.colorChanged.connect(lambda c: setThemeColor(c))
-        self.micaCard.checkedChanged.connect(signalBus.micaEnableChanged)
+        self.themeColorCard.colorChanged.connect(lambda c: (setThemeColor(c), logger.info(f"主题颜色变更: {c.name()}")))
+        self.micaCard.checkedChanged.connect(lambda e: (signalBus.micaEnableChanged.emit(e), logger.info(f"Mica效果变更: {'开启' if e else '关闭'}")))
 
         # log
         self.filePathCard.clicked.connect(
             self.__onFilePathCardClicked)
-        self.rotateTimeCard.clicked.connect(
-            self.__onRotateTimeCardClicked)
         # Connect signals for dynamic config card visibility
         self.dynamicConfigDisplayCard.checkedChanged.connect(self.__updateConfigCardVisibility)
         self.outputFileCard.checkedChanged.connect(self.__updateConfigCardVisibility)
