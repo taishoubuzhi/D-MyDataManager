@@ -1,4 +1,4 @@
-import Base
+from .Base import Base
 
 from sqlalchemy import (Column, String, Boolean)
 

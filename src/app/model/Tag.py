@@ -1,6 +1,6 @@
-import Base
+from .Base import Base
 
-from sqlalchemy import (Column, String, Int)
+from sqlalchemy import (Column, String, Integer)
 
 class Tag(Base):
     __tablename__ = 'tags'

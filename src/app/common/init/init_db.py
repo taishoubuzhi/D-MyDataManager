@@ -3,6 +3,11 @@ from sqlalchemy.orm import sessionmaker
 
 from loguru import logger
 from ..config import config
+from app.model.Base import Base
+from app.model.Data import Data
+from app.model.DataBase import DataBase
+from app.model.Tag import Tag
+from app.model.User import User
 
 
 engine = None
@@ -36,4 +41,5 @@ def get_session():
 def init_db():
     get_engine()
     get_session()
+    Base.metadata.create_all(get_engine())
     logger.debug(f"Database URL: {config.get(config.url)}")

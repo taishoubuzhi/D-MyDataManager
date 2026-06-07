@@ -1,5 +1,5 @@
-import Base
-from sqlalchemy import (Column, String, Int, ARRAY, Boolean, ForeignKey)
+from .Base import Base
+from sqlalchemy import (Column, String, Integer, JSON, Boolean, ForeignKey)
 
 
 class DataBase(Base):
@@ -8,7 +8,7 @@ class DataBase(Base):
     id = Column(String(20), primary_key=True)
     name = Column(String(20))
     description = Column(String(256))
-    keywords = Column(ARRAY(String(10)))
+    keywords = Column(JSON)
     is_hidden = Column(Boolean)
 
     user_id = Column(String(20), ForeignKey('users.id'))

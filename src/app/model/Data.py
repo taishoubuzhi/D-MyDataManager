@@ -1,15 +1,17 @@
-import Base
-from sqlalchemy import (Column, String, Int, Enum, ARRAY, ForeignKey,Boolean)
+from enum import Enum as PyEnum
+
+from .Base import Base
+from sqlalchemy import (Column, String, Integer, Enum, JSON, ForeignKey, Boolean)
 
 
-class DataType(Enum):
+class DataType(PyEnum):
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
     DOC = "doc"
     DOCX = "docx"
     EXCEL = "excel"
-    PPT = "PPT"
+    PPT = "ppt"
     UNKNOWN = "unknown"
 
 
@@ -19,9 +21,9 @@ class Data(Base):
     id = Column(String(20), primary_key=True)
     name = Column(String(20))
     type = Column(Enum(DataType))
-    keywords = Column(ARRAY(String(10)))
-    tag = Column(ARRAY(String(20)))
-    size = Column(Int)
+    keywords = Column(JSON)
+    tag = Column(JSON)
+    size = Column(Integer)
     is_hidden = Column(Boolean)
 
     user_id = Column(String(20), ForeignKey('users.id'))
