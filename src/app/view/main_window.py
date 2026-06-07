@@ -82,7 +82,7 @@ class MainWindow(FluentWindow):
     def closeEvent(self, e):
         logger.info("Application closed")
         self.themeListener.terminate()
-        self.themeListener.deleteLater()
+        self.themeListener.wait(3000)
         super().closeEvent(e)
 
     def _onThemeChangedFinished(self):

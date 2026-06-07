@@ -387,11 +387,7 @@ class SettingInterface(ScrollArea):
         self.__updateFloatingButtonsVisibility()
 
     def __restartApp(self):
-        """ Restart application in-place without exiting the process """
-        import demo
-        from PyQt6.QtCore import QTimer
-        # 延迟到下一个事件循环执行，避免在销毁当前窗口时访问已释放内存
-        QTimer.singleShot(0, demo.restart)
+        logger.info("自动重启ing")
 
     def __reinitLog(self, *args):
         """ Reinitialize log system when log config changes """

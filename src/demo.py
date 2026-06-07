@@ -43,36 +43,6 @@ def _setup_translators():
     app.installTranslator(_appTranslator)
 
 
-def restart():
-    """ Restart application in-place without exiting the process """
-    global _window
-    logger.info("Restarting application in-place...")
-
-    # close and destroy old window
-    if _window:
-        _window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        _window.close()
-        QApplication.processEvents()
-    _window = None
-
-    # reinitialize everything
-    load_config()
-    init_log()
-    init_db()
-
-    if config.get(config.dpi_scale) != "Auto":
-        os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
-        os.environ["QT_SCALE_FACTOR"] = str(config.get(config.dpi_scale))
-    else:
-        os.environ.pop("QT_ENABLE_HIGHDPI_SCALING", None)
-        os.environ.pop("QT_SCALE_FACTOR", None)
-
-    _setup_translators()
-
-    _window = MainWindow()
-    _window.show()
-    logger.info("Application restarted successfully")
-
 
 _setup_translators()
 _window = MainWindow()
