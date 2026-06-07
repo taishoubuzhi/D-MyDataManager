@@ -440,6 +440,22 @@
             <source>选择文件夹</source>
             <translation>Choose folder</translation>
         </message>
+        <message>
+            <source>重启应用</source>
+            <translation>Restart App</translation>
+        </message>
+        <message>
+            <source>还原配置</source>
+            <translation>Reset Config</translation>
+        </message>
+        <message>
+            <source>还原成功</source>
+            <translation>Reset successfully</translation>
+        </message>
+        <message>
+            <source>配置已还原为启动时的值</source>
+            <translation>Configuration has been reset to startup values</translation>
+        </message>
     </context>
     <context>
         <name>TimePickerDialog</name>

@@ -24,16 +24,18 @@ def _set_logger_config(sink, rotation, retention, config_item):
     # 控制台使用整行带颜色的格式
     if not isinstance(sink, str):
         fmt = "<level>" + fmt + "</level>"
+    is_file = isinstance(sink, str)
     kwargs = dict(
         sink=sink,
         level=config_item.get(config_item.log_level),
-        enqueue=config_item.get(config_item.enqueue),
+        # 文件 handler 关闭 enqueue，确保崩溃时日志不丢失
+        enqueue=config_item.get(config_item.enqueue) if not is_file else False,
         backtrace=config_item.get(config_item.backtrace),
         diagnose=config_item.get(config_item.diagnose),
         format=fmt,
         serialize=config_item.get(config_item.format_to_json),
         catch=config_item.get(config_item.catch))
-    if isinstance(sink, str):
+    if is_file:
         kwargs["encoding"] = config_item.get(config_item.encoding)
         if rotation is not None:
             kwargs["rotation"] = rotation

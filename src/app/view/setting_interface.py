@@ -1,14 +1,17 @@
 # coding:utf-8
+import os
+import sys
 from qfluentwidgets import (SettingCardGroup, SwitchSettingCard, FolderListSettingCard,
                             OptionsSettingCard, PushSettingCard,
                             HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
                             ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
-                            setTheme, setThemeColor, RangeSettingCard, isDarkTheme)
+                            setTheme, setThemeColor, RangeSettingCard, isDarkTheme,
+                            PushButton)
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import InfoBar
 from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths
 from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog
+from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog, QHBoxLayout, QApplication
 
 from ..common.config import config,LOG_LEVELS,ENCODINGS,ROTATE_MODES,ROTATE_INTERVAL_UNITS
 from ..common.util import is_win11
@@ -229,12 +232,68 @@ class SettingInterface(ScrollArea):
 
         self.micaCard.setEnabled(is_win11())
 
+        # floating buttons (bottom-right)
+        self.restartButton = PushButton(FIF.SYNC, self.tr('重启应用'), self)
+        self.restartButton.setFixedHeight(36)
+        self.restartButton.clicked.connect(self.__restartApp)
+        self.restartButton.hide()
+
+        self.resetButton = PushButton(FIF.CANCEL, self.tr('还原配置'), self)
+        self.resetButton.setFixedHeight(36)
+        self.resetButton.clicked.connect(self.__resetConfig)
+        self.resetButton.hide()
+
+        # snapshot of all restart-required config values at startup
+        self._restartConfigItems = [
+            config.dpi_scale, config.language,
+            config.log_level, config.format_to_json, config.catch,
+            config.output_console, config.enqueue, config.encoding,
+            config.backtrace, config.diagnose, config.file_path,
+            config.echo, config.pool_pre_ping,
+        ]
+        self._restartConfigSnapshot = {
+            item.key: config.get(item) for item in self._restartConfigItems
+        }
+
+        # snapshot of all config values at startup (for reset)
+        self._allConfigItems = [
+            config.micaEnabled, config.dpi_scale, config.language,
+            config.dynamic_config_display, config.check_update_at_start_up,
+            config.blurRadius,
+            config.log_level, config.format_to_json, config.catch,
+            config.output_console, config.enqueue, config.encoding,
+            config.backtrace, config.diagnose, config.output_file,
+            config.file_path, config.rotate_mode, config.rotate_interval,
+            config.rotate_interval_unit, config.rotate_count,
+            config.url, config.echo, config.pool_size,
+            config.max_overflow, config.pool_recycle, config.pool_pre_ping,
+            config.connect_args,
+        ]
+        self._allConfigSnapshot = {
+            item.key: config.get(item) for item in self._allConfigItems
+        }
+
         # initialize layout
         self.__initLayout()
         self.__connectSignalToSlot()
-        
+
         # Update card visibility initially
         self.__updateConfigCardVisibility()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.__updateFloatingButtonsPos()
+
+    def __updateFloatingButtonsPos(self):
+        """ Position floating buttons at bottom-right """
+        x = self.width() - 20
+        if self.restartButton.isVisible():
+            x -= self.restartButton.width()
+            self.restartButton.move(x, self.height() - self.restartButton.height() - 20)
+            x -= 10
+        if self.resetButton.isVisible():
+            x -= self.resetButton.width()
+            self.resetButton.move(x, self.height() - self.resetButton.height() - 20)
 
     def __initLayout(self):
         self.settingLabel.move(36, 30)
@@ -276,13 +335,69 @@ class SettingInterface(ScrollArea):
         self.expandLayout.addWidget(self.logGroup)
 
     def __showRestartTooltip(self):
-        """ show restart tooltip """
+        """ show restart tooltip and update floating buttons visibility """
         InfoBar.success(
             self.tr('更新成功'),
             self.tr('配置在重启软件后生效'),
             duration=1500,
             parent=self
         )
+        self.__updateFloatingButtonsVisibility()
+
+    def __updateFloatingButtonsVisibility(self):
+        """ Update visibility of restart and reset buttons """
+        # restart button: show when any restart-required config changed
+        restartChanged = any(
+            config.get(item) != self._restartConfigSnapshot[item.key]
+            for item in self._restartConfigItems
+        )
+        self.restartButton.setVisible(restartChanged)
+
+        # reset button: show when any config changed
+        anyChanged = any(
+            config.get(item) != self._allConfigSnapshot[item.key]
+            for item in self._allConfigItems
+        )
+        self.resetButton.setVisible(anyChanged)
+
+        self.__updateFloatingButtonsPos()
+
+    def __resetConfig(self):
+        """ Reset all config values to startup snapshot """
+        logger.info("Resetting all config to startup values...")
+        for item in self._allConfigItems:
+            original_value = self._allConfigSnapshot[item.key]
+            if config.get(item) != original_value:
+                config.set(item, original_value)
+
+        # update UI cards to reflect restored values
+        self.filePathCard.setContent(config.get(config.file_path))
+        self.__updateConfigCardVisibility()
+
+        # reinitialize log system
+        from ..common.init import init_log
+        init_log()
+
+        InfoBar.success(
+            self.tr('还原成功'),
+            self.tr('配置已还原为启动时的值'),
+            duration=1500,
+            parent=self
+        )
+        self.__updateFloatingButtonsVisibility()
+
+    def __restartApp(self):
+        """ Restart application in-place without exiting the process """
+        import demo
+        from PyQt6.QtCore import QTimer
+        # 延迟到下一个事件循环执行，避免在销毁当前窗口时访问已释放内存
+        QTimer.singleShot(0, demo.restart)
+
+    def __reinitLog(self, *args):
+        """ Reinitialize log system when log config changes """
+        from ..common.init import init_log
+        init_log()
+        logger.info("Log system reconfigured")
 
     def __onFilePathCardClicked(self):
         folder = QFileDialog.getExistingDirectory(self, self.tr("选择文件夹"), "./")
@@ -344,12 +459,28 @@ class SettingInterface(ScrollArea):
         config.themeChanged.connect(setTheme)
         self.themeColorCard.colorChanged.connect(lambda c: (setThemeColor(c), logger.info(f"Theme color changed: {c.name()}")))
         self.micaCard.checkedChanged.connect(lambda e: (signalBus.micaEnableChanged.emit(e), logger.info(f"Mica effect changed: {'enabled' if e else 'disabled'}")))
+        self.dynamicConfigDisplayCard.checkedChanged.connect(lambda e: (self.__updateConfigCardVisibility(), logger.info(f"Dynamic config display changed: {'enabled' if e else 'disabled'}")))
+        self.zoomCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Interface zoom changed: {self.zoomCard.comboBox.currentText()}"))
+        self.languageCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Language changed: {self.languageCard.comboBox.currentText()}"))
 
-        # log
-        self.filePathCard.clicked.connect(
-            self.__onFilePathCardClicked)
-        # Connect signals for dynamic config card visibility
-        self.dynamicConfigDisplayCard.checkedChanged.connect(self.__updateConfigCardVisibility)
-        self.outputFileCard.checkedChanged.connect(self.__updateConfigCardVisibility)
-        # Connect to internal comboBox's currentIndexChanged signal
-        self.rotateModeCard.comboBox.currentIndexChanged.connect(self.__updateConfigCardVisibility)
+        # material
+        self.blurRadiusCard.slider.valueChanged.connect(lambda v: logger.info(f"Acrylic blur radius changed: {v}"))
+
+        # software update
+        self.updateOnStartUpCard.checkedChanged.connect(lambda e: logger.info(f"Check update on startup changed: {'enabled' if e else 'disabled'}"))
+
+        # log - dynamic reinitialization
+        self.logLevelCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Log level changed: {self.logLevelCard.comboBox.currentText()}"), self.__reinitLog()))
+        self.formatToJsonCard.checkedChanged.connect(lambda e: (logger.info(f"Format to JSON changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.catchCard.checkedChanged.connect(lambda e: (logger.info(f"Catch changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.outputConsoleCard.checkedChanged.connect(lambda e: (logger.info(f"Output to console changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.enqueueCard.checkedChanged.connect(lambda e: (logger.info(f"Enqueue changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.encodingCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Encoding changed: {self.encodingCard.comboBox.currentText()}"), self.__reinitLog()))
+        self.backtraceCard.checkedChanged.connect(lambda e: (logger.info(f"Backtrace changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.diagnoseCard.checkedChanged.connect(lambda e: (logger.info(f"Diagnose changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.outputFileCard.checkedChanged.connect(lambda e: (self.__updateConfigCardVisibility(), logger.info(f"Output to file changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        self.filePathCard.clicked.connect(self.__onFilePathCardClicked)
+        self.rotateModeCard.comboBox.currentIndexChanged.connect(lambda i: (self.__updateConfigCardVisibility(), logger.info(f"Rotate mode changed: {self.rotateModeCard.comboBox.currentText()}"), self.__reinitLog()))
+        self.rotateIntervalCard.slider.valueChanged.connect(lambda v: (logger.info(f"Rotate interval changed: {v}"), self.__reinitLog()))
+        self.rotateIntervalUnitCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Rotate interval unit changed: {self.rotateIntervalUnitCard.comboBox.currentText()}"), self.__reinitLog()))
+        self.rotateCountCard.slider.valueChanged.connect(lambda v: (logger.info(f"Rotate count changed: {v}"), self.__reinitLog()))
