@@ -1,0 +1,46 @@
+DataInterface,
+#view {
+    background-color: transparent;
+}
+
+QScrollArea {
+    border: none;
+    background-color: transparent;
+}
+
+QTableView {
+    background-color: white;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    gridline-color: rgba(0, 0, 0, 0.06);
+}
+
+QTableView::item {
+    padding: 4px 8px;
+}
+
+QTableView::item:alternate {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+DataCard {
+    background-color: white;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+}
+
+QListWidget {
+    background-color: white;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 8px;
+    outline: none;
+}
+
+QListWidget::item {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+QListWidget::item:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}

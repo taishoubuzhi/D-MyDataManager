@@ -9,6 +9,7 @@ from qfluentwidgets import FluentIcon as FIF
 from ..common.config import config
 from .home_interface import HomeInterface
 from .setting_interface import SettingInterface
+from .data_interface import DataInterface
 
 from ..common.translator import Translator
 from ..common.icon import Icon
@@ -27,6 +28,7 @@ class MainWindow(FluentWindow):
 
         self.homeInterface = HomeInterface(self)
         self.settingInterface = SettingInterface(self)
+        self.dataInterface = DataInterface(self)
 
         self.navigationInterface.setAcrylicEnabled(True)
 
@@ -45,6 +47,7 @@ class MainWindow(FluentWindow):
     def initNavigation(self):
         t = Translator()
         self.addSubInterface(self.homeInterface, FIF.HOME, self.tr('首页'))
+        self.addSubInterface(self.dataInterface, FIF.DOCUMENT, self.tr('数据管理'))
         self.navigationInterface.addSeparator()
 
         self.addSubInterface(

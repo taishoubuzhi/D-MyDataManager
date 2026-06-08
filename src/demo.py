@@ -15,6 +15,9 @@ from loguru import logger
 
 init_log()
 logger.info("Application starting...")
+
+sys.excepthook = lambda exc_type, exc_value, exc_tb: logger.opt(exception=(exc_type, exc_value, exc_tb)).error("Unhandled exception")
+
 init_db()
 
 if config.get(config.dpi_scale) != "Auto":

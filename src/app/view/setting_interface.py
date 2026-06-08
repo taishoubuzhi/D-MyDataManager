@@ -6,10 +6,10 @@ from qfluentwidgets import (SettingCardGroup, SwitchSettingCard, FolderListSetti
                             HyperlinkCard, PrimaryPushSettingCard, ScrollArea,
                             ComboBoxSettingCard, ExpandLayout, Theme, CustomColorSettingCard,
                             setTheme, setThemeColor, RangeSettingCard, isDarkTheme,
-                            PushButton)
+                            PushButton, ExpandGroupSettingCard)
 from qfluentwidgets import FluentIcon as FIF
 from qfluentwidgets import InfoBar
-from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths
+from PyQt6.QtCore import Qt, pyqtSignal, QUrl, QStandardPaths, QTimer
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import QWidget, QLabel, QFileDialog, QHBoxLayout, QApplication
 
@@ -30,17 +30,9 @@ class SettingInterface(ScrollArea):
         # setting label
         self.settingLabel = QLabel(self.tr("设置"), self)
 
-
-        # personalization
+        # personalization (合并：外观 + 材料)
         self.personalGroup = SettingCardGroup(
             self.tr('个性化'), self.scrollWidget)
-        self.micaCard = SwitchSettingCard(
-            FIF.TRANSPARENT,
-            self.tr('云母效果'),
-            self.tr('窗口和表面显示半透明'),
-            config.micaEnabled,
-            self.personalGroup
-        )
         self.themeCard = ComboBoxSettingCard(
             config.themeMode,
             FIF.BRUSH,
@@ -59,11 +51,18 @@ class SettingInterface(ScrollArea):
             self.tr('调整应用的主题色'),
             self.personalGroup
         )
-        self.dynamicConfigDisplayCard = SwitchSettingCard(
-            FIF.SYNC,
-            self.tr('动态配置显示'),
-            self.tr('动态显示配置变更'),
-            config.dynamic_config_display,
+        self.micaCard = SwitchSettingCard(
+            FIF.TRANSPARENT,
+            self.tr('云母效果'),
+            self.tr('窗口和表面显示半透明'),
+            config.micaEnabled,
+            self.personalGroup
+        )
+        self.blurRadiusCard = RangeSettingCard(
+            config.blurRadius,
+            FIF.ALBUM,
+            self.tr('亚克力磨砂半径'),
+            self.tr('磨砂半径越大，图像越模糊'),
             self.personalGroup
         )
         self.zoomCard = ComboBoxSettingCard(
@@ -86,29 +85,18 @@ class SettingInterface(ScrollArea):
             parent=self.personalGroup
         )
 
-        # material
-        self.materialGroup = SettingCardGroup(
-            self.tr('材料'), self.scrollWidget)
-        self.blurRadiusCard = RangeSettingCard(
-            config.blurRadius,
-            FIF.ALBUM,
-            self.tr('亚克力磨砂半径'),
-            self.tr('磨砂半径越大，图像越模糊'),
-            self.materialGroup
+        # data
+        self.dataGroup = SettingCardGroup(
+            self.tr('数据'), self.scrollWidget)
+        self.dataStorePathCard = PushSettingCard(
+            self.tr('选择文件夹'),
+            FIF.FOLDER,
+            self.tr('数据存储路径'),
+            config.get(config.data_store_path),
+            self.dataGroup
         )
 
-        # update software
-        self.updateSoftwareGroup = SettingCardGroup(
-            self.tr("软件更新"), self.scrollWidget)
-        self.updateOnStartUpCard = SwitchSettingCard(
-            FIF.UPDATE,
-            self.tr('应用启动时检查更新'),
-            self.tr('新版本将更加稳定并拥有更多功能'),
-            configItem=config.check_update_at_start_up,
-            parent=self.updateSoftwareGroup
-        )
-
-        # log
+        # log - basic
         self.logGroup = SettingCardGroup(
             self.tr('日志'), self.scrollWidget)
         self.logLevelCard = ComboBoxSettingCard(
@@ -119,20 +107,6 @@ class SettingInterface(ScrollArea):
             texts=LOG_LEVELS,
             parent=self.logGroup
         )
-        self.formatToJsonCard = SwitchSettingCard(
-            FIF.DOCUMENT,
-            self.tr('格式化为JSON'),
-            self.tr('将日志格式化为JSON'),
-            config.format_to_json,
-            self.logGroup
-        )
-        self.catchCard = SwitchSettingCard(
-            FIF.CANCEL,
-            self.tr('捕获'),
-            self.tr('捕获异常'),
-            config.catch,
-            self.logGroup
-        )
         self.outputConsoleCard = SwitchSettingCard(
             FIF.COMMAND_PROMPT,
             self.tr('输出到控制台'),
@@ -140,36 +114,6 @@ class SettingInterface(ScrollArea):
             config.output_console,
             self.logGroup
         )
-        self.enqueueCard = SwitchSettingCard(
-            FIF.MORE,
-            self.tr('入队'),
-            self.tr('将日志入队'),
-            config.enqueue,
-            self.logGroup
-        )
-        self.encodingCard = ComboBoxSettingCard(
-            config.encoding,
-            FIF.FONT,
-            self.tr('编码'),
-            self.tr('设置日志编码'),
-            texts=ENCODINGS,
-            parent=self.logGroup
-        )
-        self.backtraceCard = SwitchSettingCard(
-            FIF.HISTORY,
-            self.tr('回溯'),
-            self.tr('回溯异常'),
-            config.backtrace,
-            self.logGroup
-        )
-        self.diagnoseCard = SwitchSettingCard(
-            FIF.DEVELOPER_TOOLS,
-            self.tr('诊断'),
-            self.tr('诊断问题'),
-            config.diagnose,
-            self.logGroup
-        )
-
         self.outputFileCard = SwitchSettingCard(
             FIF.SAVE_AS,
             self.tr('输出到文件'),
@@ -192,6 +136,13 @@ class SettingInterface(ScrollArea):
             texts=ROTATE_MODES,
             parent=self.logGroup
         )
+        self.rotateCountCard = RangeSettingCard(
+            config.rotate_count,
+            FIF.LIBRARY,
+            self.tr('日志文件数量'),
+            self.tr('当日志文件数量超过此限制时，自动删除最旧的日志文件'),
+            self.logGroup
+        )
         self.rotateIntervalCard = RangeSettingCard(
             config.rotate_interval,
             FIF.DATE_TIME,
@@ -207,12 +158,63 @@ class SettingInterface(ScrollArea):
             texts=ROTATE_INTERVAL_UNITS,
             parent=self.logGroup
         )
-        self.rotateCountCard = RangeSettingCard(
-            config.rotate_count,
-            FIF.LIBRARY,
-            self.tr('日志文件数量'),
-            self.tr('当日志文件数量超过此限制时，自动删除最旧的日志文件'),
-            self.logGroup
+
+        # log - advanced
+        self.logAdvancedGroup = SettingCardGroup(
+            self.tr('日志高级'), self.scrollWidget)
+        self.formatToJsonCard = SwitchSettingCard(
+            FIF.DOCUMENT,
+            self.tr('格式化为JSON'),
+            self.tr('将日志格式化为JSON'),
+            config.format_to_json,
+            self.logAdvancedGroup
+        )
+        self.catchCard = SwitchSettingCard(
+            FIF.CANCEL,
+            self.tr('捕获'),
+            self.tr('捕获异常'),
+            config.catch,
+            self.logAdvancedGroup
+        )
+        self.enqueueCard = SwitchSettingCard(
+            FIF.MORE,
+            self.tr('入队'),
+            self.tr('将日志入队'),
+            config.enqueue,
+            self.logAdvancedGroup
+        )
+        self.encodingCard = ComboBoxSettingCard(
+            config.encoding,
+            FIF.FONT,
+            self.tr('编码'),
+            self.tr('设置日志编码'),
+            texts=ENCODINGS,
+            parent=self.logAdvancedGroup
+        )
+        self.backtraceCard = SwitchSettingCard(
+            FIF.HISTORY,
+            self.tr('回溯'),
+            self.tr('回溯异常'),
+            config.backtrace,
+            self.logAdvancedGroup
+        )
+        self.diagnoseCard = SwitchSettingCard(
+            FIF.DEVELOPER_TOOLS,
+            self.tr('诊断'),
+            self.tr('诊断问题'),
+            config.diagnose,
+            self.logAdvancedGroup
+        )
+
+        # developer
+        self.developerGroup = SettingCardGroup(
+            self.tr('开发者'), self.scrollWidget)
+        self.forceInitDbCard = PushSettingCard(
+            self.tr('执行'),
+            FIF.SYNC,
+            self.tr('强制初始化数据库'),
+            self.tr('清空所有数据并重新初始化，此操作不可恢复'),
+            self.developerGroup
         )
 
         self.__initWidget()
@@ -248,7 +250,10 @@ class SettingInterface(ScrollArea):
             config.dpi_scale, config.language,
             config.log_level, config.format_to_json, config.catch,
             config.output_console, config.enqueue, config.encoding,
-            config.backtrace, config.diagnose, config.file_path,
+            config.backtrace, config.diagnose,
+            config.output_file, config.file_path,
+            config.rotate_mode, config.rotate_interval,
+            config.rotate_interval_unit, config.rotate_count,
             config.echo, config.pool_pre_ping,
         ]
         self._restartConfigSnapshot = {
@@ -258,7 +263,6 @@ class SettingInterface(ScrollArea):
         # snapshot of all config values at startup (for reset)
         self._allConfigItems = [
             config.micaEnabled, config.dpi_scale, config.language,
-            config.dynamic_config_display, config.check_update_at_start_up,
             config.blurRadius,
             config.log_level, config.format_to_json, config.catch,
             config.output_console, config.enqueue, config.encoding,
@@ -268,6 +272,7 @@ class SettingInterface(ScrollArea):
             config.url, config.echo, config.pool_size,
             config.max_overflow, config.pool_recycle, config.pool_pre_ping,
             config.connect_args,
+            config.data_store_path,
         ]
         self._allConfigSnapshot = {
             item.key: config.get(item) for item in self._allConfigItems
@@ -277,8 +282,14 @@ class SettingInterface(ScrollArea):
         self.__initLayout()
         self.__connectSignalToSlot()
 
-        # Update card visibility initially
-        self.__updateConfigCardVisibility()
+        # initialize card enabled state based on current config
+        self.__updateLogCardsEnabled()
+
+        # debounce timer for restart tooltip (prevent frequent popups from slider)
+        self._restartTooltipTimer = QTimer(self)
+        self._restartTooltipTimer.setSingleShot(True)
+        self._restartTooltipTimer.setInterval(500)
+        self._restartTooltipTimer.timeout.connect(self.__doShowRestartTooltip)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -299,50 +310,55 @@ class SettingInterface(ScrollArea):
         self.settingLabel.move(36, 30)
 
         # add cards to group
-
-        self.personalGroup.addSettingCard(self.micaCard)
         self.personalGroup.addSettingCard(self.themeCard)
         self.personalGroup.addSettingCard(self.themeColorCard)
-        self.personalGroup.addSettingCard(self.dynamicConfigDisplayCard)
+        self.personalGroup.addSettingCard(self.micaCard)
+        self.personalGroup.addSettingCard(self.blurRadiusCard)
         self.personalGroup.addSettingCard(self.zoomCard)
         self.personalGroup.addSettingCard(self.languageCard)
 
-        self.materialGroup.addSettingCard(self.blurRadiusCard)
-
-        self.updateSoftwareGroup.addSettingCard(self.updateOnStartUpCard)
+        self.dataGroup.addSettingCard(self.dataStorePathCard)
 
         self.logGroup.addSettingCard(self.logLevelCard)
-        self.logGroup.addSettingCard(self.formatToJsonCard)
-        self.logGroup.addSettingCard(self.catchCard)
         self.logGroup.addSettingCard(self.outputConsoleCard)
-        self.logGroup.addSettingCard(self.enqueueCard)
-        self.logGroup.addSettingCard(self.encodingCard)
-        self.logGroup.addSettingCard(self.backtraceCard)
-        self.logGroup.addSettingCard(self.diagnoseCard)
         self.logGroup.addSettingCard(self.outputFileCard)
         self.logGroup.addSettingCard(self.filePathCard)
         self.logGroup.addSettingCard(self.rotateModeCard)
+        self.logGroup.addSettingCard(self.rotateCountCard)
         self.logGroup.addSettingCard(self.rotateIntervalCard)
         self.logGroup.addSettingCard(self.rotateIntervalUnitCard)
-        self.logGroup.addSettingCard(self.rotateCountCard)
+
+        self.logAdvancedGroup.addSettingCard(self.formatToJsonCard)
+        self.logAdvancedGroup.addSettingCard(self.catchCard)
+        self.logAdvancedGroup.addSettingCard(self.enqueueCard)
+        self.logAdvancedGroup.addSettingCard(self.encodingCard)
+        self.logAdvancedGroup.addSettingCard(self.backtraceCard)
+        self.logAdvancedGroup.addSettingCard(self.diagnoseCard)
+
+        self.developerGroup.addSettingCard(self.forceInitDbCard)
 
         # add setting card group to layout
         self.expandLayout.setSpacing(28)
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         self.expandLayout.addWidget(self.personalGroup)
-        self.expandLayout.addWidget(self.materialGroup)
-        self.expandLayout.addWidget(self.updateSoftwareGroup)
+        self.expandLayout.addWidget(self.dataGroup)
         self.expandLayout.addWidget(self.logGroup)
+        self.expandLayout.addWidget(self.logAdvancedGroup)
+        self.expandLayout.addWidget(self.developerGroup)
 
     def __showRestartTooltip(self):
-        """ show restart tooltip and update floating buttons visibility """
+        """防抖：延迟显示重启提示，避免滑条频繁触发"""
+        self._restartTooltipTimer.start()
+        self.__updateFloatingButtonsVisibility()
+
+    def __doShowRestartTooltip(self):
+        """实际显示重启提示"""
         InfoBar.success(
             self.tr('更新成功'),
             self.tr('配置在重启软件后生效'),
             duration=1500,
             parent=self
         )
-        self.__updateFloatingButtonsVisibility()
 
     def __updateFloatingButtonsVisibility(self):
         """ Update visibility of restart and reset buttons """
@@ -372,15 +388,12 @@ class SettingInterface(ScrollArea):
 
         # update UI cards to reflect restored values
         self.filePathCard.setContent(config.get(config.file_path))
-        self.__updateConfigCardVisibility()
-
-        # reinitialize log system
-        from ..common.init import init_log
-        init_log()
+        self.dataStorePathCard.setContent(config.get(config.data_store_path))
+        self.__updateLogCardsEnabled()
 
         InfoBar.success(
             self.tr('还原成功'),
-            self.tr('配置已还原为启动时的值'),
+            self.tr('配置已还原为启动时的值，部分配置需重启生效'),
             duration=1500,
             parent=self
         )
@@ -389,12 +402,6 @@ class SettingInterface(ScrollArea):
     def __restartApp(self):
         logger.info("Closing application...")
         QApplication.quit()
-
-    def __reinitLog(self, *args):
-        """ Reinitialize log system when log config changes """
-        from ..common.init import init_log
-        init_log()
-        logger.info("Log system reconfigured")
 
     def __onFilePathCardClicked(self):
         folder = QFileDialog.getExistingDirectory(self, self.tr("选择文件夹"), "./")
@@ -405,48 +412,66 @@ class SettingInterface(ScrollArea):
         self.filePathCard.setContent(folder)
         logger.info(f"Log path changed: {old_path} -> {folder}")
 
-    def __updateConfigCardVisibility(self):
-        """ Update the visibility of configuration cards based on settings """
-        dynamic_display = config.get(config.dynamic_config_display)
-        output_file = config.get(config.output_file)
+    def __onDataStorePathCardClicked(self):
+        folder = QFileDialog.getExistingDirectory(self, self.tr("选择数据存储文件夹"), "./")
+        if not folder or config.get(config.data_store_path) == folder:
+            return
+        old_path = config.get(config.data_store_path)
+        config.set(config.data_store_path, folder)
+        self.dataStorePathCard.setContent(folder)
+        logger.info(f"Data store path changed: {old_path} -> {folder}")
+
+    def __onForceInitDbClicked(self):
+        """强制初始化数据库"""
+        from qfluentwidgets import MessageBox
+        msg = MessageBox(
+            self.tr('确认强制初始化'),
+            self.tr('此操作将清空所有数据并重新初始化数据库，不可恢复！\n确定要继续吗？'),
+            self
+        )
+        msg.yesButton.setText(self.tr('确定'))
+        msg.cancelButton.setText(self.tr('取消'))
+        if msg.exec():
+            from ..common.init.init_db import init_db
+            init_db(force=True)
+            logger.info("Database force initialization completed by user")
+            InfoBar.success(
+                self.tr('初始化完成'),
+                self.tr('数据库已强制重新初始化'),
+                duration=2000,
+                parent=self
+            )
+
+    def __updateLogCardsEnabled(self):
+        """根据 output_file 和 rotate_mode 的状态，动态启用/禁用相关设置卡片"""
+        file_enabled = config.get(config.output_file)
         rotate_mode = config.get(config.rotate_mode)
 
-        # All cards
-        all_cards = [
-            self.filePathCard,
-            self.rotateModeCard,
-            self.rotateIntervalCard,
-            self.rotateIntervalUnitCard,
-            self.rotateCountCard
-        ]
+        # 输出到文件关闭时，文件相关设置全部禁用
+        self.filePathCard.setEnabled(file_enabled)
+        self.rotateModeCard.setEnabled(file_enabled)
+        self.formatToJsonCard.setEnabled(file_enabled)
+        self.encodingCard.setEnabled(file_enabled)
 
-        # Show all cards when dynamic_config_display is False
-        if not dynamic_display:
-            for card in all_cards:
-                card.setVisible(True)
-            return
-
-        # When output_file is False, hide all file-related cards
-        if not output_file:
-            for card in all_cards:
-                card.setVisible(False)
-            return
-
-        # When output_file is True, show common cards
-        self.filePathCard.setVisible(True)
-        self.rotateModeCard.setVisible(True)
-
-        # Hide mode-specific cards first
-        self.rotateIntervalCard.setVisible(False)
-        self.rotateIntervalUnitCard.setVisible(False)
-        self.rotateCountCard.setVisible(False)
-
-        # Show relevant cards based on rotate_mode
-        if rotate_mode == "Time":
-            self.rotateIntervalCard.setVisible(True)
-            self.rotateIntervalUnitCard.setVisible(True)
-        elif rotate_mode == "Count":
-            self.rotateCountCard.setVisible(True)
+        # 轮转相关设置：取决于 output_file 和 rotate_mode
+        if not file_enabled:
+            self.rotateCountCard.setEnabled(False)
+            self.rotateIntervalCard.setEnabled(False)
+            self.rotateIntervalUnitCard.setEnabled(False)
+        else:
+            match rotate_mode:
+                case "None":
+                    self.rotateCountCard.setEnabled(False)
+                    self.rotateIntervalCard.setEnabled(False)
+                    self.rotateIntervalUnitCard.setEnabled(False)
+                case "Time":
+                    self.rotateCountCard.setEnabled(False)
+                    self.rotateIntervalCard.setEnabled(True)
+                    self.rotateIntervalUnitCard.setEnabled(True)
+                case "Count":
+                    self.rotateCountCard.setEnabled(True)
+                    self.rotateIntervalCard.setEnabled(False)
+                    self.rotateIntervalUnitCard.setEnabled(False)
 
     def __connectSignalToSlot(self):
         """ connect signal to slot """
@@ -456,28 +481,30 @@ class SettingInterface(ScrollArea):
         config.themeChanged.connect(setTheme)
         self.themeColorCard.colorChanged.connect(lambda c: (setThemeColor(c), logger.info(f"Theme color changed: {c.name()}")))
         self.micaCard.checkedChanged.connect(lambda e: (signalBus.micaEnableChanged.emit(e), logger.info(f"Mica effect changed: {'enabled' if e else 'disabled'}")))
-        self.dynamicConfigDisplayCard.checkedChanged.connect(lambda e: (self.__updateConfigCardVisibility(), logger.info(f"Dynamic config display changed: {'enabled' if e else 'disabled'}")))
+        self.blurRadiusCard.slider.valueChanged.connect(lambda v: logger.info(f"Acrylic blur radius changed: {v}"))
         self.zoomCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Interface zoom changed: {self.zoomCard.comboBox.currentText()}"))
         self.languageCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Language changed: {self.languageCard.comboBox.currentText()}"))
 
-        # material
-        self.blurRadiusCard.slider.valueChanged.connect(lambda v: logger.info(f"Acrylic blur radius changed: {v}"))
+        # data
+        self.dataStorePathCard.clicked.connect(self.__onDataStorePathCardClicked)
 
-        # software update
-        self.updateOnStartUpCard.checkedChanged.connect(lambda e: logger.info(f"Check update on startup changed: {'enabled' if e else 'disabled'}"))
-
-        # log - dynamic reinitialization
-        self.logLevelCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Log level changed: {self.logLevelCard.comboBox.currentText()}"), self.__reinitLog()))
-        self.formatToJsonCard.checkedChanged.connect(lambda e: (logger.info(f"Format to JSON changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.catchCard.checkedChanged.connect(lambda e: (logger.info(f"Catch changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.outputConsoleCard.checkedChanged.connect(lambda e: (logger.info(f"Output to console changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.enqueueCard.checkedChanged.connect(lambda e: (logger.info(f"Enqueue changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.encodingCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Encoding changed: {self.encodingCard.comboBox.currentText()}"), self.__reinitLog()))
-        self.backtraceCard.checkedChanged.connect(lambda e: (logger.info(f"Backtrace changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.diagnoseCard.checkedChanged.connect(lambda e: (logger.info(f"Diagnose changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
-        self.outputFileCard.checkedChanged.connect(lambda e: (self.__updateConfigCardVisibility(), logger.info(f"Output to file changed: {'enabled' if e else 'disabled'}"), self.__reinitLog()))
+        # log - all log settings require restart
+        self.logLevelCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Log level changed: {self.logLevelCard.comboBox.currentText()}"))
+        self.outputConsoleCard.checkedChanged.connect(lambda e: logger.info(f"Output to console changed: {'enabled' if e else 'disabled'}"))
+        self.outputFileCard.checkedChanged.connect(lambda e: (logger.info(f"Output to file changed: {'enabled' if e else 'disabled'}"), self.__updateLogCardsEnabled()))
         self.filePathCard.clicked.connect(self.__onFilePathCardClicked)
-        self.rotateModeCard.comboBox.currentIndexChanged.connect(lambda i: (self.__updateConfigCardVisibility(), logger.info(f"Rotate mode changed: {self.rotateModeCard.comboBox.currentText()}"), self.__reinitLog()))
-        self.rotateIntervalCard.slider.valueChanged.connect(lambda v: (logger.info(f"Rotate interval changed: {v}"), self.__reinitLog()))
-        self.rotateIntervalUnitCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Rotate interval unit changed: {self.rotateIntervalUnitCard.comboBox.currentText()}"), self.__reinitLog()))
-        self.rotateCountCard.slider.valueChanged.connect(lambda v: (logger.info(f"Rotate count changed: {v}"), self.__reinitLog()))
+        self.rotateModeCard.comboBox.currentIndexChanged.connect(lambda i: (logger.info(f"Rotate mode changed: {self.rotateModeCard.comboBox.currentText()}"), self.__updateLogCardsEnabled()))
+        self.rotateCountCard.slider.valueChanged.connect(lambda v: logger.info(f"Rotate count changed: {v}"))
+        self.rotateIntervalCard.slider.valueChanged.connect(lambda v: logger.info(f"Rotate interval changed: {v}"))
+        self.rotateIntervalUnitCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Rotate interval unit changed: {self.rotateIntervalUnitCard.comboBox.currentText()}"))
+
+        # log advanced
+        self.formatToJsonCard.checkedChanged.connect(lambda e: logger.info(f"Format to JSON changed: {'enabled' if e else 'disabled'}"))
+        self.catchCard.checkedChanged.connect(lambda e: logger.info(f"Catch changed: {'enabled' if e else 'disabled'}"))
+        self.enqueueCard.checkedChanged.connect(lambda e: logger.info(f"Enqueue changed: {'enabled' if e else 'disabled'}"))
+        self.encodingCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Encoding changed: {self.encodingCard.comboBox.currentText()}"))
+        self.backtraceCard.checkedChanged.connect(lambda e: logger.info(f"Backtrace changed: {'enabled' if e else 'disabled'}"))
+        self.diagnoseCard.checkedChanged.connect(lambda e: logger.info(f"Diagnose changed: {'enabled' if e else 'disabled'}"))
+
+        # developer
+        self.forceInitDbCard.clicked.connect(self.__onForceInitDbClicked)

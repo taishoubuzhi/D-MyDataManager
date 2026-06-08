@@ -86,7 +86,8 @@ class Config(QConfig):
                           restart=True)
 
     output_file = ConfigItem("File", "Output-File", True,
-                             BoolValidator())
+                             BoolValidator(),
+                             restart=True)
 
     file_path = ConfigItem("Log-File", "Log-Path",
                            os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "logs")),
@@ -95,18 +96,25 @@ class Config(QConfig):
 
     # 当前使用的轮转模式，默认为 "None"（不轮转）
     rotate_mode = OptionsConfigItem("Log-File", "Rotate-Mode", "None",
-                                    OptionsValidator(ROTATE_MODES))
+                                    OptionsValidator(ROTATE_MODES),
+                                    restart=True)
 
     rotate_interval = RangeConfigItem("Log-File", "Rotate-Interval", 1,
-                                      RangeValidator(1, 24))
+                                      RangeValidator(1, 24),
+                                      restart=True)
 
     rotate_interval_unit = OptionsConfigItem("Log-File", "Rotate-Interval-Unit", "hour",
-                                             OptionsValidator(ROTATE_INTERVAL_UNITS))
+                                             OptionsValidator(ROTATE_INTERVAL_UNITS),
+                                             restart=True)
 
     rotate_count = RangeConfigItem("Log-File", "Rotate-Count", 10,
-                                   RangeValidator(1, 100))
+                                   RangeValidator(1, 100),
+                                   restart=True)
 
-    url = ConfigItem("DB", "URL", "sqlite:///data.db")
+    url = ConfigItem("DB", "URL",
+                     "sqlite:///" + os.path.normpath(os.path.join(
+                         os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+                         "resources", "data.db")).replace("\\", "/"))
     echo = ConfigItem("DB", "Echo", True, BoolValidator(), restart=True)
     pool_size = RangeConfigItem("DB", "Pool-Size", 10, RangeValidator(*POOL_SIZE_RANGE))
     max_overflow = RangeConfigItem("DB", "Max-Overflow", 20,
@@ -115,6 +123,9 @@ class Config(QConfig):
                                    RangeValidator(*POOL_RECYCLE_RANGE))
     pool_pre_ping = ConfigItem("DB", "Pool-Pre-Ping", True, BoolValidator(), restart=True)
     connect_args = ConfigItem("DB", "Connect-Args", {})
+    data_store_path = ConfigItem("Data", "Data-Store-Path",
+                                  os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "resources", "datas")),
+                                  FolderValidator())
 
 
 def load_config():

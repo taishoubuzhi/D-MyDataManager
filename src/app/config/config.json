@@ -9,7 +9,7 @@
         "JSON-Format": "{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | {message}",
         "Log-Format": "{time} [{level:<8}] : {message}",
         "Log-Level": "DEBUG",
-        "Output-Console": true
+        "Output-Console": false
     },
     "Material": {
         "AcrylicBlurRadius": 17
@@ -24,7 +24,10 @@
         "Pool-Pre-Ping": true,
         "Pool-Recycle": 3600,
         "Pool-Size": 10,
-        "URL": "sqlite:///data.db"
+        "URL": "sqlite:///D:/Program/PyCharm/python/LeetCode/D-MyDataManager/resources/data.db"
+    },
+    "Data": {
+        "Data-Store-Path": "D:/Program/PyCharm/python/LeetCode/D-MyDataManager/resources/datas"
     },
     "MainWindow": {
         "DpiScale": "Auto",
@@ -35,7 +38,7 @@
     "Log-File": {
         "Log-Path": "D:/Program/PyCharm/python/LeetCode/D-MyDataManager/logs",
         "Rotate-Count": 2,
-        "Rotate-Interval": 1,
+        "Rotate-Interval": 4,
         "Rotate-Interval-Unit": "hour",
         "Rotate-Mode": "Count"
     },
