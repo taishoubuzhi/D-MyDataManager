@@ -65,7 +65,7 @@ def _insert_default_data(session):
 
     default_database = DataBase(name="默认数据库", description="系统默认数据库", keywords=[], is_hidden=False, user_id=default_user.id)
     session.add(default_database)
-    default_data = Data(name="示例文本", type=DataType.TEXT, keywords=["示例"], tag=["文档"], size=0, is_hidden=False, url="", user_id=default_user.id, database_id=default_database.id)
+    default_data = Data(name="示例文本", type=DataType.TEXT, keywords=["示例"], tag=["文档"], size=0, is_hidden=False, content="这是一个示例文本", user_id=default_user.id, database_id=default_database.id)
     session.add(default_data)
     session.add_all(DEFAULT_TAGS)
     logger.debug("Default data inserted")

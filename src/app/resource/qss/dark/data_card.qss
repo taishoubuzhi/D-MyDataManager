@@ -1,0 +1,60 @@
+DataCard {
+    border: 1px solid rgb(46, 46, 46);
+    border-radius: 10px;
+    background-color: rgba(39, 39, 39, 0.95);
+}
+
+DataCard:hover {
+    background-color: rgba(39, 39, 39, 0.93);
+    border: 1px solid rgb(66, 66, 66);
+}
+
+DataCard[isSelected="true"] {
+    border: 2px solid rgb(0, 102, 204);
+    background-color: rgba(0, 60, 120, 0.6);
+}
+
+DataCard[isSelected="true"]:hover {
+    background-color: rgba(0, 70, 140, 0.7);
+}
+
+#typeLabel, #contentLabel, #sizeLabel {
+    color: rgb(200, 200, 200);
+    font: 12px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+}
+
+DataListCard {
+    border: 1px solid rgb(46, 46, 46);
+    border-radius: 8px;
+    background-color: rgba(39, 39, 39, 0.95);
+}
+
+DataListCard:hover {
+    background-color: rgba(39, 39, 39, 0.93);
+    border: 1px solid rgb(66, 66, 66);
+}
+
+#listTypeLabel, #listSizeLabel, #listContentLabel {
+    color: rgb(200, 200, 200);
+    font: 12px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+}
+
+#tagChip {
+    border: 1px solid rgb(80, 80, 80);
+    border-radius: 12px;
+    background-color: rgba(100, 100, 100, 0.4);
+}
+
+#tagChip:hover {
+    border: 1px solid rgb(120, 120, 120);
+    background-color: rgba(120, 120, 120, 0.5);
+}
+
+#tagChipLabel {
+    color: rgb(220, 220, 220);
+    font: 11px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+}
+
+#tagContainer {
+    background-color: transparent;
+}

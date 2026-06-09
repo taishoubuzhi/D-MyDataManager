@@ -1,9 +1,27 @@
 import sys
 import os
 import datetime
+import logging
 from ..config import config
 
 from loguru import logger
+
+
+class InterceptHandler(logging.Handler):
+    """将标准 logging 日志转发到 loguru"""
+
+    def emit(self, record):
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def _cleanup_old_logs(log_dir, max_count):
@@ -84,3 +102,6 @@ def init_log():
         logger.debug(f"Log rotation: {rotation}")
     if retention is not None:
         logger.debug(f"Log retention count: {retention}")
+
+    # 拦截标准 logging（如 SQLAlchemy echo 日志）转发到 loguru
+    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)

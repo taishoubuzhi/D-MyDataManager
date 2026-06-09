@@ -9,7 +9,7 @@
         "JSON-Format": "{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | {message}",
         "Log-Format": "{time} [{level:<8}] : {message}",
         "Log-Level": "DEBUG",
-        "Output-Console": false
+        "Output-Console": true
     },
     "Material": {
         "AcrylicBlurRadius": 17
