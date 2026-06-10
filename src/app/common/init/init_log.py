@@ -38,11 +38,12 @@ def _cleanup_old_logs(log_dir, max_count):
 
 
 def _set_logger_config(sink, rotation, retention, config_item):
-    fmt = config_item.get(config_item.json_format) if config_item.get(config_item.format_to_json) else config_item.get(config_item.log_format)
-    # 控制台使用整行带颜色的格式
-    if not isinstance(sink, str):
-        fmt = "<level>" + fmt + "</level>"
     is_file = isinstance(sink, str)
+    # 控制台始终使用 log_format + <level> 颜色标记，不受 format_to_json 影响
+    if is_file:
+        fmt = config_item.get(config_item.json_format) if config_item.get(config_item.format_to_json) else config_item.get(config_item.log_format)
+    else:
+        fmt = "<level>" + config_item.get(config_item.log_format) + "</level>"
     kwargs = dict(
         sink=sink,
         level=config_item.get(config_item.log_level),
@@ -51,7 +52,7 @@ def _set_logger_config(sink, rotation, retention, config_item):
         backtrace=config_item.get(config_item.backtrace),
         diagnose=config_item.get(config_item.diagnose),
         format=fmt,
-        serialize=config_item.get(config_item.format_to_json),
+        serialize=config_item.get(config_item.format_to_json) if is_file else False,
         catch=config_item.get(config_item.catch))
     if is_file:
         kwargs["encoding"] = config_item.get(config_item.encoding)
@@ -60,6 +61,17 @@ def _set_logger_config(sink, rotation, retention, config_item):
         if retention is not None:
             kwargs["retention"] = retention
     logger.add(**kwargs)
+
+
+def _get_std_logging_level(loguru_level_name):
+    """将 loguru level 向下对齐到最近的标准 logging level"""
+    STD_LOGGING_LEVELS = [0, 10, 20, 30, 40, 50]
+    level_value = logger.level(loguru_level_name).no
+    result = 0
+    for std_level in STD_LOGGING_LEVELS:
+        if std_level <= level_value:
+            result = std_level
+    return result
 
 
 def init_log():
@@ -90,7 +102,7 @@ def init_log():
         _set_logger_config(file_path, rotation, retention, config)
 
     if config.get(config.output_console):
-        _set_logger_config(sys.stderr, rotation, retention, config)
+        _set_logger_config(sys.stderr, None, None, config)
 
     logger.info("Log system initialized")
     logger.debug(f"Log level: {config.get(config.log_level)}")
@@ -104,4 +116,4 @@ def init_log():
         logger.debug(f"Log retention count: {retention}")
 
     # 拦截标准 logging（如 SQLAlchemy echo 日志）转发到 loguru
-    logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
+    logging.basicConfig(handlers=[InterceptHandler()], level=_get_std_logging_level(config.get(config.log_level)), force=True)

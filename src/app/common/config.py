@@ -49,7 +49,7 @@ class Config(QConfig):
     # software update
     check_update_at_start_up = ConfigItem("Update", "CheckUpdateAtStartUp", True, BoolValidator())
 
-    log_level = OptionsConfigItem("Log", "Log-Level", "Debug",
+    log_level = OptionsConfigItem("Log", "Log-Level", "DEBUG",
                                   OptionsValidator(LOG_LEVELS),
                                   restart=True)
 

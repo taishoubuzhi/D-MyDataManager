@@ -97,66 +97,78 @@ class SettingInterface(ScrollArea):
         )
 
         # log - basic
-        self.logGroup = SettingCardGroup(
-            self.tr('日志'), self.scrollWidget)
+        self.logBasicGroup = SettingCardGroup(
+            self.tr('日志基础'), self.scrollWidget)
         self.logLevelCard = ComboBoxSettingCard(
             config.log_level,
             FIF.INFO,
             self.tr('日志级别'),
-            self.tr('设置日志级别'),
+            self.tr('控制台和日志文件的最低输出级别，低于此级别的日志将被忽略'),
             texts=LOG_LEVELS,
-            parent=self.logGroup
+            parent=self.logBasicGroup
         )
         self.outputConsoleCard = SwitchSettingCard(
             FIF.COMMAND_PROMPT,
             self.tr('输出到控制台'),
-            self.tr('将日志输出到控制台'),
+            self.tr('将日志信息输出到控制台（包括第三方库的标准日志）'),
             config.output_console,
-            self.logGroup
+            self.logBasicGroup
         )
         self.outputFileCard = SwitchSettingCard(
             FIF.SAVE_AS,
             self.tr('输出到文件'),
-            self.tr('将日志输出到文件'),
+            self.tr('将日志信息输出到日志文件（包括第三方库的标准日志）'),
             config.output_file,
-            self.logGroup
+            self.logBasicGroup
         )
+
+        # log - file
+        self.logFileGroup = SettingCardGroup(
+            self.tr('日志文件'), self.scrollWidget)
         self.filePathCard = PushSettingCard(
             self.tr('文件路径'),
             FIF.FOLDER,
-            self.tr('设置日志文件路径'),
-            config.get(config.file_path),
-            self.logGroup
+            self.tr('日志文件路径'),
+            self.tr('日志文件的存储目录'),
+            self.logFileGroup
         )
         self.rotateModeCard = ComboBoxSettingCard(
             config.rotate_mode,
             FIF.ROTATE,
             self.tr('轮转模式'),
-            self.tr('设置日志文件轮转模式'),
+            self.tr('日志文件的轮转方式：无（不轮转）、按时间（定时创建新文件）、按数量（限制文件总数）'),
             texts=ROTATE_MODES,
-            parent=self.logGroup
+            parent=self.logFileGroup
         )
         self.rotateCountCard = RangeSettingCard(
             config.rotate_count,
             FIF.LIBRARY,
             self.tr('日志文件数量'),
-            self.tr('当日志文件数量超过此限制时，自动删除最旧的日志文件'),
-            self.logGroup
+            self.tr('保留的日志文件最大数量，超出时自动删除最旧的文件（仅"按数量"模式生效）'),
+            self.logFileGroup
         )
         self.rotateIntervalCard = RangeSettingCard(
             config.rotate_interval,
             FIF.DATE_TIME,
             self.tr('轮转间隔'),
-            self.tr('按指定时间间隔创建新的日志文件'),
-            self.logGroup
+            self.tr('按此间隔创建新的日志文件（仅"按时间"模式生效）'),
+            self.logFileGroup
         )
         self.rotateIntervalUnitCard = ComboBoxSettingCard(
             config.rotate_interval_unit,
             FIF.UNIT,
             self.tr('轮转间隔单位'),
-            self.tr('设置轮转间隔的时间单位'),
+            self.tr('轮转间隔的时间单位（仅"按时间"模式生效）'),
             texts=ROTATE_INTERVAL_UNITS,
-            parent=self.logGroup
+            parent=self.logFileGroup
+        )
+        self.encodingCard = ComboBoxSettingCard(
+            config.encoding,
+            FIF.FONT,
+            self.tr('日志文件编码'),
+            self.tr('日志文件的字符编码（仅影响文件输出）'),
+            texts=ENCODINGS,
+            parent=self.logFileGroup
         )
 
         # log - advanced
@@ -165,43 +177,35 @@ class SettingInterface(ScrollArea):
         self.formatToJsonCard = SwitchSettingCard(
             FIF.DOCUMENT,
             self.tr('格式化为JSON'),
-            self.tr('将日志格式化为JSON'),
+            self.tr('将日志文件输出为JSON格式，便于日志分析工具解析（仅影响文件输出，控制台始终为可读文本）'),
             config.format_to_json,
             self.logAdvancedGroup
         )
         self.catchCard = SwitchSettingCard(
             FIF.CANCEL,
-            self.tr('捕获'),
-            self.tr('捕获异常'),
+            self.tr('捕获内部错误'),
+            self.tr('自动捕获日志处理器内部的错误，防止日志系统异常导致程序崩溃（影响控制台和文件）'),
             config.catch,
             self.logAdvancedGroup
         )
         self.enqueueCard = SwitchSettingCard(
             FIF.MORE,
-            self.tr('入队'),
-            self.tr('将日志入队'),
+            self.tr('异步写入'),
+            self.tr('使用后台线程写入控制台日志，避免日志输出阻塞主线程（仅影响控制台，文件始终同步写入以防崩溃丢日志）'),
             config.enqueue,
             self.logAdvancedGroup
         )
-        self.encodingCard = ComboBoxSettingCard(
-            config.encoding,
-            FIF.FONT,
-            self.tr('编码'),
-            self.tr('设置日志编码'),
-            texts=ENCODINGS,
-            parent=self.logAdvancedGroup
-        )
         self.backtraceCard = SwitchSettingCard(
             FIF.HISTORY,
-            self.tr('回溯'),
-            self.tr('回溯异常'),
+            self.tr('扩展回溯'),
+            self.tr('在异常追踪中显示完整的调用栈，帮助定位异常源头（影响控制台和文件）'),
             config.backtrace,
             self.logAdvancedGroup
         )
         self.diagnoseCard = SwitchSettingCard(
             FIF.DEVELOPER_TOOLS,
-            self.tr('诊断'),
-            self.tr('诊断问题'),
+            self.tr('诊断信息'),
+            self.tr('在异常追踪中显示变量值，便于调试（影响控制台和文件，生产环境建议关闭以避免泄露敏感信息）'),
             config.diagnose,
             self.logAdvancedGroup
         )
@@ -319,19 +323,20 @@ class SettingInterface(ScrollArea):
 
         self.dataGroup.addSettingCard(self.dataStorePathCard)
 
-        self.logGroup.addSettingCard(self.logLevelCard)
-        self.logGroup.addSettingCard(self.outputConsoleCard)
-        self.logGroup.addSettingCard(self.outputFileCard)
-        self.logGroup.addSettingCard(self.filePathCard)
-        self.logGroup.addSettingCard(self.rotateModeCard)
-        self.logGroup.addSettingCard(self.rotateCountCard)
-        self.logGroup.addSettingCard(self.rotateIntervalCard)
-        self.logGroup.addSettingCard(self.rotateIntervalUnitCard)
+        self.logBasicGroup.addSettingCard(self.logLevelCard)
+        self.logBasicGroup.addSettingCard(self.outputConsoleCard)
+        self.logBasicGroup.addSettingCard(self.outputFileCard)
+
+        self.logFileGroup.addSettingCard(self.filePathCard)
+        self.logFileGroup.addSettingCard(self.rotateModeCard)
+        self.logFileGroup.addSettingCard(self.rotateCountCard)
+        self.logFileGroup.addSettingCard(self.rotateIntervalCard)
+        self.logFileGroup.addSettingCard(self.rotateIntervalUnitCard)
+        self.logFileGroup.addSettingCard(self.encodingCard)
 
         self.logAdvancedGroup.addSettingCard(self.formatToJsonCard)
         self.logAdvancedGroup.addSettingCard(self.catchCard)
         self.logAdvancedGroup.addSettingCard(self.enqueueCard)
-        self.logAdvancedGroup.addSettingCard(self.encodingCard)
         self.logAdvancedGroup.addSettingCard(self.backtraceCard)
         self.logAdvancedGroup.addSettingCard(self.diagnoseCard)
 
@@ -342,7 +347,8 @@ class SettingInterface(ScrollArea):
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         self.expandLayout.addWidget(self.personalGroup)
         self.expandLayout.addWidget(self.dataGroup)
-        self.expandLayout.addWidget(self.logGroup)
+        self.expandLayout.addWidget(self.logBasicGroup)
+        self.expandLayout.addWidget(self.logFileGroup)
         self.expandLayout.addWidget(self.logAdvancedGroup)
         self.expandLayout.addWidget(self.developerGroup)
 

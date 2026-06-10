@@ -12,7 +12,7 @@
         "Output-Console": true
     },
     "Material": {
-        "AcrylicBlurRadius": 17
+        "AcrylicBlurRadius": 5
     },
     "Update": {
         "CheckUpdateAtStartUp": true
