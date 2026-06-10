@@ -4,7 +4,8 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QFrame
 
 from qfluentwidgets import (CardWidget, IconWidget, BodyLabel, CaptionLabel,
-                            FluentIcon, isDarkTheme)
+                            FluentIcon, isDarkTheme, StrongBodyLabel,
+                            themeColor)
 
 from ..common.style_sheet import StyleSheet
 from ..model.Data import DataType
@@ -117,38 +118,64 @@ class DataCard(CardWidget):
             return
         self._selected = selected
         self.setProperty('isSelected', selected)
+        self._indicator.setVisible(selected)
+        if selected:
+            color = themeColor()
+            self._indicator.setStyleSheet(
+                f"background-color: {color.name()}; border-radius: 2px;"
+            )
+            self.setStyleSheet(
+                f'DataCard[isSelected="true"] {{ border: 1px solid {color.name()}; }}'
+                f'DataCard[isSelected="true"]:hover {{ border: 1px solid {color.name()}; }}'
+            )
+        else:
+            self._indicator.setStyleSheet("")
+            self.setStyleSheet("")
         self.style().unpolish(self)
         self.style().polish(self)
         self._updateBackgroundColor()
 
     def _normalBackgroundColor(self):
-        if getattr(self, '_selected', False):
-            return QColor(0, 120, 212, 50) if isDarkTheme() else QColor(0, 120, 212, 25)
         return QColor(255, 255, 255, 13 if isDarkTheme() else 170)
 
     def _hoverBackgroundColor(self):
-        if getattr(self, '_selected', False):
-            return QColor(0, 120, 212, 65) if isDarkTheme() else QColor(0, 120, 212, 40)
         return QColor(255, 255, 255, 21 if isDarkTheme() else 64)
 
     def _build_ui(self):
         item = self.data_item
 
-        # 主水平布局：左图标 + 右文本信息
+        # 主水平布局：选中指示条 + 左图标 + 右文本信息
         self.hBoxLayout = QHBoxLayout(self)
-        self.hBoxLayout.setContentsMargins(16, 14, 16, 14)
-        self.hBoxLayout.setSpacing(16)
+        self.hBoxLayout.setContentsMargins(0, 14, 16, 14)
+        self.hBoxLayout.setSpacing(0)
+
+        # 选中指示条（左侧竖条）
+        self._indicator = QFrame(self)
+        self._indicator.setObjectName('selectionIndicator')
+        self._indicator.setFixedWidth(4)
+        self._indicator.setVisible(False)
+        self.hBoxLayout.addWidget(self._indicator)
+
+        self.hBoxLayout.addSpacing(12)
 
         # 左侧：类型图标
         self.iconWidget = IconWidget(_get_type_icon(item.type), self)
         self.iconWidget.setFixedSize(48, 48)
         self.hBoxLayout.addWidget(self.iconWidget)
 
+        self.hBoxLayout.addSpacing(16)
+
         # 右侧：信息区
         info_widget = QWidget(self)
         info_layout = QVBoxLayout(info_widget)
         info_layout.setContentsMargins(0, 0, 0, 0)
         info_layout.setSpacing(4)
+
+        # 名称
+        name_text = item.name or "未命名"
+        self.nameLabel = StrongBodyLabel(name_text, self)
+        self.nameLabel.setObjectName('nameLabel')
+        info_layout.addWidget(self.nameLabel)
 
         # 第一行：类型 + 大小
         title_row = QHBoxLayout()
@@ -214,6 +241,12 @@ class DataListCard(CardWidget):
         self.iconWidget = IconWidget(_get_type_icon(item.type), self)
         self.iconWidget.setFixedSize(24, 24)
         self.hBoxLayout.addWidget(self.iconWidget)
+
+        # 名称
+        name_text = item.name or "未命名"
+        self.nameLabel = BodyLabel(name_text, self)
+        self.nameLabel.setObjectName('listNameLabel')
+        self.hBoxLayout.addWidget(self.nameLabel)
 
         # 类型
         self.typeLabel = CaptionLabel(DataType.get_name(item.type), self)

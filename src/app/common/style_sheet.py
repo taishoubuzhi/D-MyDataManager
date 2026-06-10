@@ -14,6 +14,7 @@ class StyleSheet(StyleSheetBase, Enum):
     DATA_INTERFACE = "data_interface"
     DATA_CARD = "data_card"
     DATA_TAB_PAGE = "data_tab_page"
+    FILTER_PANEL = "filter_panel"
 
     def path(self, theme=Theme.AUTO):
         theme = qconfig.theme if theme == Theme.AUTO else theme

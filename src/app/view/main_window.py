@@ -57,8 +57,8 @@ class MainWindow(FluentWindow):
 
 
     def initWindow(self):
-        self.resize(960, 780)
-        self.setMinimumWidth(760)
+        self.resize(1100, 780)
+        self.setMinimumWidth(900)
         self.setWindowIcon(QIcon(':/app/images/logo.png'))
         self.setWindowTitle("数据管理器")
 

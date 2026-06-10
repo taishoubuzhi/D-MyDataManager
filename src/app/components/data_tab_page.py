@@ -2,15 +2,17 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidgetItem, QListWidgetItem,
-                             QStackedWidget, QHeaderView)
+                             QStackedWidget, QHeaderView, QSplitter)
 
 from qfluentwidgets import (SegmentedWidget, TableWidget, ListWidget,
-                            FlowLayout, CheckBox, TransparentPushButton,
-                            FluentIcon)
+                            FlowLayout)
 
 from ..common.style_sheet import StyleSheet
-from ..components.data_card import DataCard, DataListCard
+from ..common.init.init_db import get_session
+from ..components.data_card import DataCard, DataListCard, _parse_json_list
+from ..components.filter_panel import FilterPanel, NameSearchPanel
 from ..model.Data import DataType, DATA_TYPE_INFO, _normalize_type
+from ..model.Tag import Tag
 
 
 # 表格列定义：(列名, 取值函数)
@@ -57,97 +59,6 @@ def _format_content(data_item):
         return "（空）"
 
 
-class TypeFilterPanel(QWidget):
-    """类型筛选面板：折叠框 + 复选框 + 全选/全不选按钮"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent=parent)
-        self._checkboxes = {}  # DataType -> CheckBox
-        self._is_collapsed = True
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.setObjectName('typeFilterPanel')
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        # 折叠头部：标题 + 折叠按钮
-        self._header = QWidget(self)
-        self._header.setObjectName('filterHeader')
-        header_layout = QHBoxLayout(self._header)
-        header_layout.setContentsMargins(4, 4, 4, 4)
-        header_layout.setSpacing(8)
-
-        self._toggleBtn = TransparentPushButton(FluentIcon.DOWN, "类型筛选", self)
-        self._toggleBtn.clicked.connect(self._toggleCollapse)
-        header_layout.addWidget(self._toggleBtn)
-
-        header_layout.addStretch(1)
-
-        # 全选/全不选按钮
-        self._selectAllBtn = TransparentPushButton("全选", self)
-        self._selectAllBtn.clicked.connect(self.selectAll)
-        header_layout.addWidget(self._selectAllBtn)
-
-        self._deselectAllBtn = TransparentPushButton("全不选", self)
-        self._deselectAllBtn.clicked.connect(self.deselectAll)
-        header_layout.addWidget(self._deselectAllBtn)
-
-        main_layout.addWidget(self._header)
-
-        # 折叠内容区：复选框
-        self._content = QWidget(self)
-        self._content.setObjectName('filterContent')
-        content_layout = QHBoxLayout(self._content)
-        content_layout.setContentsMargins(20, 4, 4, 4)
-        content_layout.setSpacing(12)
-        content_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        for data_type, name, _ in DATA_TYPE_INFO:
-            cb = CheckBox(name, self._content)
-            cb.setChecked(True)
-            cb.setProperty('dataType', data_type)
-            self._checkboxes[data_type] = cb
-            content_layout.addWidget(cb)
-
-        content_layout.addStretch(1)
-        self._content.setMaximumHeight(0)
-        self._content.setVisible(False)
-        main_layout.addWidget(self._content)
-
-    def _toggleCollapse(self):
-        """切换折叠/展开"""
-        self._is_collapsed = not self._is_collapsed
-        if self._is_collapsed:
-            self._content.setVisible(False)
-            self._content.setMaximumHeight(0)
-            self._toggleBtn.setIcon(FluentIcon.DOWN)
-        else:
-            self._content.setVisible(True)
-            self._content.setMaximumHeight(16777215)
-            self._toggleBtn.setIcon(FluentIcon.UP)
-
-    def selectAll(self):
-        """全选"""
-        for cb in self._checkboxes.values():
-            cb.setChecked(True)
-
-    def deselectAll(self):
-        """全不选"""
-        for cb in self._checkboxes.values():
-            cb.setChecked(False)
-
-    def get_checked_types(self):
-        """获取当前勾选的 DataType 集合"""
-        return {dt for dt, cb in self._checkboxes.items() if cb.isChecked()}
-
-    def connect_changed(self, callback):
-        """连接所有复选框状态变化信号到回调"""
-        for cb in self._checkboxes.values():
-            cb.stateChanged.connect(callback)
-
-
 class DataTabPage(QWidget):
     """单个数据视图Tab页"""
 
@@ -156,38 +67,39 @@ class DataTabPage(QWidget):
         self._all_data = []
         self._filtered_data = []
         self._current_mode = "table"
-        self._selected_card = None  # 当前选中的卡片
+        self._selected_card = None
 
         self._setup_ui()
         StyleSheet.DATA_TAB_PAGE.apply(self)
 
     def _setup_ui(self):
         self.setObjectName('dataTabPage')
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+
+        # 根布局
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # === 左侧：顶部栏 + 视图堆栈 ===
+        left_widget = QWidget(self)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
 
         # 顶部栏：分段导航
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.setSpacing(16)
 
-        # 分段导航：表格/卡片/条目
         self.modeSwitch = SegmentedWidget(self)
         self.modeSwitch.addItem("table", self.tr("表格"), lambda: self._switchMode("table"))
         self.modeSwitch.addItem("card", self.tr("卡片"), lambda: self._switchMode("card"))
         self.modeSwitch.addItem("list", self.tr("条目"), lambda: self._switchMode("list"))
         self.modeSwitch.setCurrentItem("table")
         top_bar.addWidget(self.modeSwitch)
-
         top_bar.addStretch(1)
 
-        layout.addLayout(top_bar)
-
-        # 类型筛选面板
-        self.typeFilterPanel = TypeFilterPanel(self)
-        self.typeFilterPanel.connect_changed(self._onFilterChanged)
-        layout.addWidget(self.typeFilterPanel)
+        left_layout.addLayout(top_bar)
 
         # 视图堆栈
         self.viewStack = QStackedWidget(self)
@@ -208,6 +120,7 @@ class DataTabPage(QWidget):
 
         # 卡片容器
         self.cardContainer = QWidget(self)
+        self.cardContainer.setObjectName('cardContainer')
         self.cardFlowLayout = FlowLayout(self.cardContainer, needAni=True)
         self.cardFlowLayout.setSpacing(10)
         self.cardFlowLayout.setContentsMargins(0, 0, 0, 0)
@@ -215,27 +128,117 @@ class DataTabPage(QWidget):
 
         # 条目视图
         self.listView = ListWidget(self)
+        self.listView.viewport().installEventFilter(self)
         self.viewStack.addWidget(self.listView)
 
-        layout.addWidget(self.viewStack, 1)
+        left_layout.addWidget(self.viewStack, 1)
+
+        # === 右侧：筛选器区域 ===
+        filter_widget = QWidget(self)
+        filter_widget.setObjectName('filterArea')
+        filter_widget.setMinimumWidth(180)
+        filter_widget.setMaximumWidth(360)
+        filter_layout = QVBoxLayout(filter_widget)
+        filter_layout.setContentsMargins(8, 0, 8, 0)
+        filter_layout.setSpacing(4)
+
+        # 名称搜索筛选器
+        self.nameSearch = NameSearchPanel(self)
+        self.nameSearch.connect_changed(self._onFilterChanged)
+        filter_layout.addWidget(self.nameSearch)
+
+        # 类型筛选器
+        self.typeFilter = FilterPanel("类型筛选", self)
+        self.typeFilter.set_items({dt: name for dt, name, _ in DATA_TYPE_INFO})
+        self.typeFilter.connect_changed(self._onFilterChanged)
+        filter_layout.addWidget(self.typeFilter)
+
+        # 关键词筛选器
+        self.keywordFilter = FilterPanel("关键词筛选", self)
+        self.keywordFilter.connect_changed(self._onFilterChanged)
+        filter_layout.addWidget(self.keywordFilter)
+
+        # 标签筛选器
+        self.tagFilter = FilterPanel("标签筛选", self)
+        self.tagFilter.connect_changed(self._onFilterChanged)
+        filter_layout.addWidget(self.tagFilter)
+
+        filter_layout.addStretch(1)
+
+        # === QSplitter：可拖拽分割线 ===
+        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(left_widget)
+        self._splitter.addWidget(filter_widget)
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
+        self._splitter.setSizes([800, 240])
+
+        root_layout.addWidget(self._splitter)
 
     def setData(self, data_list):
         """设置全量数据"""
         self._all_data = data_list
+        self._updateFilterOptions()
         self._applyFilter()
 
-    def _applyFilter(self):
-        """根据筛选条件过滤数据"""
-        checked = self.typeFilterPanel.get_checked_types()
+    def _updateFilterOptions(self):
+        """根据当前数据更新筛选器选项"""
+        # 关键词：统计当前数据中所有关键词
+        keyword_items = {}
+        for d in self._all_data:
+            for kw in _parse_json_list(d.keywords):
+                if kw and kw not in keyword_items:
+                    keyword_items[kw] = kw
+        self.keywordFilter.set_items(keyword_items)
 
-        # 全选或全不选 → 显示全部
-        if len(checked) == 0 or len(checked) == len(DATA_TYPE_INFO):
-            self._filtered_data = list(self._all_data)
-        else:
-            self._filtered_data = [
-                d for d in self._all_data
-                if _normalize_type(d.type) in checked
-            ]
+        # 标签：优先从数据库 Tag 表获取，为空则从 Data.tag 统计
+        tag_items = {}
+        session = get_session()()
+        try:
+            tags = session.query(Tag).all()
+            if tags:
+                tag_items = {t.name: t.name for t in tags}
+        finally:
+            session.close()
+
+        if not tag_items:
+            for d in self._all_data:
+                for t in _parse_json_list(d.tag):
+                    if t and t not in tag_items:
+                        tag_items[t] = t
+        self.tagFilter.set_items(tag_items)
+
+    def _applyFilter(self):
+        """根据筛选条件过滤数据（多重筛选取交集）"""
+        result = self._all_data
+
+        # 名称模糊搜索
+        search_text = self.nameSearch.get_search_text()
+        if search_text:
+            search_lower = search_text.lower()
+            result = [d for d in result
+                      if d.name and search_lower in d.name.lower()]
+
+        # 类型筛选
+        checked_types = self.typeFilter.get_checked()
+        total_types = len(DATA_TYPE_INFO)
+        if 0 < len(checked_types) < total_types:
+            result = [d for d in result if _normalize_type(d.type) in checked_types]
+
+        # 关键词筛选（OR 逻辑：数据的 keywords 与勾选关键词有交集即匹配）
+        checked_keywords = self.keywordFilter.get_checked()
+        if checked_keywords:
+            result = [d for d in result
+                      if set(_parse_json_list(d.keywords)) & checked_keywords]
+
+        # 标签筛选（OR 逻辑）
+        checked_tags = self.tagFilter.get_checked()
+        if checked_tags:
+            result = [d for d in result
+                      if set(_parse_json_list(d.tag)) & checked_tags]
+
+        self._filtered_data = result
         self._refreshView()
 
     def _refreshView(self):
@@ -266,15 +269,35 @@ class DataTabPage(QWidget):
     def _onCardClicked(self, card):
         """卡片点击选中"""
         if self._selected_card is card:
-            # 取消选中
             card.setSelected(False)
             self._selected_card = None
         else:
-            # 切换选中
             if self._selected_card:
                 self._selected_card.setSelected(False)
             card.setSelected(True)
             self._selected_card = card
+
+    def _deselectCard(self):
+        """取消卡片选中（点击空白区域时调用）"""
+        if self._selected_card:
+            self._selected_card.setSelected(False)
+            self._selected_card = None
+
+    def mousePressEvent(self, event):
+        """点击空白区域取消选中"""
+        if self._current_mode == "card" and self._selected_card:
+            child = self.childAt(event.pos())
+            if child is not self._selected_card and not self._selected_card.isAncestorOf(child):
+                self._deselectCard()
+        super().mousePressEvent(event)
+
+    def eventFilter(self, obj, event):
+        """事件过滤器：点击列表空白区域取消选中"""
+        if obj is self.listView.viewport() and event.type() == event.Type.MouseButtonPress:
+            index = self.listView.indexAt(event.pos())
+            if not index.isValid():
+                self.listView.clearSelection()
+        return super().eventFilter(obj, event)
 
     def _updateList(self):
         self.listView.clear()

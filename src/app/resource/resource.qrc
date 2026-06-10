@@ -116,6 +116,7 @@
         <file>qss/dark/data_card.qss</file>
         <file>qss/dark/data_interface.qss</file>
         <file>qss/dark/data_tab_page.qss</file>
+        <file>qss/dark/filter_panel.qss</file>
         <file>qss/dark/home_interface.qss</file>
         <file>qss/dark/link_card.qss</file>
         <file>qss/dark/sample_card.qss</file>
@@ -124,6 +125,7 @@
         <file>qss/light/data_card.qss</file>
         <file>qss/light/data_interface.qss</file>
         <file>qss/light/data_tab_page.qss</file>
+        <file>qss/light/filter_panel.qss</file>
         <file>qss/light/home_interface.qss</file>
         <file>qss/light/link_card.qss</file>
         <file>qss/light/sample_card.qss</file>
