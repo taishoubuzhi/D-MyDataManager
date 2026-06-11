@@ -4,6 +4,14 @@ DataCard {
     background-color: rgba(39, 39, 39, 0.95);
 }
 
+DataCard[isSelected="true"] {
+    border: 1px solid rgb(0, 102, 204);
+}
+
+DataCard[isSelected="true"]:hover {
+    border: 1px solid rgb(0, 102, 204);
+}
+
 DataCard:hover {
     background-color: rgba(39, 39, 39, 0.93);
     border: 1px solid rgb(66, 66, 66);

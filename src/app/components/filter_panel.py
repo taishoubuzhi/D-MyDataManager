@@ -1,11 +1,12 @@
 # coding:utf-8
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QScrollArea, QCompleter, QFrame, QSizePolicy)
+                             QCompleter, QFrame, QSizePolicy)
 
 from qfluentwidgets import (CheckBox, TransparentPushButton, FluentIcon,
                             SearchLineEdit, LineEdit, PillPushButton,
-                            FlowLayout)
+                            FlowLayout, ScrollArea, isDarkTheme,
+                            setCustomStyleSheet)
 
 from ..common.style_sheet import StyleSheet
 
@@ -119,7 +120,7 @@ class FilterPanel(QWidget):
         content_layout.addWidget(self._searchEdit)
 
         # PillPushButton 滚动区域
-        self._scrollArea = QScrollArea(self)
+        self._scrollArea = ScrollArea(self)
         self._scrollArea.setWidgetResizable(True)
         self._scrollArea.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scrollArea.setFrameShape(QFrame.Shape.NoFrame)
@@ -132,6 +133,8 @@ class FilterPanel(QWidget):
         self._buttonLayout.setContentsMargins(0, 0, 0, 0)
 
         self._scrollArea.setWidget(self._scrollWidget)
+        self._scrollArea.enableTransparentBackground()
+        self._scrollArea.viewport().setStyleSheet("background: transparent")
         content_layout.addWidget(self._scrollArea)  # 不加 stretch 因子
 
         self._content.setVisible(False)

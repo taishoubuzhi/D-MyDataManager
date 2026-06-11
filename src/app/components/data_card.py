@@ -124,13 +124,8 @@ class DataCard(CardWidget):
             self._indicator.setStyleSheet(
                 f"background-color: {color.name()}; border-radius: 2px;"
             )
-            self.setStyleSheet(
-                f'DataCard[isSelected="true"] {{ border: 1px solid {color.name()}; }}'
-                f'DataCard[isSelected="true"]:hover {{ border: 1px solid {color.name()}; }}'
-            )
         else:
             self._indicator.setStyleSheet("")
-            self.setStyleSheet("")
         self.style().unpolish(self)
         self.style().polish(self)
         self._updateBackgroundColor()
