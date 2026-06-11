@@ -2,7 +2,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QTableWidgetItem, QListWidgetItem,
-                             QStackedWidget, QHeaderView, QSplitter)
+                             QStackedWidget, QHeaderView)
 
 from qfluentwidgets import (SegmentedWidget, TableWidget, ListWidget,
                             FlowLayout)
@@ -11,6 +11,7 @@ from ..common.style_sheet import StyleSheet
 from ..common.init.init_db import get_session
 from ..components.data_card import DataCard, DataListCard, _parse_json_list
 from ..components.filter_panel import FilterPanel, NameSearchPanel
+from ..components.splitter import Splitter
 from ..model.Data import DataType, DATA_TYPE_INFO, _normalize_type
 from ..model.Tag import Tag
 
@@ -165,8 +166,8 @@ class DataTabPage(QWidget):
 
         filter_layout.addStretch(1)
 
-        # === QSplitter：可拖拽分割线 ===
-        self._splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        # === 可拖拽分割线 ===
+        self._splitter = Splitter(Qt.Orientation.Horizontal, self)
         self._splitter.setChildrenCollapsible(False)
         self._splitter.addWidget(left_widget)
         self._splitter.addWidget(filter_widget)
