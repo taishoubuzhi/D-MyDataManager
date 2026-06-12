@@ -1,7 +1,7 @@
 """日志配置项测试脚本
 
 验证 init_log.py 中各配置项是否正确生效。
-直接运行: python test_log_config.py
+直接运行: python scripts/test_log_config.py
 """
 
 import sys

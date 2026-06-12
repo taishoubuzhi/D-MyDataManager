@@ -1,6 +1,8 @@
 # coding:utf-8
+import os
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QPixmap, QPainter, QPainterPath
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QFrame
 
 from qfluentwidgets import (CardWidget, IconWidget, BodyLabel, CaptionLabel,
@@ -8,7 +10,7 @@ from qfluentwidgets import (CardWidget, IconWidget, BodyLabel, CaptionLabel,
                             themeColor)
 
 from ..common.style_sheet import StyleSheet
-from ..model.Data import DataType
+from ..model.Data import DataType, format_size
 
 
 # DataType -> FluentIcon 映射
@@ -24,9 +26,80 @@ _DATA_TYPE_ICONS = {
     DataType.UNKNOWN: FluentIcon.HELP,
 }
 
+# DataType -> 默认封面背景色 (亮色/暗色)
+_COVER_COLORS = {
+    DataType.IMAGE:  ("#E8F5E9", "#1B3A1D"),
+    DataType.VIDEO:  ("#E3F2FD", "#1A2940"),
+    DataType.AUDIO:  ("#FFF3E0", "#3E2723"),
+    DataType.DOC:    ("#F3E5F5", "#2A1B3D"),
+    DataType.DOCX:   ("#F3E5F5", "#2A1B3D"),
+    DataType.EXCEL:  ("#E8F5E9", "#1B3A1D"),
+    DataType.PPT:    ("#FBE9E7", "#3E1B1B"),
+    DataType.TEXT:   ("#F5F5F5", "#2C2C2C"),
+    DataType.UNKNOWN:("#ECEFF1", "#263238"),
+}
+
 
 def _get_type_icon(data_type):
     return _DATA_TYPE_ICONS.get(data_type, FluentIcon.HELP)
+
+
+def _get_cover_color(data_type):
+    """获取数据类型对应的默认封面背景色"""
+    colors = _COVER_COLORS.get(data_type, _COVER_COLORS[DataType.UNKNOWN])
+    return colors[1] if isDarkTheme() else colors[0]
+
+
+class _CoverWidget(QWidget):
+    """默认封面组件：圆角背景 + 居中类型图标"""
+
+    def __init__(self, data_type, parent=None):
+        super().__init__(parent)
+        self._data_type = data_type
+        self.setFixedSize(48, 48)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 绘制圆角背景
+        bg_color = QColor(_get_cover_color(self._data_type))
+        painter.setBrush(bg_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(self.rect(), 8, 8)
+
+        # 绘制居中图标
+        icon = _get_type_icon(self._data_type).icon()
+        icon_size = 24
+        x = (self.width() - icon_size) // 2
+        y = (self.height() - icon_size) // 2
+        painter.drawPixmap(x, y, icon.pixmap(icon_size, icon_size))
+
+        painter.end()
+
+
+class _ImageCoverWidget(QWidget):
+    """封面图组件：圆角裁剪显示图片"""
+
+    def __init__(self, pixmap, parent=None):
+        super().__init__(parent)
+        self._pixmap = pixmap.scaled(
+            48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        self.setFixedSize(48, 48)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        # 用 clip path 裁剪圆角
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(), 8, 8)
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, self._pixmap)
+
+        painter.end()
 
 
 def _parse_json_list(value):
@@ -153,10 +226,15 @@ class DataCard(CardWidget):
 
         self.hBoxLayout.addSpacing(12)
 
-        # 左侧：类型图标
-        self.iconWidget = IconWidget(_get_type_icon(item.type), self)
-        self.iconWidget.setFixedSize(48, 48)
-        self.hBoxLayout.addWidget(self.iconWidget)
+        # 左侧：封面图或默认封面
+        cover_path = item.cover_path
+        if cover_path and os.path.isfile(cover_path):
+            pixmap = QPixmap(cover_path)
+            self.coverWidget = _ImageCoverWidget(pixmap, self)
+            self.hBoxLayout.addWidget(self.coverWidget)
+        else:
+            self.coverWidget = _CoverWidget(item.type, self)
+            self.hBoxLayout.addWidget(self.coverWidget)
 
         self.hBoxLayout.addSpacing(16)
 
@@ -182,7 +260,7 @@ class DataCard(CardWidget):
         title_row.addWidget(self.typeLabel)
 
         title_row.addStretch(1)
-        size_str = str(item.size or 0)
+        size_str = format_size(item.size)
         self.sizeLabel = CaptionLabel(f"大小: {size_str}", self)
         self.sizeLabel.setObjectName('sizeLabel')
         title_row.addWidget(self.sizeLabel)
@@ -257,7 +335,7 @@ class DataListCard(CardWidget):
             self.hBoxLayout.addStretch(1)
 
         # 大小
-        size_str = str(item.size or 0)
+        size_str = format_size(item.size)
         self.sizeLabel = CaptionLabel(f"{size_str}", self)
         self.sizeLabel.setObjectName('listSizeLabel')
         self.sizeLabel.setMinimumWidth(60)

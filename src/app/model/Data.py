@@ -1,7 +1,9 @@
 from enum import Enum as PyEnum
 
 from .Base import Base
-from sqlalchemy import (Column, String, Integer, Enum, JSON, ForeignKey, Boolean)
+from sqlalchemy import (Column, String, Integer, Enum, JSON, ForeignKey,
+                         Boolean, DateTime)
+from sqlalchemy import func
 
 
 class DataType(PyEnum):
@@ -63,6 +65,23 @@ def is_file_type(data_type):
     return data_type in _FILE_TYPES
 
 
+def format_size(size_bytes):
+    """将字节数格式化为可读的大小字符串"""
+    if size_bytes is None:
+        return "未知"
+    if size_bytes < 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    index = 0
+    size = float(size_bytes)
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024
+        index += 1
+    if index == 0:
+        return f"{int(size)} {units[index]}"
+    return f"{size:.1f} {units[index]}"
+
+
 # 为 DataType 添加类方法（保持向后兼容）
 DataType.get_name = classmethod(lambda cls, dt: get_type_name(dt))
 DataType.is_file_type = classmethod(lambda cls, dt: is_file_type(dt))
@@ -76,9 +95,12 @@ class Data(Base):
     type = Column(Enum(DataType))
     keywords = Column(JSON)
     tag = Column(JSON)
-    size = Column(Integer)
+    size = Column(Integer, default=0)
     is_hidden = Column(Boolean)
     content = Column(String(256))
+    import_time = Column(DateTime, default=func.now())
+    update_time = Column(DateTime, default=func.now(), onupdate=func.now())
+    cover_path = Column(String(256))
 
     user_id = Column(Integer, ForeignKey('users.id'))
     database_id = Column(Integer, ForeignKey('databases.id'))

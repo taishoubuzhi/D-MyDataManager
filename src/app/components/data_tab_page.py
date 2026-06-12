@@ -12,7 +12,7 @@ from ..common.init.init_db import get_session
 from ..components.data_card import DataCard, DataListCard, _parse_json_list
 from ..components.filter_panel import FilterPanel, NameSearchPanel
 from ..components.splitter import Splitter
-from ..model.Data import DataType, DATA_TYPE_INFO, _normalize_type
+from ..model.Data import DataType, DATA_TYPE_INFO, _normalize_type, format_size
 from ..model.Tag import Tag
 
 
@@ -23,7 +23,7 @@ _COLUMNS = [
     ("类型", lambda d: DataType.get_name(d.type)),
     ("关键词", lambda d: _format_json(d.keywords)),
     ("标签", lambda d: _format_json(d.tag)),
-    ("大小", lambda d: str(d.size or 0)),
+    ("大小", lambda d: format_size(d.size)),
     ("隐藏", lambda d: "是" if d.is_hidden else "否"),
     ("内容", lambda d: _format_content(d)),
     ("用户ID", lambda d: str(d.user_id) if d.user_id else ""),

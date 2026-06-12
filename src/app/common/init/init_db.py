@@ -10,7 +10,7 @@ from app.model.Data import Data
 from app.model.DataBase import DataBase
 from app.model.Tag import Tag
 from app.model.User import User
-from .init_data import init_data, db_exists
+from .init_data_script import init_data, db_exists
 
 
 engine = None
