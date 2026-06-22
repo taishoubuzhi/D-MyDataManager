@@ -14,9 +14,6 @@
         <name>SettingInterface</name>
     </context>
     <context>
-        <name>TimePickerDialog</name>
-    </context>
-    <context>
         <name>Translator</name>
     </context>
 </TS>

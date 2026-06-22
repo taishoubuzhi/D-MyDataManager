@@ -75,6 +75,7 @@ class MainWindow(FluentWindow):
         QApplication.processEvents()
 
     def onSupport(self):
+        # TODO: 实现支持按钮的功能，当前仅读取语言配置未执行实际操作
         language = config.get(config.language).value
 
     def resizeEvent(self, e):
@@ -96,5 +97,6 @@ class MainWindow(FluentWindow):
             QTimer.singleShot(100, lambda: self.windowEffect.setMicaEffect(self.winId(), isDarkTheme()))
 
     def switchToSample(self, routeKey, index):
+        # TODO: 实现切换到示例卡片的功能，当前为空实现
         return
 

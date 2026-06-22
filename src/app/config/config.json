@@ -31,7 +31,6 @@
     },
     "MainWindow": {
         "DpiScale": "Auto",
-        "DynamicConfigDisplay": true,
         "Language": "zh_CN",
         "MicaEnabled": false
     },

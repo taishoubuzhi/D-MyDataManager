@@ -96,6 +96,17 @@ class SettingInterface(ScrollArea):
             self.dataGroup
         )
 
+        # software update
+        self.updateGroup = SettingCardGroup(
+            self.tr('软件更新'), self.scrollWidget)
+        self.checkUpdateCard = SwitchSettingCard(
+            FIF.SYNC,
+            self.tr('应用启动时检查更新'),
+            self.tr('新版本将更加稳定并拥有更多功能'),
+            config.check_update_at_start_up,
+            self.updateGroup
+        )
+
         # log - basic
         self.logBasicGroup = SettingCardGroup(
             self.tr('日志基础'), self.scrollWidget)
@@ -268,6 +279,7 @@ class SettingInterface(ScrollArea):
         self._allConfigItems = [
             config.micaEnabled, config.dpi_scale, config.language,
             config.blurRadius,
+            config.check_update_at_start_up,
             config.log_level, config.format_to_json, config.catch,
             config.output_console, config.enqueue, config.encoding,
             config.backtrace, config.diagnose, config.output_file,
@@ -323,6 +335,8 @@ class SettingInterface(ScrollArea):
 
         self.dataGroup.addSettingCard(self.dataStorePathCard)
 
+        self.updateGroup.addSettingCard(self.checkUpdateCard)
+
         self.logBasicGroup.addSettingCard(self.logLevelCard)
         self.logBasicGroup.addSettingCard(self.outputConsoleCard)
         self.logBasicGroup.addSettingCard(self.outputFileCard)
@@ -347,6 +361,7 @@ class SettingInterface(ScrollArea):
         self.expandLayout.setContentsMargins(36, 10, 36, 0)
         self.expandLayout.addWidget(self.personalGroup)
         self.expandLayout.addWidget(self.dataGroup)
+        self.expandLayout.addWidget(self.updateGroup)
         self.expandLayout.addWidget(self.logBasicGroup)
         self.expandLayout.addWidget(self.logFileGroup)
         self.expandLayout.addWidget(self.logAdvancedGroup)
@@ -493,6 +508,9 @@ class SettingInterface(ScrollArea):
 
         # data
         self.dataStorePathCard.clicked.connect(self.__onDataStorePathCardClicked)
+
+        # software update
+        self.checkUpdateCard.checkedChanged.connect(lambda e: logger.info(f"Check update at start up changed: {'enabled' if e else 'disabled'}"))
 
         # log - all log settings require restart
         self.logLevelCard.comboBox.currentIndexChanged.connect(lambda i: logger.info(f"Log level changed: {self.logLevelCard.comboBox.currentText()}"))

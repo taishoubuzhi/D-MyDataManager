@@ -214,6 +214,10 @@
             <translation>Home</translation>
         </message>
         <message>
+            <source>数据管理</source>
+            <translation>Data management</translation>
+        </message>
+        <message>
             <source>设置</source>
             <translation>Settings</translation>
         </message>
@@ -263,14 +267,6 @@
         <message>
             <source>调整应用的主题色</source>
             <translation>Change the theme color of your application</translation>
-        </message>
-        <message>
-            <source>动态配置显示</source>
-            <translation>Dynamic config display</translation>
-        </message>
-        <message>
-            <source>动态显示配置变更</source>
-            <translation>Dynamically display configuration changes</translation>
         </message>
         <message>
             <source>界面缩放</source>
@@ -456,9 +452,134 @@
             <source>配置已还原为启动时的值</source>
             <translation>Configuration has been reset to startup values</translation>
         </message>
-    </context>
-    <context>
-        <name>TimePickerDialog</name>
+        <message>
+            <source>数据</source>
+            <translation>Data</translation>
+        </message>
+        <message>
+            <source>数据存储路径</source>
+            <translation>Data store path</translation>
+        </message>
+        <message>
+            <source>选择数据存储文件夹</source>
+            <translation>Choose data storage folder</translation>
+        </message>
+        <message>
+            <source>日志基础</source>
+            <translation>Log basic</translation>
+        </message>
+        <message>
+            <source>控制台和日志文件的最低输出级别，低于此级别的日志将被忽略</source>
+            <translation>The minimum output level for console and log files. Logs below this level will be ignored</translation>
+        </message>
+        <message>
+            <source>将日志信息输出到控制台（包括第三方库的标准日志）</source>
+            <translation>Output log messages to console (including standard logs from third-party libraries)</translation>
+        </message>
+        <message>
+            <source>将日志信息输出到日志文件（包括第三方库的标准日志）</source>
+            <translation>Output log messages to log file (including standard logs from third-party libraries)</translation>
+        </message>
+        <message>
+            <source>日志文件</source>
+            <translation>Log file</translation>
+        </message>
+        <message>
+            <source>日志文件路径</source>
+            <translation>Log file path</translation>
+        </message>
+        <message>
+            <source>日志文件的存储目录</source>
+            <translation>The storage directory for log files</translation>
+        </message>
+        <message>
+            <source>日志文件的轮转方式：无（不轮转）、按时间（定时创建新文件）、按数量（限制文件总数）</source>
+            <translation>Log file rotation mode: None (no rotation), Time (create new file at intervals), Count (limit total file count)</translation>
+        </message>
+        <message>
+            <source>保留的日志文件最大数量，超出时自动删除最旧的文件（仅"按数量"模式生效）</source>
+            <translation>Maximum number of log files to keep. Oldest files are automatically deleted when exceeded (only effective in Count mode)</translation>
+        </message>
+        <message>
+            <source>按此间隔创建新的日志文件（仅"按时间"模式生效）</source>
+            <translation>Create a new log file at this interval (only effective in Time mode)</translation>
+        </message>
+        <message>
+            <source>轮转间隔的时间单位（仅"按时间"模式生效）</source>
+            <translation>Time unit for rotation interval (only effective in Time mode)</translation>
+        </message>
+        <message>
+            <source>日志文件编码</source>
+            <translation>Log file encoding</translation>
+        </message>
+        <message>
+            <source>日志文件的字符编码（仅影响文件输出）</source>
+            <translation>Character encoding for log files (only affects file output)</translation>
+        </message>
+        <message>
+            <source>日志高级</source>
+            <translation>Log advanced</translation>
+        </message>
+        <message>
+            <source>将日志文件输出为JSON格式，便于日志分析工具解析（仅影响文件输出，控制台始终为可读文本）</source>
+            <translation>Output log files in JSON format for easier parsing by log analysis tools (only affects file output, console always uses readable text)</translation>
+        </message>
+        <message>
+            <source>捕获内部错误</source>
+            <translation>Catch internal errors</translation>
+        </message>
+        <message>
+            <source>自动捕获日志处理器内部的错误，防止日志系统异常导致程序崩溃（影响控制台和文件）</source>
+            <translation>Automatically catch internal errors in the log handler to prevent log system exceptions from crashing the program (affects console and file)</translation>
+        </message>
+        <message>
+            <source>异步写入</source>
+            <translation>Async write</translation>
+        </message>
+        <message>
+            <source>使用后台线程写入控制台日志，避免日志输出阻塞主线程（仅影响控制台，文件始终同步写入以防崩溃丢日志）</source>
+            <translation>Use a background thread to write console logs, preventing log output from blocking the main thread (only affects console, file always writes synchronously to prevent log loss on crash)</translation>
+        </message>
+        <message>
+            <source>扩展回溯</source>
+            <translation>Extended backtrace</translation>
+        </message>
+        <message>
+            <source>在异常追踪中显示完整的调用栈，帮助定位异常源头（影响控制台和文件）</source>
+            <translation>Show complete call stack in exception traces to help locate the source of exceptions (affects console and file)</translation>
+        </message>
+        <message>
+            <source>诊断信息</source>
+            <translation>Diagnostic information</translation>
+        </message>
+        <message>
+            <source>在异常追踪中显示变量值，便于调试（影响控制台和文件，生产环境建议关闭以避免泄露敏感信息）</source>
+            <translation>Show variable values in exception traces for easier debugging (affects console and file, recommended to disable in production to avoid leaking sensitive information)</translation>
+        </message>
+        <message>
+            <source>开发者</source>
+            <translation>Developer</translation>
+        </message>
+        <message>
+            <source>强制初始化数据库</source>
+            <translation>Force initialize database</translation>
+        </message>
+        <message>
+            <source>执行</source>
+            <translation>Execute</translation>
+        </message>
+        <message>
+            <source>清空所有数据并重新初始化，此操作不可恢复</source>
+            <translation>Clear all data and reinitialize. This operation is irreversible</translation>
+        </message>
+        <message>
+            <source>确认强制初始化</source>
+            <translation>Confirm force initialization</translation>
+        </message>
+        <message>
+            <source>此操作将清空所有数据并重新初始化数据库，不可恢复！\n确定要继续吗？</source>
+            <translation>This operation will clear all data and reinitialize the database. This is irreversible!\nAre you sure you want to continue?</translation>
+        </message>
         <message>
             <source>确定</source>
             <translation>OK</translation>
@@ -466,6 +587,18 @@
         <message>
             <source>取消</source>
             <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>初始化完成</source>
+            <translation>Initialization complete</translation>
+        </message>
+        <message>
+            <source>数据库已强制重新初始化</source>
+            <translation>Database has been force reinitialized</translation>
+        </message>
+        <message>
+            <source>配置已还原为启动时的值，部分配置需重启生效</source>
+            <translation>Configuration has been reset to startup values. Some configurations require restart to take effect</translation>
         </message>
     </context>
     <context>
