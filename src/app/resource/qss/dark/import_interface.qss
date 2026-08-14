@@ -1,0 +1,24 @@
+ImportInterface,
+#view {
+    background-color: transparent;
+}
+
+QScrollArea {
+    border: none;
+    background-color: transparent;
+}
+
+#importTitle {
+    font-size: 22px;
+    font-weight: 600;
+}
+
+#formCard {
+    background-color: rgba(255, 255, 255, 10);
+    border: 1px solid rgb(46, 46, 46);
+    border-radius: 8px;
+}
+
+#tagFlowWidget {
+    background-color: transparent;
+}

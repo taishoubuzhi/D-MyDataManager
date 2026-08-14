@@ -1,0 +1,19 @@
+#keywordChipInput {
+    background-color: transparent;
+}
+
+#keywordChip {
+    border: 1px solid rgb(80, 80, 80);
+    border-radius: 13px;
+    background-color: rgba(100, 100, 100, 0.4);
+}
+
+#keywordChip:hover {
+    border: 1px solid rgb(120, 120, 120);
+    background-color: rgba(120, 120, 120, 0.5);
+}
+
+#keywordChipLabel {
+    color: rgb(220, 220, 220);
+    font: 11px 'Segoe UI', 'Microsoft YaHei', 'PingFang SC';
+}

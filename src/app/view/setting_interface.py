@@ -95,6 +95,13 @@ class SettingInterface(ScrollArea):
             config.get(config.data_store_path),
             self.dataGroup
         )
+        self.fileNameByTimeCard = SwitchSettingCard(
+            FIF.DATE_TIME,
+            self.tr('文件按时间命名'),
+            self.tr('文件导入时默认以导入时间（年月日-时分秒）命名数据，关闭则使用文件名'),
+            config.file_import_name_by_time,
+            self.dataGroup
+        )
 
         # software update
         self.updateGroup = SettingCardGroup(
@@ -289,6 +296,7 @@ class SettingInterface(ScrollArea):
             config.max_overflow, config.pool_recycle, config.pool_pre_ping,
             config.connect_args,
             config.data_store_path,
+            config.file_import_name_by_time,
         ]
         self._allConfigSnapshot = {
             item.key: config.get(item) for item in self._allConfigItems
@@ -334,6 +342,7 @@ class SettingInterface(ScrollArea):
         self.personalGroup.addSettingCard(self.languageCard)
 
         self.dataGroup.addSettingCard(self.dataStorePathCard)
+        self.dataGroup.addSettingCard(self.fileNameByTimeCard)
 
         self.updateGroup.addSettingCard(self.checkUpdateCard)
 
@@ -508,6 +517,8 @@ class SettingInterface(ScrollArea):
 
         # data
         self.dataStorePathCard.clicked.connect(self.__onDataStorePathCardClicked)
+        self.fileNameByTimeCard.checkedChanged.connect(
+            lambda e: logger.info(f"File import name-by-time changed: {'on' if e else 'off'}"))
 
         # software update
         self.checkUpdateCard.checkedChanged.connect(lambda e: logger.info(f"Check update at start up changed: {'enabled' if e else 'disabled'}"))

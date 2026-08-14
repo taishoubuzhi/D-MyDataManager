@@ -10,6 +10,7 @@ from ..common.config import config
 from .home_interface import HomeInterface
 from .setting_interface import SettingInterface
 from .data_interface import DataInterface
+from .import_interface import ImportInterface
 
 from ..common.translator import Translator
 from ..common.icon import Icon
@@ -29,6 +30,7 @@ class MainWindow(FluentWindow):
         self.homeInterface = HomeInterface(self)
         self.settingInterface = SettingInterface(self)
         self.dataInterface = DataInterface(self)
+        self.importInterface = ImportInterface(self)
 
         self.navigationInterface.setAcrylicEnabled(True)
 
@@ -43,10 +45,12 @@ class MainWindow(FluentWindow):
         signalBus.micaEnableChanged.connect(self.setMicaEffectEnabled)
         signalBus.switchToSampleCard.connect(self.switchToSample)
         signalBus.supportSignal.connect(self.onSupport)
+        signalBus.dataImported.connect(self.dataInterface.refresh_data)
 
     def initNavigation(self):
         t = Translator()
         self.addSubInterface(self.homeInterface, FIF.HOME, self.tr('首页'))
+        self.addSubInterface(self.importInterface, FIF.ADD, self.tr('数据导入'))
         self.addSubInterface(self.dataInterface, FIF.DOCUMENT, self.tr('数据管理'))
         self.navigationInterface.addSeparator()
 

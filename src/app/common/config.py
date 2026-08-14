@@ -126,6 +126,9 @@ class Config(QConfig):
                                   os.path.normpath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "resources", "datas")),
                                   FolderValidator())
 
+    file_import_name_by_time = ConfigItem("Data", "File-Import-Name-By-Time",
+                                           False, BoolValidator())
+
 
 def load_config():
     global config

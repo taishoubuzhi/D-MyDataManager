@@ -27,7 +27,8 @@
         "URL": "sqlite:///D:/Program/PyCharm/python/LeetCode/D-MyDataManager/resources/data.db"
     },
     "Data": {
-        "Data-Store-Path": "D:/Program/PyCharm/python/LeetCode/D-MyDataManager/resources/datas"
+        "Data-Store-Path": "D:/Program/PyCharm/python/LeetCode/D-MyDataManager/resources/datas",
+        "File-Import-Name-By-Time": false
     },
     "MainWindow": {
         "DpiScale": "Auto",
