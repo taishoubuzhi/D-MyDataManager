@@ -8,6 +8,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractItemView, QGridLayout, QHeaderView, QWidget
 from qfluentwidgets import ComboBox, LineEdit, TableWidget
 
+from ..common import release_widget
+
 FILTER_ALL = "全部"
 
 
@@ -32,7 +34,7 @@ class TableFilterBar(QWidget):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.deleteLater()
+                release_widget(widget)
         self._editors.clear()
         self._columns = len(columns)
         for index, (key, label, kind) in enumerate(columns):

@@ -29,7 +29,7 @@ from qfluentwidgets import (
 )
 
 from ...db.models import DATA_TYPE_NAMES, DataType
-from ..common import release_widget
+from ..common import clear_scroll_background, release_widget
 
 SORT_OPTIONS: list[tuple[str, str, bool]] = [
     ("最新导入", "created_at", True),
@@ -92,6 +92,7 @@ class FilterSection(CardWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidget(self.body)
+        clear_scroll_background(self.scroll)
         self.scroll.setFixedHeight(SECTION_BODY_HEIGHT)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)

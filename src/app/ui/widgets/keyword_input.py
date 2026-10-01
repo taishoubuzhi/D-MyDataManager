@@ -6,13 +6,21 @@ from PyQt6.QtCore import QEvent, QRect, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, FlowLayout, FluentIcon, LineEdit, ToolButton, ToolTipFilter
 
-_CHIP_QSS = """
-#keywordChip {
-    background: rgba(0, 120, 212, 0.12);
-    border: 1px solid rgba(0, 120, 212, 0.35);
+from ..common import accent_color
+
+
+def _chip_qss() -> str:
+    """关键词块的样式：底色与描边跟随主题强调色。"""
+    color = accent_color()
+    fill = f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.12)"
+    line = f"rgba({color.red()}, {color.green()}, {color.blue()}, 0.35)"
+    return f"""
+#keywordChip {{
+    background: {fill};
+    border: 1px solid {line};
     border-radius: 10px;
-}
-#keywordChip QLabel { background: transparent; border: none; }
+}}
+#keywordChip QLabel {{ background: transparent; border: none; }}
 """
 
 
@@ -25,7 +33,7 @@ class KeywordChip(QFrame):
         super().__init__(parent)
         self._text = text
         self.setObjectName("keywordChip")
-        self.setStyleSheet(_CHIP_QSS)
+        self.setStyleSheet(_chip_qss())
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)

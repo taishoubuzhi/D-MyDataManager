@@ -27,10 +27,15 @@ from ...db import database
 from ...repositories import ArchiveRepository
 from ...services import ArchiveService, LibraryService, UserService, overview, recent
 from ..common import (
+    DETAIL_MARGINS,
     BusyTip as BusyTipWidget,
     confirm,
     format_datetime,
     format_size,
+    clear_scroll_background,
+    page_background,
+    page_header,
+    page_layout,
     release_widget,
     toast_error,
     toast_success,
@@ -107,7 +112,7 @@ class StatCard(CardWidget):
         self._sub = CaptionLabel("", self)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(2)
         layout.addWidget(icon_label)
         layout.addWidget(self._value)
@@ -177,12 +182,10 @@ class HomePage(ScrollArea):
 
         host = QWidget(self)
         host.setObjectName("homeHost")
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(16)
+        page_background(host)
+        layout = page_layout(host)
 
-        layout.addWidget(TitleLabel("数据概览", host))
-        layout.addWidget(CaptionLabel("所有数据都保存在本机，导入时会自动去重并记录特征", host))
+        page_header(layout, host, "数据概览", "所有数据都保存在本机，导入时会自动去重并记录特征")
 
         cards_host = QWidget(host)
         self._cards_layout = AdaptiveFlowLayout(cards_host, needAni=False, isTight=True)
@@ -231,6 +234,7 @@ class HomePage(ScrollArea):
 
         layout.addStretch(1)
         self.setWidget(host)
+        clear_scroll_background(self, inner=False)
         self.setWidgetResizable(True)
 
         signalBus.itemsChanged.connect(self.refresh)

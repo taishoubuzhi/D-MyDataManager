@@ -200,6 +200,7 @@ class PluginService:
         self._apis: dict[str, PluginApi] = {}
         self._errors: dict[str, str] = {}
         self._bootstrap: dict[str, object] = {}
+        self._loaded_plugins: list[PluginInfo] = []
 
     # ------------------------------------------------------------ 路径
     @property
@@ -473,6 +474,7 @@ class PluginService:
         self._provide_bootstrap()
         self._viewers = {}
         self._apis = {}
+        self._loaded_plugins = []
         order, dep_errors = sort_by_dependency(self.scan())
         infos = {info.id: info for info in self.discover()}
         ordered: list[PluginInfo] = []
@@ -490,6 +492,7 @@ class PluginService:
                 validate_kind(info)
                 viewers = self._load_plugin(info) if info.entry else []
                 self._viewers[info.id] = viewers
+                self._loaded_plugins.append(info)
                 count += len(viewers)
             except PluginError as exc:
                 extension_registry.drop_plugin(info.id)
@@ -501,6 +504,32 @@ class PluginService:
                 logger.exception("插件载入异常：{}", info.id)
         self._sync_bootstrap()
         return count
+
+    def loaded_plugins(self) -> list[PluginInfo]:
+        """上一次载入成功的插件（按依赖顺序，含只声明类型的插件）。"""
+        return list(self._loaded_plugins)
+
+    def loaded_summary(self, viewers: int = 0) -> str:
+        """把这次载入的插件汇总成一句启动日志：总数、来源、各插件类型的数量。"""
+        plugins = self._loaded_plugins
+        if not plugins:
+            return "本次没有载入任何插件"
+        builtin = sum(1 for info in plugins if info.builtin)
+        kinds: dict[str, int] = {}
+        for info in plugins:
+            label = plugin_kinds.label(info.kind) if info.kind else "未分类"
+            kinds[label] = kinds.get(label, 0) + 1
+        kind_text = "、".join(
+            f"{label} {amount} 个"
+            for label, amount in sorted(kinds.items(), key=lambda item: (-item[1], item[0]))
+        )
+        text = (
+            f"共载入 {len(plugins)} 个插件"
+            f"（内置 {builtin} 个、外部 {len(plugins) - builtin} 个）：{kind_text}"
+        )
+        if viewers:
+            text += f"；共注册 {viewers} 个查看器"
+        return text
 
     def _declare_kinds(self, info: PluginInfo) -> None:
         """把类型插件声明的插件类型登记进全局类型表（类型插件是纯数据插件）。"""

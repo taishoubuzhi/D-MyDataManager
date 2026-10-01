@@ -8,11 +8,17 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayou
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, CheckBox
 
 from ...db.models import DataItem
-from ..common import elide, format_datetime, format_size, type_icon, type_name
+from ..common import accent_color, accent_name, elide, format_datetime, format_size, release_widget, type_icon, type_name
 from .cover_loader import cover_loader
 
 COVER_SIZE = 48
 CHECK_TIP = "勾选以多选（Ctrl / Shift + 左键也可以多选）"
+
+
+def _accent_rgba(alpha: float) -> str:
+    """主题强调色的半透明写法，用于选中态背景。"""
+    color = accent_color()
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
 
 
 class CoverLabel(QLabel):
@@ -63,7 +69,7 @@ class _TagRow(QWidget):
             item = self._layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.deleteLater()
+                release_widget(widget)
         for name in names[:4]:
             chip = CaptionLabel(f"{self._prefix}{name}", self)
             chip.setStyleSheet(
@@ -94,7 +100,7 @@ class ItemCard(CardWidget):
 
         self._indicator = QFrame(self)
         self._indicator.setFixedWidth(3)
-        self._indicator.setStyleSheet("background: #0a84ff; border-radius: 1px;")
+        self._indicator.setStyleSheet(f"background: {accent_name()}; border-radius: 1px;")
         self._indicator.setVisible(False)
 
         self._cover = CoverLabel(self)
@@ -246,7 +252,7 @@ class ItemListRow(QWidget):
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self.setStyleSheet(
-            "background: rgba(10, 132, 255, 0.16); border-radius: 6px;"
+            f"background: {_accent_rgba(0.16)}; border-radius: 6px;"
             if selected
             else "background: transparent;"
         )

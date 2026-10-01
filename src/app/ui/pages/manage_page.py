@@ -44,8 +44,13 @@ from ...repositories import (
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
 from ...services.open_with_service import MODE_ASK, open_with_service
 from ..common import (
+    PAGE_MARGINS,
+    PAGE_SPACING,
+    PANEL_MARGINS,
+    clear_scroll_background,
     confirm,
     format_size,
+    page_background,
     release_widget,
     toast_error,
     toast_success,
@@ -160,6 +165,7 @@ class ManagePage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("managePage")
+        page_background(self)
         self.session = database.new_session()
         self.item_service = ItemService(self.session)
         self.taxonomy = TaxonomyService(self.session)
@@ -182,8 +188,8 @@ class ManagePage(QWidget):
         self._buttons: dict[str, PushButton] = {}
 
         root = QHBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(*PAGE_MARGINS)
+        root.setSpacing(PAGE_SPACING)
         root.addWidget(self._build_tree_panel(), 0)
         root.addWidget(self._build_center(), 1)
         root.addWidget(self._build_filter_panel(), 0)
@@ -200,7 +206,7 @@ class ManagePage(QWidget):
         card.setFixedWidth(240)
         card.setMinimumHeight(420)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(10, 12, 10, 12)
+        layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(8)
         layout.addWidget(StrongBodyLabel("分类", card))
 
@@ -287,6 +293,7 @@ class ManagePage(QWidget):
         self.restore_button = self._buttons["restore"]
         self.restore_button.setEnabled(False)
         scroll.setWidget(host)
+        clear_scroll_background(scroll)
         self.toolbar_view = scroll
         self.toolbar_layout = flow
         scroll.setFixedHeight(TOOLBAR_BUTTON_HEIGHT + TOOLBAR_ROW_SPACING)
@@ -338,6 +345,9 @@ class ManagePage(QWidget):
         layout.addWidget(self.filter_panel)
         layout.addStretch(1)
         scroll.setWidget(host)
+        page_background(scroll, "manageFilterScroll")
+        page_background(host, "manageFilterHost")
+        clear_scroll_background(scroll, inner=False)
         return scroll
 
     def resizeEvent(self, event) -> None:
@@ -1046,6 +1056,9 @@ def _make_scroll(parent: QWidget, adaptive: bool = False):
         layout.addStretch(1)
     layout.setContentsMargins(0, 0, 6, 0)
     scroll.setWidget(host)
+    page_background(scroll, f"manageScroll{'Card' if adaptive else 'List'}")
+    page_background(host, f"manageScrollHost{'Card' if adaptive else 'List'}")
+    clear_scroll_background(scroll, inner=False)
     return scroll, layout
 
 

@@ -460,6 +460,9 @@ class BuiltinProtocolCase(unittest.TestCase):
         assert spec is not None
         self.assertEqual(spec.plugins, ("builtin.kind.viewer",))
         self.assertEqual(spec.label, "打开方式")
+        summary = service.loaded_summary(service.load_viewers())
+        self.assertIn("共载入 11 个插件（内置 11 个、外部 0 个）", summary)
+        self.assertIn("；共注册 7 个查看器", summary)
 
 
 class PluginServiceCase(unittest.TestCase):
@@ -475,6 +478,18 @@ class PluginServiceCase(unittest.TestCase):
         viewer_registry.clear()
         extension_registry.clear()
         self._tmp.cleanup()
+
+    def test_loaded_summary_reports_total_and_kinds(self) -> None:
+        viewers = self.service.load_viewers()
+        self.assertEqual(len(self.service.loaded_plugins()), 11)
+        summary = self.service.loaded_summary(viewers)
+        self.assertIn("共载入 11 个插件（内置 11 个、外部 0 个）", summary)
+        self.assertIn("打开方式 7 个", summary)
+        self.assertIn("插件类型 3 个", summary)
+        self.assertIn("；共注册 7 个查看器", summary)
+
+    def test_loaded_summary_without_plugins(self) -> None:
+        self.assertEqual(self.service.loaded_summary(0), "本次没有载入任何插件")
 
     def test_builtin_plugins_cover_viewers_and_page(self) -> None:
         builtin = self.service.builtin()

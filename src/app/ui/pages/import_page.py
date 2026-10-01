@@ -23,7 +23,6 @@ from qfluentwidgets import (
     SwitchButton,
     TableWidget,
     TextEdit,
-    TitleLabel,
 )
 
 from loguru import logger
@@ -36,10 +35,15 @@ from ...repositories import ItemRepository, TagRepository
 from ...services import ArchiveService, ImportService, LibraryService, TaxonomyService, UserService
 from ...services.blob_store import sha256_of
 from ..common import (
+    DETAIL_MARGINS,
     BusyTip,
     elide,
     format_datetime,
     format_size,
+    clear_scroll_background,
+    page_background,
+    page_header,
+    page_layout,
     toast_error,
     toast_success,
     toast_warning,
@@ -111,16 +115,14 @@ class ImportPage(ScrollArea):
 
         host = QWidget(self)
         host.setObjectName("importHost")
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(16)
+        page_background(host)
+        layout = page_layout(host)
 
-        layout.addWidget(TitleLabel("导入数据", host))
-        layout.addWidget(
-            CaptionLabel(
-                "文件会按内容去重后保存到本机仓库，可单个文件导入，也可整个文件夹批量导入",
-                host,
-            )
+        page_header(
+            layout,
+            host,
+            "导入数据",
+            "文件会按内容去重后保存到本机仓库，可单个文件导入，也可整个文件夹批量导入",
         )
 
         layout.addWidget(self._build_mode_card(host))
@@ -129,6 +131,7 @@ class ImportPage(ScrollArea):
         layout.addWidget(self._build_progress_card(host))
         layout.addStretch(1)
         self.setWidget(host)
+        clear_scroll_background(self, inner=False)
         self.setWidgetResizable(True)
 
         self._reload_users()
@@ -144,7 +147,7 @@ class ImportPage(ScrollArea):
     def _build_mode_card(self, parent: QWidget) -> CardWidget:
         card = CardWidget(parent)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 20)
+        layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(12)
         layout.addWidget(StrongBodyLabel("数据来源", card))
 
@@ -190,7 +193,7 @@ class ImportPage(ScrollArea):
     def _build_target_card(self, parent: QWidget) -> CardWidget:
         card = CardWidget(parent)
         outer = QVBoxLayout(card)
-        outer.setContentsMargins(20, 16, 20, 20)
+        outer.setContentsMargins(*DETAIL_MARGINS)
         outer.setSpacing(12)
         outer.addWidget(StrongBodyLabel("导入目标与数据信息", card))
 
@@ -246,7 +249,7 @@ class ImportPage(ScrollArea):
     def _build_details_card(self, parent: QWidget) -> CardWidget:
         card = CardWidget(parent)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 20)
+        layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(10)
         layout.addWidget(StrongBodyLabel("待导入文件信息", card))
         self.details_summary = CaptionLabel("尚未选择文件", card)
@@ -268,7 +271,7 @@ class ImportPage(ScrollArea):
     def _build_progress_card(self, parent: QWidget) -> CardWidget:
         card = CardWidget(parent)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(20, 16, 20, 20)
+        layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(10)
         layout.addWidget(StrongBodyLabel("导入进度", card))
 

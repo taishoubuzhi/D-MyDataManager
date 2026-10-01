@@ -28,7 +28,8 @@ def _configure_stdout() -> None:
 _configure_stdout()
 
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
+from PyQt6.QtGui import QPalette  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget  # noqa: E402
 
 from app.core import paths  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
@@ -47,6 +48,92 @@ PAGES = (
     "plugin_page",
     "settings_page",
 )
+
+
+def _check_style_uniformity(window) -> list[str]:
+    """全站页面骨架尺寸、面板边距与按钮类型是否统一（对齐插件/打开方式/存档/标签页那一套）。"""
+    from qfluentwidgets import CardWidget
+
+    from app.ui.common import DETAIL_MARGINS, PAGE_MARGINS, PAGE_SPACING, PANEL_MARGINS
+
+    problems: list[str] = []
+    wanted = tuple(PAGE_MARGINS)
+    panel_margins = {tuple(PANEL_MARGINS), tuple(DETAIL_MARGINS)}
+    legacy_accents = ("#0a84ff", "#0078d4", "rgba(10, 132, 255", "rgba(0, 120, 212")
+
+    for name in PAGES:
+        page = getattr(window, name)
+        holder = page.widget() if hasattr(page, "widget") else page
+        layout = holder.layout()
+        if layout is None:
+            problems.append(f"{name} 没有页面布局")
+            continue
+
+        box = layout.contentsMargins()
+        margins = (box.left(), box.top(), box.right(), box.bottom())
+        if margins != wanted or layout.spacing() != PAGE_SPACING:
+            problems.append(
+                f"{name} 页面边距/间距为 {margins}/{layout.spacing()}，应为 {wanted}/{PAGE_SPACING}"
+            )
+
+        for widget in holder.findChildren(QPushButton):
+            # Fluent 的 PushButton 也是 QPushButton 的子类，只有 Python 类名仍为 QPushButton 的才是原生按钮。
+            if type(widget).__name__ == "QPushButton":
+                problems.append(f"{name} 使用了原生 QPushButton：{widget.text()}")
+
+        for widget in holder.findChildren(QWidget):
+            stylesheet = widget.styleSheet()
+            for legacy in legacy_accents:
+                if legacy in stylesheet:
+                    problems.append(f"{name} 的 {type(widget).__name__} 仍写死强调色 {legacy}")
+
+        for index in range(layout.count()):
+            card = layout.itemAt(index).widget()
+            if not isinstance(card, CardWidget) or card.layout() is None:
+                continue
+            box = card.layout().contentsMargins()
+            got = (box.left(), box.top(), box.right(), box.bottom())
+            if got not in panel_margins:
+                problems.append(f"{name} 的面板卡片边距为 {got}，应为 {PANEL_MARGINS} 或 {DETAIL_MARGINS}")
+    return problems
+
+
+def _check_theme_background(app, window) -> list[str]:
+    """切成浅色后不允许还有「按旧调色板实绘深色」的控件（运行时切主题最容易漏）。"""
+    from qfluentwidgets import Theme, isDarkTheme, setTheme
+
+    problems: list[str] = []
+    restore_theme = Theme.DARK if isDarkTheme() else Theme.LIGHT
+    restore_page = window.stackedWidget.currentWidget()
+    setTheme(Theme.LIGHT)
+    app.processEvents()
+    try:
+        for name in PAGES:
+            page = getattr(window, name)
+            window.switchTo(page)
+            app.processEvents()
+
+            seen: set[str] = set()
+            for widget in page.findChildren(QWidget):
+                if not widget.isVisible() or widget.width() * widget.height() < 400:
+                    continue
+                if not widget.autoFillBackground():
+                    continue
+                color = widget.palette().color(QPalette.ColorRole.Window)
+                if color.lightness() >= 90:
+                    continue
+                label = f"{type(widget).__name__}({widget.objectName()})"
+                if label in seen:
+                    continue
+                seen.add(label)
+                problems.append(f"{name} 的 {label} 仍按旧调色板实绘深色 {color.name()}")
+    finally:
+        setTheme(restore_theme)
+        app.processEvents()
+        if restore_page is not None:
+            window.switchTo(restore_page)
+            app.processEvents()
+    return problems
 
 
 def _check_home_stats(window) -> list[str]:
@@ -1527,8 +1614,10 @@ def main() -> int:
         ("recent_focus", lambda: _check_recent_focus(app, window)),
         ("settings_extras", lambda: _check_settings_extras(window)),
         ("filter_sections", lambda: _check_filter_sections(app, window)),
+        ("style_uniformity", lambda: _check_style_uniformity(window)),
         ("plugin_pages", lambda: _check_plugin_pages(window)),
         ("image_viewer", lambda: _check_image_viewer(window)),
+        ("theme_background", lambda: _check_theme_background(app, window)),
     ):
         try:
             problems = check()

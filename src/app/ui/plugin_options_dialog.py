@@ -32,7 +32,7 @@ from ..core.plugins import PluginInfo
 from ..core.signals import signalBus
 from ..services.open_with_service import OPEN_WITH_EXTENSION, open_with_api
 from ..services.plugin_service import plugin_service
-from .common import toast_error, toast_success
+from .common import clear_scroll_background, toast_error, toast_success
 
 
 class PluginOptionsDialog(MessageBoxBase):
@@ -66,6 +66,7 @@ class PluginOptionsDialog(MessageBoxBase):
             layout.addWidget(CaptionLabel("该插件还没有声明可配置的选项，也没有可指定的打开方式。", holder))
         layout.addStretch(1)
         area.setWidget(holder)
+        clear_scroll_background(area)
         self.viewLayout.addWidget(area)
 
         self.reset_button = PushButton(FluentIcon.RETURN, "恢复默认", self)

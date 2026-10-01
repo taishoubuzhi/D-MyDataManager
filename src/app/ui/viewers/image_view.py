@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidg
 from qfluentwidgets import CaptionLabel, FluentIcon, ToolButton
 
 from ...core.viewer_data import IMAGE_EXTENSIONS, human_size, image_info
+from ..common import clear_scroll_background
 
 ZOOM_STEP = 1.25
 ZOOM_MIN = 0.05
@@ -107,6 +108,7 @@ class ImageViewer(QWidget):
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._scroll = QScrollArea(self)
         self._scroll.setWidget(self._label)
+        clear_scroll_background(self._scroll)
         self._scroll.setWidgetResizable(True)
         self._scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._scroll, 1)

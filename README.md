@@ -4,7 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.13%2B-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.11.0-41cd52)
-![tests](https://img.shields.io/badge/tests-304%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-363%20passed-brightgreen)
 
 一个**纯本地**的个人数据管理器，基于 **PyQt6 + PyQt6-Fluent-Widgets** 构建。它把散落在电脑里的资料
 （文档、图片、视频、音频、代码、压缩包……）集中到一个「库文件夹」中统一管理，提供导入、分类树、
@@ -52,6 +52,7 @@
 | 用户与口令 | 口令按用户独立保存（PBKDF2-HMAC-SHA256，20 万次迭代，散列工具见 `src/app/core/security.py`）：切换用户、勾选「显示隐藏项」时校验当前用户口令 |
 | 设置 | 主题（浅色 / 深色 / 跟随系统）、云母特效、导入策略、库文件夹、存档自动清理、日志文件模式（单文件追加 / 每次启动一个文件 / 每天一个文件 / 按大小切分）与保留策略（文件数 / 单文件大小 / 保留天数 / 总量上限）、日志级别、控制台按级别着色（INFO 绿 / WARNING 黄 / ERROR 红，写 `stdout` 避免 IDE 把整行 `stderr` 标红）、恢复初始化（清空数据并重置全部设置，完成后自动重启） |
 | 交互反馈 | 长耗时操作（导入 / 扫描库文件夹 / 创建存档 / 重建索引）显示进行中提示并自动淡出；「重复项」按钮的工具提示显示当前范围的重复组数量；概览页「最近导入」条目可点击，跳转到数据管理页并选中该项、展开其分类；图标按钮带工具提示；窗口首次显示时自动居中 |
+| 界面样式 | 所有页面共用同一套骨架：外边距 24/20、间距 12、面板卡片 12/12/12/12 或 16/14/16/14、统一的标题行与说明文字；按钮只用 qfluentwidgets 的 `PrimaryPushButton` / `PushButton`（设置页的 `ActionCard` 原地替换了 `PushSettingCard` 自带的原生按钮）；强调色统一取主题色 `themeColor()`（默认 `#009faa`），不再有写死的蓝/青；页面底色由 `page_background()` 写一对浅/深 QSS、滚动视口由 `clear_scroll_background()` 保持透明，切浅色后不会再露出旧调色板的深色块；常量与构件集中在 `src/app/ui/common.py`，`dev_check_ui.py` 的 `style_uniformity` / `theme_background` 会逐页校验 |
 
 ## 界面预览
 
@@ -215,9 +216,9 @@ icons/                        打包用图标（icon.ico / icon.png）
 自动还原，所以随时可以重跑而不会弄丢已导入的数据。无图形界面的环境可先设
 `$env:QT_QPA_PLATFORM='offscreen'`。
 
-`dev_check_ui.py` 当前包含 28 项界面回归检查（首页统计、筛选栏、固定「未分类」分类（排最后 / 带固定标识 / 无修改入口）、数据管理页单击选中与双击打开 / Ctrl 与 Shift 连选 / 三态全选框 / 批量移动入口、导入页分类、导入页用户范围（只有默认用户能替别人导入）、标签多选、关键词筛选与展示、
+`dev_check_ui.py` 当前包含 30 项界面回归检查（首页统计、筛选栏、固定「未分类」分类（排最后 / 带固定标识 / 无修改入口）、数据管理页单击选中与双击打开 / Ctrl 与 Shift 连选 / 三态全选框 / 批量移动入口、导入页分类、导入页用户范围（只有默认用户能替别人导入）、标签多选、关键词筛选与展示、
 标签页权限、标签页逐列筛选与重置、批量导入（含真实文件夹导入与进度/结果）、单库布局、全局标签标识、用户卡片与当前用户高亮、
-最近导入跳转、清除口令权限、筛选分组折叠与三态全选、工具栏流式布局、存档标记、存档表格筛选与分页、
+最近导入跳转、清除口令权限、筛选分组折叠与三态全选、工具栏流式布局、存档标记、存档表格筛选与分页、页面样式统一（每页边距/间距、面板边距、无原生 QPushButton、无写死强调色）、主题底色跟随（切浅色后没有任何控件仍按旧调色板实绘深色）、
 打开方式页、插件页、图片查看器自适应等）。
 
 ### 单元测试
@@ -228,7 +229,7 @@ icons/                        打包用图标（icon.ico / icon.png）
 $env:DM_KEEP_TMP=1                                              # 保留 tests/_tmp/ 便于排查
 ```
 
-- 共 **304 个用例**，每个用例都会在 `tests/_tmp/<用例类名>/` 下重建数据库与库文件夹（库、仓库、封面、导出），
+- 共 **363 个用例**，每个用例都会在 `tests/_tmp/<用例类名>/` 下重建数据库与库文件夹（库、仓库、封面、导出），
   互不影响，也不会碰真实的 `resources/`、`config/`、`logs/`。
 - `tests/dataset.py` 生成一份多样化语料并写入临时目录：真实编码的 PNG / JPEG / WEBP / TIFF / 动画 GIF / ICO、
   伪造魔数的视频与音频、真实 ZIP / TAR / WAV / SQLite / PDF、docx / xlsx / pptx / odt / epub，
@@ -282,7 +283,7 @@ git push origin v1.0.0
 - 发现 Bug 或有功能建议，欢迎开 [Issue](https://github.com/taishoubuzhi/D-MyDataManager/issues)；
   提 Issue 时请附上系统版本、Python 版本与 `logs/` 中对应的日志片段。
 - 提交代码前请确保：`.venv\Scripts\python.exe -m compileall -q src` 无输出、
-  304 个单元测试全部通过、四个自检脚本 `RESULT failures=0`。
+  363 个单元测试全部通过、四个自检脚本 `RESULT failures=0`。
 - 代码风格：界面文案与注释使用中文；分层保持 `ui → services → repositories → db` 单向依赖。
 
 ## 许可证

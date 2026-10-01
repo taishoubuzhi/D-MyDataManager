@@ -21,7 +21,6 @@ from qfluentwidgets import (
     StrongBodyLabel,
     SwitchSettingCard,
     Theme,
-    TitleLabel,
     setTheme,
 )
 
@@ -31,7 +30,20 @@ from ...core.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
-from ..common import BusyTip, confirm, restart_application, toast_success, toast_warning
+from ..common import (
+    DETAIL_MARGINS,
+    BusyTip,
+    confirm,
+    clear_scroll_background,
+    page_background,
+    page_header,
+    page_layout,
+    panel_card,
+    release_widget,
+    restart_application,
+    toast_success,
+    toast_warning,
+)
 
 APP_VERSION = "0.1.0"
 
@@ -53,6 +65,18 @@ class ComboSettingCard(SettingCard):
         self.hBoxLayout.addSpacing(16)
 
 
+class ActionCard(PushSettingCard):
+    """设置卡上的操作按钮：换成 Fluent PushButton，避免全站混入原生 QPushButton。"""
+
+    def __init__(self, text, icon, title: str, content: str, parent=None) -> None:
+        super().__init__(text, icon, title, content, parent)
+        index = self.hBoxLayout.indexOf(self.button)
+        release_widget(self.button)
+        self.button = PushButton(text, self)
+        self.hBoxLayout.insertWidget(index, self.button, 0, Qt.AlignmentFlag.AlignRight)
+        self.button.clicked.connect(self.clicked)
+
+
 class SettingsPage(ScrollArea):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -60,10 +84,9 @@ class SettingsPage(ScrollArea):
         self.session = database.new_session()
 
         host = QWidget(self)
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(36, 30, 36, 30)
-        layout.setSpacing(16)
-        layout.addWidget(TitleLabel("设置", host))
+        page_background(host, "settingsHost")
+        layout = page_layout(host)
+        page_header(layout, host, "设置")
 
         layout.addWidget(self._appearance_group(host))
         layout.addWidget(self._import_group(host))
@@ -76,6 +99,7 @@ class SettingsPage(ScrollArea):
         layout.addStretch(1)
 
         self.setWidget(host)
+        clear_scroll_background(self, inner=False)
         self.setWidgetResizable(True)
 
     # ------------------------------------------------------------------ 分组
@@ -153,12 +177,12 @@ class SettingsPage(ScrollArea):
     def _storage_group(self, parent: QWidget) -> SettingCardGroup:
         group = SettingCardGroup("存储", parent)
 
-        pick_export = PushSettingCard("选择目录", FluentIcon.SAVE, "默认导出目录", str(export_dir()), group)
+        pick_export = ActionCard("选择目录", FluentIcon.SAVE, "默认导出目录", str(export_dir()), group)
         pick_export.clicked.connect(self._choose_export_dir)
         self._export_card = pick_export
         group.addSettingCard(pick_export)
 
-        open_logs = PushSettingCard("打开目录", FluentIcon.DOCUMENT, "日志目录", str(paths.LOG_DIR), group)
+        open_logs = ActionCard("打开目录", FluentIcon.DOCUMENT, "日志目录", str(paths.LOG_DIR), group)
         open_logs.clicked.connect(lambda: self._open_path(paths.LOG_DIR))
         group.addSettingCard(open_logs)
 
@@ -198,7 +222,7 @@ class SettingsPage(ScrollArea):
             group.addSettingCard(card)
         self._sync_prune_cards()
 
-        rebuild_index = PushSettingCard("重建索引", FluentIcon.SYNC, "全文检索索引", "检索结果异常时重建索引", group)
+        rebuild_index = ActionCard("重建索引", FluentIcon.SYNC, "全文检索索引", "检索结果异常时重建索引", group)
         rebuild_index.clicked.connect(self._rebuild_search_index)
         group.addSettingCard(rebuild_index)
         return group
@@ -299,7 +323,7 @@ class SettingsPage(ScrollArea):
 
     def _maintenance_group(self, parent: QWidget) -> SettingCardGroup:
         group = SettingCardGroup("维护", parent)
-        reset_card = PushSettingCard(
+        reset_card = ActionCard(
             "恢复初始化",
             FluentIcon.DELETE,
             "恢复初始化",
@@ -400,7 +424,7 @@ class SettingsPage(ScrollArea):
     def _library_group(self, parent: QWidget) -> SettingCardGroup:
         group = SettingCardGroup("库文件夹", parent)
 
-        self._path_card = PushSettingCard(
+        self._path_card = ActionCard(
             "更改位置",
             FluentIcon.FOLDER,
             "库文件夹位置",
@@ -410,7 +434,7 @@ class SettingsPage(ScrollArea):
         self._path_card.clicked.connect(self._change_library_path)
         group.addSettingCard(self._path_card)
 
-        scan_card = PushSettingCard(
+        scan_card = ActionCard(
             "扫描并登记",
             FluentIcon.SYNC,
             "扫描库文件夹",
@@ -420,7 +444,7 @@ class SettingsPage(ScrollArea):
         scan_card.clicked.connect(self._scan_library)
         group.addSettingCard(scan_card)
 
-        rebuild_card = PushSettingCard(
+        rebuild_card = ActionCard(
             "重建目录结构",
             FluentIcon.FOLDER_ADD,
             "重建目录结构",
@@ -430,7 +454,7 @@ class SettingsPage(ScrollArea):
         rebuild_card.clicked.connect(self._rebuild_layout)
         group.addSettingCard(rebuild_card)
 
-        open_card = PushSettingCard(
+        open_card = ActionCard(
             "打开文件夹",
             FluentIcon.LINK,
             "打开库文件夹",
@@ -442,9 +466,7 @@ class SettingsPage(ScrollArea):
         return group
 
     def _library_card(self, parent: QWidget) -> CardWidget:
-        card = CardWidget(parent)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
+        card, layout = panel_card(parent, DETAIL_MARGINS)
         layout.setSpacing(8)
         layout.addWidget(StrongBodyLabel("库内容", card))
         self._library_layout = QVBoxLayout()
@@ -458,7 +480,7 @@ class SettingsPage(ScrollArea):
         while self._library_layout.count():
             widget = self._library_layout.takeAt(0).widget()
             if widget is not None:
-                widget.deleteLater()
+                release_widget(widget)
         service = LibraryService(self.session)
         library = service.ensure_default()
         self._path_card.setContent(str(library.path))

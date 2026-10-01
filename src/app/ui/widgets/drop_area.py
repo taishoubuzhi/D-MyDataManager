@@ -8,16 +8,22 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PushButton
 
-_FRAME_QSS = """
-#dropFrame {
+from ..common import accent_color
+
+
+def _frame_qss() -> str:
+    """拖放框样式：普通状态是灰色虚线，拖入时换成主题强调色。"""
+    color = accent_color()
+    return f"""
+#dropFrame {{
     border: 2px dashed rgba(128, 128, 128, 0.55);
     border-radius: 8px;
     background: rgba(128, 128, 128, 0.06);
-}
-#dropFrame[dropActive="true"] {
-    border: 2px dashed #0a84ff;
-    background: rgba(10, 132, 255, 0.12);
-}
+}}
+#dropFrame[dropActive="true"] {{
+    border: 2px dashed {color.name()};
+    background: rgba({color.red()}, {color.green()}, {color.blue()}, 0.12);
+}}
 """
 
 
@@ -33,7 +39,7 @@ class DropArea(QWidget):
 
         self._frame = QFrame(self)
         self._frame.setObjectName("dropFrame")
-        self._frame.setStyleSheet(_FRAME_QSS)
+        self._frame.setStyleSheet(_frame_qss())
         self._frame.setMinimumHeight(140)
 
         icon_label = QFrame(self._frame)

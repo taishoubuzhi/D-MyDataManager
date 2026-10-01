@@ -33,7 +33,19 @@ from qfluentwidgets import (
 from ...core.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
-from ..common import confirm, format_datetime, toast_success, toast_warning
+from ..common import (
+    DETAIL_MARGINS,
+    accent_color,
+    accent_name,
+    confirm,
+    format_datetime,
+    clear_scroll_background,
+    page_background,
+    page_layout,
+    release_widget,
+    toast_success,
+    toast_warning,
+)
 from ..dialogs import TextInputDialog
 
 # 卡片网格参数：卡片固定宽度，窄窗口 1 列，宽窗口最多 4 列。
@@ -45,26 +57,39 @@ CARD_SPACING = 12
 # 卡片内部结构：首字头像 + 两列操作按钮网格。
 CARD_BUTTON_COLUMNS = 2
 AVATAR_SIZE = 40
-AVATAR_ACCENT_STYLE = (
-    "background-color: #0078d4; color: white; border-radius: 8px;"
-    "font-size: 18px; font-weight: 600;"
-)
 AVATAR_PLAIN_STYLE = (
     "background-color: rgba(128, 128, 128, 0.25); color: palette(text);"
     "border-radius: 8px; font-size: 18px; font-weight: 600;"
-)
-
-# 徽标配色（当前用户用主题蓝，其余用中性灰）。
-BADGE_ACCENT_STYLE = (
-    "color: white; background-color: #0078d4;"
-    "border-radius: 8px; padding: 1px 8px;"
 )
 BADGE_PLAIN_STYLE = (
     "color: palette(text); background-color: rgba(128, 128, 128, 0.18);"
     "border-radius: 8px; padding: 1px 8px;"
 )
-HIGHLIGHT_BORDER = QColor(0, 120, 212)
-HIGHLIGHT_FILL = QColor(0, 120, 212, 28)
+
+
+def avatar_accent_style() -> str:
+    """首字头像的强调色样式（跟随主题色）。"""
+    return (
+        f"background-color: {accent_name()}; color: white; border-radius: 8px;"
+        "font-size: 18px; font-weight: 600;"
+    )
+
+
+def badge_accent_style() -> str:
+    """「当前用户」徽标的强调色样式（跟随主题色）。"""
+    return f"color: white; background-color: {accent_name()}; border-radius: 8px; padding: 1px 8px;"
+
+
+def highlight_fill() -> QColor:
+    """当前用户卡片的浅色填充（主题色 11% 不透明度）。"""
+    color = accent_color()
+    return QColor(color.red(), color.green(), color.blue(), 28)
+
+
+def highlight_hover() -> QColor:
+    """当前用户卡片悬停时的填充。"""
+    color = accent_color()
+    return QColor(color.red(), color.green(), color.blue(), 40)
 
 
 # ---------------------------------------------------------------------- 纯逻辑
@@ -158,12 +183,12 @@ class UserCard(CardWidget):
 
     def _normalBackgroundColor(self) -> QColor:  # noqa: N802 - Qt 命名
         if self._highlighted:
-            return HIGHLIGHT_FILL
+            return highlight_fill()
         return super()._normalBackgroundColor()
 
     def _hoverBackgroundColor(self) -> QColor:  # noqa: N802 - Qt 命名
         if self._highlighted:
-            return QColor(0, 120, 212, 40)
+            return highlight_hover()
         return super()._hoverBackgroundColor()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
@@ -172,7 +197,7 @@ class UserCard(CardWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(HIGHLIGHT_BORDER)
+        pen = QPen(accent_color())
         pen.setWidth(2)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -186,6 +211,7 @@ class UserPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("userPage")
+        page_background(self, "userPage")
         self.session = database.new_session()
         self.service = UserService(self.session)
         self._user_id = 0
@@ -193,9 +219,7 @@ class UserPage(QWidget):
         self._cards: list[UserCard] = []
         self._columns = 0
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
+        root = page_layout(self)
 
         header = QHBoxLayout()
         header.addWidget(TitleLabel("用户", self))
@@ -218,6 +242,9 @@ class UserPage(QWidget):
         self.grid.setHorizontalSpacing(CARD_SPACING)
         self.grid.setVerticalSpacing(CARD_SPACING)
         self.scroll.setWidget(self.grid_host)
+        clear_scroll_background(self.scroll, inner=False)
+        page_background(self.scroll, "userScroll")
+        page_background(self.grid_host, "userGridHost")
         self.scroll.viewport().installEventFilter(self)
         root.addWidget(self.scroll, 1)
 
@@ -249,7 +276,7 @@ class UserPage(QWidget):
         )
         for card in self._cards:
             self.grid.removeWidget(card)
-            card.deleteLater()
+            release_widget(card)
         self._cards = []
         for info in self.service.list_users():
             card = self._user_card(info)
@@ -308,7 +335,7 @@ class UserPage(QWidget):
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(10)
 
         # ① 首字头像 + 用户名与徽标，② 摘要。
@@ -327,7 +354,7 @@ class UserPage(QWidget):
             is_current=mine, is_default=info.is_default, protected=info.protected
         ):
             label = CaptionLabel(badge, card)
-            label.setStyleSheet(BADGE_ACCENT_STYLE if badge == "当前用户" else BADGE_PLAIN_STYLE)
+            label.setStyleSheet(badge_accent_style() if badge == "当前用户" else BADGE_PLAIN_STYLE)
             title_row.addWidget(label)
         title_row.addStretch(1)
         info_box.addLayout(title_row)
@@ -401,7 +428,7 @@ class UserPage(QWidget):
         avatar = QLabel((info.name or "?")[:1], self)
         avatar.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet(AVATAR_ACCENT_STYLE if highlighted else AVATAR_PLAIN_STYLE)
+        avatar.setStyleSheet(avatar_accent_style() if highlighted else AVATAR_PLAIN_STYLE)
         return avatar
 
     def _equalize_card_heights(self) -> None:

@@ -199,7 +199,38 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 动态重建列表时，摘掉旧控件必须走 `src/app/ui/common.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
 PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘掉的条目都会变成一闪而过的小顶层窗口（`ManagePage._clear_layout()`、
-`HomePage._clear()`、`FilterSection.set_items()` 均已改用）。
+`HomePage._clear()`、`FilterSection.set_items()`、`UserPage.refresh()` 的旧卡片、`SettingsPage._refresh_libraries()` 的旧行、
+`TableFilterBar.configure()` 的旧筛选控件、`ItemCard.set_tags()` 的旧标签块均已改用）。只 `deleteLater()` 的旧控件会作为子控件继续留在界面上
+（且 Python 侧的类身份会丢失），所以「先隐藏、再断父级」这一步不能省。
+
+## 界面样式统一
+
+页面骨架尺寸统一取自「插件管理 / 打开方式管理 / 存档管理 / 标签管理」这一套风格，常量与构件都在 `src/app/ui/common.py`：
+
+- `PAGE_MARGINS = (24, 20, 24, 20)`、`PAGE_SPACING = 12`：所有页面的外层边距与间距（`page_layout(page)` 直接建好这个 `QVBoxLayout`）；
+- `PANEL_MARGINS = (12, 12, 12, 12)`：列表面板卡片；`DETAIL_MARGINS = (16, 14, 16, 14)`：详情 / 表单卡片；
+  `panel_card(parent, margins=..., spacing=...)` 返回 `(CardWidget, 卡内竖直布局)`；
+- `page_header(root, page, 标题, 说明)`：统一的标题行（`TitleLabel` + 弹簧，右侧留给主操作按钮）与下方说明文字；
+- `accent_color()` / `accent_name()`：主题强调色（包 `qfluentwidgets.themeColor()`，默认 `#009faa`），
+  禁止在 QSS 里写死强调色——自定义控件（用户卡片头像与徽标、选中指示条、拖放框、关键词块）都改成按主题取色。
+
+按钮一律用 qfluentwidgets 的 `PrimaryPushButton`（主操作）与 `PushButton`（次操作），不要用原生 `QPushButton`：
+设置页的 `PushSettingCard` 自带原生按钮，已用 `SettingsPage` 里的 `ActionCard`（继承它并换成 `PushButton`）替换。
+`scripts/dev_check_ui.py` 的 `style_uniformity` 检查会逐页断言边距 / 间距、面板卡片边距、没有原生 `QPushButton`、QSS 里没有写死的强调色。
+
+### 主题底色（浅色 / 深色跟随）
+
+qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`：凡是按 Qt 调色板实绘底色的控件（`QScrollArea` 视口、`setWidget()` 之后被重新打开
+`autoFillBackground` 的宿主、表头等），运行时切到浅色后仍然是深色 —— 表现就是「除少数页面外，其余页面底部背景发黑」。约定：
+
+- `install_app_theme()`：`src/main.py` 在 `_apply_theme()` 之后调用，把 `theme_palette()` 装到 `QApplication` 并挂在 `qconfig.themeChangedFinished` 上，
+  切主题时同步换调色板（启动时就装好，之后新建的控件才会拿到正确调色板）；
+- `page_background(widget, name)`：页面级底色，写一对 `#f0f4f9` / `#202020` 的 QSS（随主题自动切换），宿主控件不再依赖调色板；
+- `clear_background(widget)`：卡片内部的容器保持透明；`clear_scroll_background(area, inner=True)`：滚动区域连视口一起透明化
+  （`qt_scrollarea_viewport` 默认 `autoFillBackground=True`，不清就会漏出一整块深色）；页面级滚动条的宿主已经有 `page_background` 时传 `inner=False`，只清视口；
+- `setCustomStyleSheet(widget, light, dark)` 只设属性，没注册过的控件等于没做；必须走
+  `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`page_background` / `clear_background` 内部就是这么写的）。
+`scripts/dev_check_ui.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」。
 
 ## 默认标签
 
@@ -238,7 +269,9 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），`PluginService.load_viewers()` 在启动时
 （`src/main.py`）清空 `ViewerRegistry` 与 `ExtensionRegistry`，按依赖顺序载入所有已启用插件（非查看器插件也要载入，它们负责
 `api.provide()` 扩展接口），单个插件出错只把错误记在该插件上。插件之间的依赖由 `src/app/core/plugins.py` 的 `sort_by_dependency()`
-拓扑排序，缺依赖、依赖未启用或循环依赖都会让插件标为「异常」并强制禁用。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
+拓扑排序，缺依赖、依赖未启用或循环依赖都会让插件标为「异常」并强制禁用。启动日志由 `PluginService.loaded_summary()` 汇总
+（`src/main.py` 的 `logger.info(plugin_service.loaded_summary(viewers))`），形如「共载入 11 个插件（内置 11 个、外部 0 个）：打开方式 7 个、
+插件类型 3 个、弹窗页面 1 个；共注册 7 个查看器」——总数、内置 / 外部来源与各插件类型的数量一眼可见。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
 文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
 
 插件协议（`plugins/<id>/plugin.json`）：
