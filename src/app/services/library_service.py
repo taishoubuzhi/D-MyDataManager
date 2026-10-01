@@ -29,6 +29,7 @@ from ..repositories import (
     UserRepository,
 )
 from .blob_store import BlobStore
+from .privacy_service import guarded, privacy
 
 _INVALID_CHARS = '<>:"/\\|?*'
 
@@ -62,7 +63,7 @@ class LibraryService:
         root = library_root()
         library = self.libraries.default() or next(iter(self.libraries.all()), None)
         if library is None:
-            root.mkdir(parents=True, exist_ok=True)
+            paths.make_dir(root)
             library = self.libraries.create(
                 "默认库", str(root), description="唯一的库文件夹，用于存放用户数据与全局资源", is_default=True,
             )
@@ -97,6 +98,7 @@ class LibraryService:
     def item_count(self, library: Library) -> int:
         return self.libraries.item_count(library)
 
+    @guarded
     def rebuild_layout(self) -> dict[str, Path]:
         """重建全局文件夹与所有用户的用户名文件夹。"""
         library = self.ensure_default()
@@ -104,6 +106,7 @@ class LibraryService:
         created.update({user.name: self.user_dir(library, user) for user in self.users.list_all()})
         return created
 
+    @guarded
     def set_path(self, new_path: str | Path) -> Path:
         """修改唯一库文件夹的位置，并把已有内容整体搬过去。"""
         library = self.ensure_default()
@@ -114,15 +117,10 @@ class LibraryService:
         if new.exists() and any(new.iterdir()):
             raise ValueError(f"目标文件夹不是空的：{new}")
         if old.is_dir():
-            new.parent.mkdir(parents=True, exist_ok=True)
+            paths.make_dir(new.parent)
             shutil.move(str(old), str(new))
         else:
-            new.mkdir(parents=True, exist_ok=True)
-        from qfluentwidgets import qconfig
-
-        from ..core.config import config
-
-        qconfig.set(config.libraryPath, str(new))
+            paths.make_dir(new)
         library.path = str(new)
         self.ensure_layout(library)
         self.session.flush()
@@ -146,12 +144,13 @@ class LibraryService:
     def backup_dir(self, library: Library) -> Path:
         return self.global_dir(library) / paths.LIBRARY_BACKUP_DIRNAME
 
+    @guarded
     def ensure_layout(self, library: Library) -> None:
         """建立全局文件夹与每个用户的用户名文件夹（幂等）。"""
         for directory in paths.global_subdirs(Path(library.path)):
-            directory.mkdir(parents=True, exist_ok=True)
+            paths.make_dir(directory)
         for user in self.users.list_all():
-            self.user_dir(library, user).mkdir(parents=True, exist_ok=True)
+            paths.make_dir(self.user_dir(library, user))
 
     def user_dir(self, library: Library, user: User) -> Path:
         """该用户在库内的用户名文件夹。"""
@@ -169,6 +168,7 @@ class LibraryService:
         user = self.session.get(User, user_id) if user_id else None
         return sanitize_dir_name(user.name) if user is not None else paths.UNASSIGNED_DIR_NAME
 
+    @guarded
     def rename_user_dir(self, user: User, old_name: str) -> Path | None:
         """用户改名后同步重命名其用户名文件夹，并改写其数据项的库内路径。"""
         library = self.ensure_default()
@@ -183,7 +183,7 @@ class LibraryService:
                 self._move_into(old, new)
             else:
                 old.rename(new)
-        new.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(new)
         prefix = f"{old_dir_name}/"
         updated = 0
         for item in self.session.scalars(
@@ -199,6 +199,7 @@ class LibraryService:
         """用户名 / 分类名对应的目录名。"""
         return sanitize_dir_name(name)
 
+    @guarded
     def relocate_user_dir(self, library: Library, old_name: str, new_parent: str) -> Path:
         """把用户文件夹整目录搬进另一个用户目录下（删除用户时保留其分类结构）。"""
         old_dir_name = sanitize_dir_name(old_name)
@@ -208,11 +209,12 @@ class LibraryService:
             if target.exists():
                 self._move_into(source, target)
             else:
-                target.parent.mkdir(parents=True, exist_ok=True)
+                paths.make_dir(target.parent)
                 source.rename(target)
             logger.info("用户文件夹已并入：{} -> {}", old_dir_name, target)
         return target
 
+    @guarded
     def remove_user_dir(self, library: Library, name: str) -> bool:
         """删除用户的用户名文件夹；目录里还有文件时保留（返回 False）。"""
         directory = Path(library.path) / sanitize_dir_name(name)
@@ -251,7 +253,7 @@ class LibraryService:
         base = self.directory_for(library, category_id, user_id)
         if subdir:
             base = base.joinpath(*(part for part in Path(subdir).parts if part not in ("", ".", "..")))
-        base.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(base)
         stem, suffix = Path(filename).stem or "未命名", Path(filename).suffix
         candidate = base / f"{stem}{suffix}"
         index = 1
@@ -268,9 +270,53 @@ class LibraryService:
             return None
         return Path(library.path) / item.file_path
 
+    # ---------------------------------------------------------------- 隐藏数据
+    def hidden_dir(self, library: Library, category_id: int | None, user_id: int | None = None) -> Path:
+        """隐藏数据的物理目录：<分类目录>/.hiddens。"""
+        return self.directory_for(library, category_id, user_id) / paths.HIDDEN_DIR_NAME
+
+    @guarded
+    def set_item_hidden(self, item, hidden: bool) -> None:
+        """按隐藏位在 <分类目录> 与 <分类目录>/.hiddens 之间搬动文件并改写库内路径。"""
+        library = item.library or (self.libraries.get(item.library_id) if item.library_id else None)
+        library = library or self.ensure_default()
+        previous = Path(library.path) / item.file_path if item.file_path else None
+        if previous is not None:
+            directory = (
+                self.hidden_dir(library, item.category_id, item.user_id)
+                if hidden
+                else self.directory_for(library, item.category_id, item.user_id)
+            )
+            paths.make_dir(directory)
+            candidate = directory / previous.name
+            index = 1
+            while candidate.exists() and candidate != previous:
+                candidate = directory / f"{previous.stem}_{index}{previous.suffix}"
+                index += 1
+            if candidate != previous and previous.exists():
+                previous.replace(candidate)
+            item.file_path = candidate.relative_to(Path(library.path)).as_posix()
+        item.is_hidden = bool(hidden)
+        self.session.flush()
+        privacy.invalidate()
+        if not hidden and previous is not None:
+            self._prune_empty_hidden(previous.parent)
+
+    def _prune_empty_hidden(self, directory: Path) -> None:
+        """隐藏目录空了就删掉，避免库里留下大量空 .hiddens 目录。"""
+        if directory.name != paths.HIDDEN_DIR_NAME or not directory.is_dir():
+            return
+        try:
+            directory.rmdir()
+            privacy.invalidate()
+            logger.info("已清理空的隐藏目录：{}", directory)
+        except OSError:
+            pass
+
+    @guarded
     def _move_into(self, source: Path, target: Path) -> None:
         """把 source 目录的内容合并进 target（改名或迁移时的冲突处理）。"""
-        target.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(target)
         for entry in sorted(source.iterdir()):
             destination = target / entry.name
             if entry.is_dir() and destination.is_dir():
@@ -286,6 +332,7 @@ class LibraryService:
             pass
 
     # ---------------------------------------------------------------- 扫描
+    @guarded
     def scan(self, library: Library, *, category_id: int | None = None, recursive: bool = True):
         """把库文件夹里已有的文件登记为数据项（只登记用户名文件夹下的文件）。"""
         from .import_service import ImportResult, ImportService
@@ -303,7 +350,14 @@ class LibraryService:
             if not path.is_file():
                 continue
             parts = path.relative_to(root).parts
-            if any(part.startswith(".") for part in parts) or parts[0] == paths.GLOBAL_DIR_NAME:
+            if parts[0] == paths.GLOBAL_DIR_NAME:
+                continue
+            hidden = paths.HIDDEN_DIR_NAME in parts[1:-1]
+            dir_parts = list(parts[1:-1])
+            if hidden:
+                # <分类链>/.hiddens/<文件>：.hiddens 之后不再参与分类匹配
+                dir_parts = dir_parts[: dir_parts.index(paths.HIDDEN_DIR_NAME)]
+            if any(part.startswith(".") for part in dir_parts):
                 continue
             rel = path.relative_to(root).as_posix()
             if rel in known:
@@ -315,11 +369,12 @@ class LibraryService:
                 result.skipped.append(rel)
                 continue
             target_category = (
-                category_id if category_id is not None else self._match_category(parts[1:-1], owner.id)
+                category_id if category_id is not None else self._match_category(tuple(dir_parts), owner.id)
             )
             try:
                 item = service.register_file(
-                    path, library=library, rel_path=rel, category_id=target_category, user_id=owner.id,
+                    path, library=library, rel_path=rel, category_id=target_category,
+                    user_id=owner.id, is_hidden=hidden,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("登记库文件失败：{}", path)

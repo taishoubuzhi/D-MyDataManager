@@ -27,7 +27,7 @@ from .library_service import LibraryService, sanitize_dir_name
 
 def _move_into(source: Path, target: Path) -> None:
     """把 source 目录的内容合并进 target 目录。"""
-    target.mkdir(parents=True, exist_ok=True)
+    paths.make_dir(target)
     for entry in sorted(source.iterdir()):
         destination = target / entry.name
         if entry.is_dir() and destination.is_dir():
@@ -93,7 +93,7 @@ def migrate_layout(session: Session) -> dict:
     ):
         if not legacy.is_dir() or legacy.resolve() == target_dir.resolve():
             continue
-        target_dir.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(target_dir)
         count = sum(1 for path in legacy.rglob("*") if path.is_file())
         _move_into(legacy, target_dir)
         stats["store" if "store" in legacy.name else "covers"] = count
@@ -119,7 +119,7 @@ def migrate_layout(session: Session) -> dict:
             logger.warning("迁移跳过（源文件不存在）：{}", source)
             continue
         destination = root / target_rel
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(destination.parent)
         shutil.move(str(source), str(destination))
         item.file_path = target_rel
         stats["moved"] += 1
@@ -132,7 +132,7 @@ def migrate_layout(session: Session) -> dict:
             except OSError:
                 pass
 
-    marker.parent.mkdir(parents=True, exist_ok=True)
+    paths.make_dir(marker.parent)
     marker.write_text(
         json.dumps(
             {"version": paths.LAYOUT_VERSION, "at": dt.datetime.now().isoformat(timespec="seconds"), "stats": stats},
@@ -176,7 +176,7 @@ def migrate_uncategorized(session: Session) -> dict:
         source = root / item.file_path
         if source.is_file():
             destination = root / target_rel
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            paths.make_dir(destination.parent)
             shutil.move(str(source), str(destination))
             stats["moved"] += 1
         item.category_id = category.id

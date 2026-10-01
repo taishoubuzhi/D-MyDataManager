@@ -782,6 +782,7 @@ def _check_single_library(window) -> list[str]:
     from PyQt6.QtWidgets import QPushButton
     from qfluentwidgets import StrongBodyLabel
 
+    from app.core.config import resources_root
     from app.services import LibraryService, UserService
 
     page = window.settings_page
@@ -810,8 +811,8 @@ def _check_single_library(window) -> list[str]:
     for info in UserService(page.session).list_users():
         if info.name not in body:
             problems.append(f"库内容未列出用户名文件夹「{info.name}」：{rows}")
-    if str(library.path) not in _widget_texts(page):
-        problems.append(f"设置页未显示库路径：{library.path}")
+    if str(resources_root()) not in _widget_texts(page):
+        problems.append(f"设置页未显示资源文件夹：{resources_root()}")
     return problems
 
 
@@ -1390,6 +1391,53 @@ def _check_settings_extras(window) -> list[str]:
     return problems
 
 
+def _check_privacy_group(window) -> list[str]:
+    """资源文件夹卡片与隐私保护分组存在，资源加密时隐藏开关置灰。"""
+    from app.core.config import config, resources_root
+    from app.services.privacy_service import privacy
+
+    page = window.settings_page
+    problems: list[str] = []
+    for name in ("_resource_switch", "_hidden_switch", "_path_card"):
+        if not hasattr(page, name):
+            problems.append(f"设置页缺少隐私相关控件：{name}")
+    texts = _widget_texts(page)
+    for wanted in ("保护资源文件夹", "保护隐藏文件"):
+        if not any(wanted in text for text in texts):
+            problems.append(f"设置页缺少「{wanted}」")
+    joined = "".join(texts)
+    for unused in ("立即锁定", "立即放行"):
+        if unused in joined:
+            problems.append(f"隐私保护分组仍显示无用的「{unused}」按钮")
+    if resources_root().name != ".resources":
+        problems.append(f"资源文件夹未落在 .resources：{resources_root()}")
+    if not page._path_card.contentLabel.text().endswith(".resources"):
+        problems.append(f"资源卡片未显示资源文件夹：{page._path_card.contentLabel.text()!r}")
+    if not privacy.state_text():
+        problems.append("隐私状态文案为空")
+    key = bool(config.resourceProtected.value)
+    hidden_key = bool(config.hiddenProtected.value)
+    try:
+        config.set(config.resourceProtected, True)
+        config.set(config.hiddenProtected, True)
+        page._normalize_privacy()
+        page._refresh_privacy()
+        if config.hiddenProtected.value:
+            problems.append("资源文件夹保护开启时没有收起隐藏文件开关")
+        if page._hidden_switch.isEnabled():
+            problems.append("资源文件夹保护开启时隐藏文件开关没有置灰")
+        config.set(config.resourceProtected, False)
+        page._refresh_privacy()
+        if not page._hidden_switch.isEnabled():
+            problems.append("关闭资源文件夹保护后隐藏文件开关仍然置灰")
+    finally:
+        config.set(config.resourceProtected, key)
+        config.set(config.hiddenProtected, hidden_key)
+        page._hidden_switch.setChecked(hidden_key)
+        page._refresh_privacy()
+    return problems
+
+
 def _check_user_password_clear(app, window) -> list[str]:
     """清除口令：默认用户可以清除他人的口令，普通用户只能清除自己的。"""
     from PyQt6.QtWidgets import QPushButton
@@ -1618,6 +1666,7 @@ def main() -> int:
         ("plugin_pages", lambda: _check_plugin_pages(window)),
         ("image_viewer", lambda: _check_image_viewer(window)),
         ("theme_background", lambda: _check_theme_background(app, window)),
+        ("privacy_group", lambda: _check_privacy_group(window)),
     ):
         try:
             problems = check()

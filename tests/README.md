@@ -7,9 +7,9 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `harness.py` | `IsolatedCase` / `TempDir`：把数据库、库文件夹、内容仓库、封面与导出目录重定向到 `tests/_tmp/<类名小写>/`，不读写真实的 `resources/`、`config/`、`logs/` |
+| `harness.py` | `IsolatedCase` / `TempDir`：把数据库、库文件夹、内容仓库、封面与导出目录重定向到 `tests/_tmp/<类名小写>/`，不读写真实的 `.resources/`、`config/`、`logs/` |
 | `dataset.py` | 多样化语料生成（`Corpus` / `build_corpus`），导入类用例与 `scripts/seed_demo.py` 共用 |
-| `test_<主题>.py` | 按主题新增的用例模块（当前为空，按需新增） |
+| `test_<主题>.py` | 按主题新增的用例模块（一个主题一个模块，例如隐藏数据 `test_hidden.py`、隐私保护 `test_privacy.py`） |
 | `_tmp/`、`_scratch/` | 运行时临时目录，已在 `.gitignore` 中 |
 
 ## 新增用例的四条约定
@@ -51,4 +51,4 @@ $env:DM_KEEP_TMP=1                                                            # 
 
 - 改完哪块代码，只跑对应主题的模块；**不再全量 `unittest discover`**。
 - 需要整体回归时跑自检脚本：`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`
-  （覆盖数据层、服务层、真实交互流程与 30 项界面检查，比单元测试更贴近真实装配）。
+  （覆盖数据层、服务层、真实交互流程与 31 项界面检查，比单元测试更贴近真实装配）。

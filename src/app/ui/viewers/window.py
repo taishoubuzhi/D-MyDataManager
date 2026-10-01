@@ -16,6 +16,7 @@ from qfluentwidgets import CaptionLabel, FluentIcon, PushButton, StrongBodyLabel
 from ...core import shell
 from ...core.extensions import extension_registry
 from ...core.viewers import Viewer
+from ...services.privacy_service import privacy
 
 #: 默认的弹窗扩展接口名（内置弹窗页面插件 builtin.dialog 提供）
 DEFAULT_HOST = "dialog"
@@ -30,6 +31,10 @@ class ViewerWindow(QWidget):
         self.path = Path(path)
         self.content_widget: QWidget | None = None
         self.setObjectName("viewerWindow")
+        # 查看器会持续读取文件（媒体播放、翻页），打开期间保持放行，关闭后重新锁定
+        self._hold_released = False
+        privacy.hold()
+        self.destroyed.connect(lambda *_args: self._release_hold())
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -75,6 +80,16 @@ class ViewerWindow(QWidget):
         caption = str(getattr(widget, "caption", "") or "")
         if caption:
             self.meta_label.setText(f"{self.viewer.name} · {caption}")
+
+    def _release_hold(self) -> None:
+        if self._hold_released:
+            return
+        self._hold_released = True
+        privacy.release()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        self._release_hold()
+        super().closeEvent(event)
 
     def _on_open_external(self) -> None:
         if not shell.open_default(self.path):

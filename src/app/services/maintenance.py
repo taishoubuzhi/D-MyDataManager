@@ -12,7 +12,7 @@ from pathlib import Path
 from qfluentwidgets import ConfigItem, qconfig
 
 from ..core import paths
-from ..core.config import config, library_root
+from ..core.config import config, library_root, lock_resource_root, release_resource_root
 from ..db import database
 from ..db.seed import seed
 
@@ -59,6 +59,9 @@ def reset_config() -> None:
 def reset_runtime_data() -> None:
     """清空数据库、库文件夹、内容仓库、封面与示例文件，重建空库并写入默认数据。"""
     database.dispose_engine()
+    # 配置可能刚被恢复默认值：资源文件夹跟着配置走
+    paths.apply_resource_root(paths.resource_root(config.resourcePath.value))
+    release_resource_root()  # 锁着的话删不掉、也建不了
     for directory in dict.fromkeys(_removable_dirs()):
         _remove_dir(directory)
     paths.ensure_dirs()
@@ -69,6 +72,7 @@ def reset_runtime_data() -> None:
         session.commit()
     finally:
         session.close()
+    lock_resource_root()  # 重建后按设置恢复锁定
 
 
 def reset_to_defaults() -> None:

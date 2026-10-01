@@ -15,6 +15,7 @@ from pathlib import Path
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ..core import paths
 from ..core.config import config, store_dir
 from ..db.models import Category, DataItem, DataType, Library, Version, guess_type
 from ..db.seed import UNCATEGORIZED_NAME
@@ -27,6 +28,7 @@ from ..repositories import (
 from . import feature_service
 from .blob_store import BlobStore, sha256_of
 from .library_service import LibraryService
+from .privacy_service import guarded
 from .taxonomy_service import is_uncategorized
 from .user_service import UserService
 
@@ -38,6 +40,14 @@ SKIP_DIRS = {"__MACOSX", ".git", ".svn", "__pycache__", "node_modules"}
 
 # 进度回调：每处理完一个文件调用一次（已是最终状态）
 ImportEventHook = Callable[["ImportEvent"], None]
+
+
+def sanitize_subdir(subdir: str, is_hidden: bool = False) -> str:
+    """库内子目录前缀：隐藏数据固定落在 <分类>/.hiddens 下，再叠加原始子目录。"""
+    parts = [part for part in (subdir or "").replace("\\", "/").split("/") if part not in ("", ".", "..")]
+    if is_hidden:
+        parts.insert(0, paths.HIDDEN_DIR_NAME)
+    return "/".join(parts)
 
 
 @dataclass(frozen=True)
@@ -131,7 +141,8 @@ class ImportService:
         owner_id = self._resolve_user_id(user_id)
         category_id = self._category_for(category_id, owner_id)
         rel_path = self.libraries.unique_rel_path(
-            target_library, category_id, filename, user_id=owner_id
+            target_library, category_id, filename, user_id=owner_id,
+            subdir=sanitize_subdir("", is_hidden),
         )
         (Path(target_library.path) / rel_path).write_text(content, encoding="utf-8")
 
@@ -196,7 +207,8 @@ class ImportService:
         owner_id = existing[0].user_id if existing else self._resolve_user_id(user_id)
         category_id = self._category_for(category_id, owner_id)
         rel_path = self.libraries.unique_rel_path(
-            target_library, category_id, target_name, user_id=owner_id, subdir=subdir
+            target_library, category_id, target_name, user_id=owner_id,
+            subdir=sanitize_subdir(subdir, is_hidden),
         )
         target = Path(target_library.path) / rel_path
         if existing:
@@ -331,6 +343,7 @@ class ImportService:
         self.session.flush()
         return created
 
+    @guarded
     def _import_one(
         self,
         path: Path,
@@ -355,6 +368,7 @@ class ImportService:
         return item
 
     # ------------------------------------------------------------- 扫描登记
+    @guarded
     def register_file(
         self,
         path: str | Path,

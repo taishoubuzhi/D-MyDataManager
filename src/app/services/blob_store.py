@@ -12,6 +12,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from ..core import paths
+
 CHUNK = 1 << 20
 
 
@@ -30,7 +32,7 @@ def sha256_of_bytes(data: bytes) -> str:
 class BlobStore:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(self.root)
 
     # ----------------------------------------------------------------- 路径
     def rel_path_for(self, checksum: str) -> str:
@@ -53,7 +55,7 @@ class BlobStore:
         if target.exists():
             return checksum, rel_path, size
 
-        target.parent.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(target.parent)
         temp = target.with_name(target.name + ".part")
         shutil.copy2(source, temp)
         temp.replace(target)
@@ -65,7 +67,7 @@ class BlobStore:
         rel_path = self.rel_path_for(checksum)
         target = self.path_of(rel_path)
         if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
+            paths.make_dir(target.parent)
             target.write_bytes(data)
         return checksum, rel_path, len(data)
 

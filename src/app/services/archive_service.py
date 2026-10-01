@@ -15,6 +15,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core import paths
 from ..core.config import config, store_dir
 from ..db.models import Archive, ArchiveEntry, Blob, DataItem, DataType, User
 from ..repositories import (
@@ -27,6 +28,7 @@ from ..repositories import (
 )
 from .blob_store import BlobStore
 from .library_service import LibraryService
+from .privacy_service import guarded
 from .user_service import UserService
 
 MAX_ARCHIVES = 1000
@@ -83,6 +85,7 @@ class ArchiveService:
                     "content": (item.content or "")[:2000],
                     "user_id": item.user_id,
                     "user_name": user_names.get(item.user_id or 0, ""),
+                    "is_hidden": bool(item.is_hidden),
                 }
             )
 
@@ -149,6 +152,8 @@ class ArchiveService:
 
         `same` 与当前数据完全一致（无需还原）、`changed` 内容已变化、
         `removed` 已删除、`missing` 存档文件缺失。只有非 `same` 的条目允许还原。
+
+        内容一致但隐藏状态不同时算 `changed`：还原会按存档把隐藏状态调整回来。
         """
         if not entry.checksum or not self.store.exists(self.store.rel_path_for(entry.checksum)):
             return "missing"
@@ -158,8 +163,11 @@ class ArchiveService:
         owner = owner_id or entry.user_id
         if owner is not None and item.user_id != owner:
             return "changed"
-        return "same" if (item.checksum or "") == (entry.checksum or "") else "changed"
+        if (item.checksum or "") != (entry.checksum or ""):
+            return "changed"
+        return "same" if bool(item.is_hidden) == bool(entry.is_hidden) else "changed"
 
+    @guarded
     def restore_entry(
         self,
         entry: ArchiveEntry,
@@ -183,6 +191,14 @@ class ArchiveService:
             return None
         for item in self.items.by_checksum(entry.checksum):
             if item.user_id == owner_id:
+                libraries = LibraryService(self.session, store=self.store)
+                if bool(item.is_hidden) != bool(entry.is_hidden):
+                    libraries.set_item_hidden(item, bool(entry.is_hidden))
+                    logger.info(
+                        "已按存档同步隐藏状态：{}（{}）",
+                        entry.name,
+                        "隐藏" if entry.is_hidden else "显示",
+                    )
                 return item
         try:
             data_type = DataType(entry.type)
@@ -192,9 +208,12 @@ class ArchiveService:
         library = libraries.ensure_default()
         if category_id is None and entry.category:
             category_id = self.ensure_category_path(entry.category, owner_id)
-        library_rel = libraries.unique_rel_path(library, category_id, entry.name, user_id=owner_id)
+        subdir = paths.HIDDEN_DIR_NAME if entry.is_hidden else ""
+        library_rel = libraries.unique_rel_path(
+            library, category_id, entry.name, user_id=owner_id, subdir=subdir
+        )
         target = Path(library.path) / library_rel
-        target.parent.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(target.parent)
         target.write_bytes(self.store.read_bytes(rel_path))
 
         item = self.items.create(
@@ -207,6 +226,7 @@ class ArchiveService:
             library_id=library.id,
             category_id=category_id,
             user_id=owner_id,
+            is_hidden=bool(entry.is_hidden),
         )
         item.tags = self.tags.ensure_many(entry.tags or [], user_id=owner_id)
         self.blobs.register(entry.checksum, entry.size, "", rel_path)

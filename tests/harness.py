@@ -55,10 +55,7 @@ class TempDir:
 
 def redirect_paths(root: Path) -> None:
     """把 paths 里的运行期目录整体指向临时根目录。"""
-    data = root / "resources"
-    paths.DATA_DIR = data
-    paths.DB_FILE = data / "data.db"
-    paths.DEFAULT_LIBRARY_DIR = data / "library"
+    data = paths.apply_resource_root(root / paths.RESOURCE_ROOT_NAME)
     paths.LOG_DIR = root / "logs"
     paths.DEFAULT_EXPORT_DIR = root / "exports"
     paths.CONFIG_DIR = root / "config"
@@ -67,6 +64,7 @@ def redirect_paths(root: Path) -> None:
     paths.PLUGIN_STATE_FILE = paths.CONFIG_DIR / "plugins.json"
     paths.OPEN_WITH_FILE = paths.CONFIG_DIR / "open_with.json"
     paths.ensure_dirs()
+    return data
 
 
 def reset_config(root: Path) -> None:
@@ -79,7 +77,9 @@ def reset_config(root: Path) -> None:
     qconfig.load(str(target), config)
     config.set(config.dbUrl, "")
     config.set(config.dbEcho, False)
-    config.set(config.libraryPath, str(paths.DEFAULT_LIBRARY_DIR))
+    config.set(config.resourcePath, str(paths.DATA_DIR))
+    config.set(config.resourceProtected, False)
+    config.set(config.hiddenProtected, False)
     config.set(config.exportPath, "")
     config.set(config.currentUserId, 0)
     config.set(config.nameByTime, False)

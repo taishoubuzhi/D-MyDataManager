@@ -8,7 +8,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..core import shell
+from ..core import paths, shell
 from ..core.config import store_dir
 from ..db.models import ArchiveEntry, DataItem, DataType, Library
 from ..repositories import BlobRepository, ItemRepository, TagRepository
@@ -54,12 +54,14 @@ class ItemService:
         target_library = library or (item.library if item.library_id else None) or self.libraries.ensure_default()
         if item.file_path:
             source = self.libraries.abs_path(item)
+            # 隐藏数据要保持在目标分类的 .hiddens 里
+            subdir = paths.HIDDEN_DIR_NAME if item.is_hidden else ""
             rel_path = self.libraries.unique_rel_path(
-                target_library, category_id, Path(item.file_path).name, user_id=item.user_id
+                target_library, category_id, Path(item.file_path).name, user_id=item.user_id, subdir=subdir
             )
             target = Path(target_library.path) / rel_path
             if source is not None and source.exists() and source != target:
-                target.parent.mkdir(parents=True, exist_ok=True)
+                paths.make_dir(target.parent)
                 source.replace(target)
             item.file_path = rel_path
         item.category_id = category_id
@@ -67,7 +69,10 @@ class ItemService:
         self.session.flush()
 
     def set_hidden(self, items: list[DataItem], hidden: bool) -> int:
-        return self.items.bulk_set_field(items, "is_hidden", hidden)
+        """切换隐藏状态：同时把文件搬进 / 搬出分类目录下的 .hiddens。"""
+        for item in items:
+            self.libraries.set_item_hidden(item, hidden)
+        return len(items)
 
     def add_tags(self, items: list[DataItem], names: list[str]) -> int:
         user_id = items[0].user_id if items else None
@@ -186,5 +191,5 @@ class ItemService:
                 library, item.category_id, f"{item.name}.txt", user_id=item.user_id,
             )
         target = Path(library.path) / item.file_path
-        target.parent.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(target.parent)
         target.write_text(item.content or "", encoding="utf-8")

@@ -26,7 +26,11 @@ class _CoverTask(QRunnable):
         self._signals = signals
 
     def run(self) -> None:
-        image = QImage(self._path)
+        # 封面同样在资源文件夹里：受保护时先瞬时放行再读取
+        from ...services.privacy_service import privacy
+
+        with privacy.guard():
+            image = QImage(self._path)
         if image.isNull():
             self._signals.loaded.emit(self._path, self._size, QImage())
             return

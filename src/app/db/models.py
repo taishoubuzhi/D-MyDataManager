@@ -335,6 +335,7 @@ class ArchiveEntry(Base):
     category: Mapped[str] = mapped_column(String(128), default="")
     tags: Mapped[list] = mapped_column(JSON, default=list)
     content: Mapped[str] = mapped_column(Text, default="")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
 
     archive: Mapped["Archive"] = relationship(back_populates="entries")
 

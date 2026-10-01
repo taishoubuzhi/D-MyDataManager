@@ -14,10 +14,11 @@
 界面样式全部使用控件自带样式或内联 QSS，**不再使用 `.qrc` / `resource.py` 编译产物**，因此无需执行 `pyside6-rcc`；
 重构时清理掉的 `qss/`、`images/controls/`、`resource.qrc`、`resource.py` 已不存在。
 
-## 库文件夹布局
+## 资源文件夹与库布局
 
-库文件夹**全局唯一**（配置项 `Storage/Library-Path`，默认 `resources/library`，可在「设置 → 库文件夹」中更改；
-目标文件夹必须为空），内部结构由 `src/app/core/paths.py` 与 `src/app/services/library_service.py` 约定：
+资源文件夹**全局唯一**（配置项 `Storage/Resource-Path`，默认项目根的 `.resources`，旧 `resources/` 启动时自动改名；可在「设置 → 资源文件夹」中更改，
+目标文件夹必须为空，搬迁后写回库路径并自动重启），数据库（`data.db`）与唯一的库文件夹 `library/` 都在它下面。
+库内部结构由 `src/app/core/paths.py` 与 `src/app/services/library_service.py` 约定：
 
 ```
 <库>/
@@ -28,19 +29,42 @@
     .datamanager/           库元数据（layout-2.json 为布局标记）
   <用户名>/                 每个用户一个文件夹（名取自用户名，非法字符替换为 _）
     <分类目录>/<原文件名>    该用户的数据文件（各用户分类互不影响；重名自动加序号；未选分类的数据落在「未分类」目录）
+    <分类目录>/.hiddens/      该分类下被隐藏的数据文件（物理隔离，可单独 ACL 锁定）
 ```
 
 - 数据项记录的是**库内相对路径**（`<用户名>/<分类目录>/<文件名>`），因此用户改名时要调用
   `LibraryService.rename_user_dir()` 同步重命名文件夹并改写记录（「用户」页改名已接线）。
-- 扫描只处理用户名文件夹下的文件，跳过 `全局/` 与点目录；识别不出所属用户的文件会被跳过并打日志
+- 扫描只处理用户名文件夹下的文件，跳过 `全局/` 与点目录（分类目录下的 `.hiddens/` 例外：里面的文件登记为隐藏项）；识别不出所属用户的文件会被跳过并打日志
   （见 `LibraryService.scan()`）。
 - **布局迁移**：启动时 `src/main.py` 在 `seed()` 之后调用 `migrate_layout()`（`src/app/services/layout_migration.py`）。
   若 `全局/.datamanager/layout-2.json` 不存在，就先备份数据库到 `全局/backups/data-before-layout-v2-<时间戳>.db.bak`，
-  再把旧布局（`resources/store`、`resources/covers` 与顶层分类目录下的文件）搬进各用户名文件夹并改写记录，
+  再把旧布局（资源文件夹下的 `store/`、`covers/` 与顶层分类目录下的文件）搬进各用户名文件夹并改写记录，
   最后写入标记文件；迁移是幂等的，重复启动不会重复搬动。
 - **未分类归置**：紧随其后调用 `migrate_uncategorized()` 给每个用户补齐固定的「未分类」根分类（`UNCATEGORIZED_NAME`，新建用户也会自动获得），
   并把 `category_id` 为空的历史数据项写回该分类、文件搬进 `<库>/<用户名>/未分类/`；无归属（`user_id` 为空）的数据保持原样，
   记入统计的 `unassigned`。该步骤同样幂等。
+
+## 隐藏数据与隐私保护
+
+- 隐藏是**物理隔离**：`LibraryService.set_item_hidden()` 把文件在「分类目录」与「分类目录/.hiddens/」之间搬动（重名自动加序号），
+  库内相对路径仍是 `<用户名>/<分类目录>/.hiddens/<文件名>`，数据项的 `is_hidden` 与库内位置始终一致；
+  导入时 `is_hidden=True` 直接落到 `.hiddens/`（`ImportService.sanitize_subdir()`）；扫描时 `.hiddens/` 之后不再参与分类匹配，里面的文件登记为隐藏项。
+  存档记录 `ArchiveEntry.is_hidden`（schema 5 → 6），还原时按存档把隐藏状态对齐回来（内容相同但隐藏状态不同也算 `changed`）。
+- 隐私保护（`src/app/core/acl.py` + `src/app/services/privacy_service.py`）：配置项 `Storage/Resource-Protected`（锁资源文件夹）与
+  `Storage/Hidden-Protected`（只锁各 `.hiddens/`），在「设置 → 隐私保护」用两个开关直接切换：打开即刻锁定、关闭即刻放行。
+  `acl.lock()` 用 `icacls <路径> /inheritance:r /deny *S-1-1-0:(OI)(CI)(RX)` 拒绝 Everyone 读取并去掉继承，`acl.unlock()` 反向恢复；
+  需要读写库的服务方法用 `@guarded`（或 `with privacy.guard():`）在调用期间临时放行，`acl.released()` 可重入（计数加锁，封面缩略图在工作线程读取）。
+  资源文件夹受保护时隐藏项开关置灰并自动收起（`targets()` 用 `elif`：资源根已锁就不再单独列 `.hiddens`），
+  设置页 `_normalize_privacy()` 负责把同时为真的两个开关收敛掉。
+- 长时间读取用 `privacy.hold()` / `privacy.release()` 保持放行：查看器窗口打开期间一直持锁（`ViewerWindow.__init__` 持有、`closeEvent`/`destroyed` 释放），
+  期间 `privacy.guard()` 不再反复加解锁；封面缩略图线程用 `with privacy.guard():` 包住 `QImage` 读取。
+- 打开数据库也要放行：`database._privacy_guard()`（延迟导入避免循环依赖）包住 `init_db()`、`_reset_for_schema_change()`
+  与 `backup_database_file()` —— 受保护时新建连接/备份/删除 `-wal`/`-shm` 都需要目录可进入。
+  程序运行期连接池保持已建立的连接，正常读写不需要反复加解锁。
+- `main.py` 启动时把「建目录 + 开库 + 补数据」整体包在 `with privacy.guard():` 里（瞬时放行、退出即恢复锁定），
+  退出时 `aboutToQuit` → `_lock_on_exit()` 先 `dispose_engine()`（让 WAL 收尾写回 `data.db`）再 `privacy.lock()`。
+  非 Windows 平台 `is_supported()` 为假，一律跳过并只打日志。
+- `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转与 ACL 命令构造；`dev_check_ui.py` 的 `privacy_group` 检查设置页分组。
 
 ## 翻译文件
 
@@ -234,7 +258,8 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
   （`qt_scrollarea_viewport` 默认 `autoFillBackground=True`，不清就会漏出一整块深色）；页面级滚动条的宿主已经有 `page_background` 时传 `inner=False`，只清视口；
 - `setCustomStyleSheet(widget, light, dark)` 只设属性，没注册过的控件等于没做；必须走
   `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`page_background` / `clear_background` 内部就是这么写的）。
-`scripts/dev_check_ui.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」。
+`scripts/dev_check_ui.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」，`privacy_group` 会断言设置页的
+「资源文件夹 / 隐藏文件」两个开关、资源加密时隐藏开关置灰并自动收起，以及分组里不再出现多余的「立即锁定 / 立即放行」按钮。
 
 ## 默认标签
 

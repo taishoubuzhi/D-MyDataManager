@@ -7,6 +7,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from ..core import paths
 from ..core.config import config, cover_dir
 from ..db.models import DataItem, DataType, Feature
 
@@ -35,7 +36,7 @@ def make_cover(source: str | Path, checksum: str, size: int | None = None) -> st
         from PIL import Image
 
         covers = cover_dir()
-        covers.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(covers)
         target = covers / f"{checksum}.png"
         if target.exists():
             return str(target)

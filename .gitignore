@@ -1,6 +1,6 @@
 # 运行期数据（不随代码分发）
 /logs/
-/resources/
+/.resources/
 /config/
 /data/
 /cache/

@@ -25,11 +25,12 @@ from qfluentwidgets import (
 )
 
 from ...core import logging_setup, paths
-from ...core.config import config, export_dir, library_root
+from ...core.config import config, export_dir, resources_root, set_resource_root
 from ...core.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
+from ...services.privacy_service import privacy
 from ..common import (
     DETAIL_MARGINS,
     BusyTip,
@@ -92,6 +93,7 @@ class SettingsPage(ScrollArea):
         layout.addWidget(self._import_group(host))
         layout.addWidget(self._storage_group(host))
         layout.addWidget(self._library_group(host))
+        layout.addWidget(self._privacy_group(host))
         layout.addWidget(self._library_card(host))
         layout.addWidget(self._log_group(host))
         layout.addWidget(self._maintenance_group(host))
@@ -422,16 +424,16 @@ class SettingsPage(ScrollArea):
 
     # ------------------------------------------------------------------ 库
     def _library_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("库文件夹", parent)
+        group = SettingCardGroup("资源文件夹", parent)
 
         self._path_card = ActionCard(
             "更改位置",
             FluentIcon.FOLDER,
-            "库文件夹位置",
-            str(library_root()),
+            "资源文件夹位置",
+            str(resources_root()),
             group,
         )
-        self._path_card.clicked.connect(self._change_library_path)
+        self._path_card.clicked.connect(self._change_resource_root)
         group.addSettingCard(self._path_card)
 
         scan_card = ActionCard(
@@ -457,13 +459,79 @@ class SettingsPage(ScrollArea):
         open_card = ActionCard(
             "打开文件夹",
             FluentIcon.LINK,
-            "打开库文件夹",
-            "在文件管理器中查看库内容",
+            "打开资源文件夹",
+            "在文件管理器中查看库内容（开启保护后同样可以直接打开）",
             group,
         )
-        open_card.clicked.connect(self._open_library_dir)
+        open_card.clicked.connect(self._open_resource_dir)
         group.addSettingCard(open_card)
         return group
+
+    def _privacy_group(self, parent: QWidget) -> SettingCardGroup:
+        group = SettingCardGroup("隐私保护", parent)
+
+        self._resource_switch = SwitchSettingCard(
+            FluentIcon.FOLDER,
+            "保护资源文件夹",
+            "对 Everyone 关闭继承并拒绝读/遍历，资源管理器显示「拒绝访问」；程序读写时瞬时放行",
+            configItem=config.resourceProtected,
+            parent=group,
+        )
+        self._resource_switch.checkedChanged.connect(lambda _checked: self._on_protection_changed())
+        group.addSettingCard(self._resource_switch)
+
+        self._hidden_switch = SwitchSettingCard(
+            FluentIcon.HIDE,
+            "保护隐藏文件",
+            "锁定各分类下的 .hiddens 隐藏目录；隐藏数据在磁盘上同样不可直接查看",
+            configItem=config.hiddenProtected,
+            parent=group,
+        )
+        self._hidden_switch.checkedChanged.connect(lambda _checked: self._on_protection_changed())
+        group.addSettingCard(self._hidden_switch)
+
+        self._refresh_privacy()
+        return group
+
+    def _refresh_privacy(self) -> None:
+        if not hasattr(self, "_hidden_switch"):
+            return
+        # 资源文件夹整体锁定后，隐藏目录已被覆盖
+        self._hidden_switch.setEnabled(not config.resourceProtected.value)
+
+    def _normalize_privacy(self) -> None:
+        """资源文件夹开启保护后，隐藏文件开关自动收起（置灰不可用）。"""
+        if not hasattr(self, "_hidden_switch"):
+            return
+        if not (config.resourceProtected.value and config.hiddenProtected.value):
+            return
+        self._suppress_privacy = True
+        try:
+            config.set(config.hiddenProtected, False)
+            self._hidden_switch.setChecked(False)
+        finally:
+            self._suppress_privacy = False
+        privacy.invalidate()
+
+    def _on_protection_changed(self) -> None:
+        """开关变化：开启即刻锁定，关闭即刻放行。"""
+        if getattr(self, "_suppress_privacy", False):
+            return
+        self._normalize_privacy()
+        if not privacy.supported():
+            toast_warning(self, "当前系统不支持", "只有 Windows 支持 ACL 锁定")
+            self._refresh_privacy()
+            return
+        if config.resourceProtected.value or config.hiddenProtected.value:
+            count, message = privacy.lock()
+            if count:
+                toast_success(self, "已开启保护", f"已锁定 {count} 个目录")
+            else:
+                toast_warning(self, "锁定失败", message)
+        else:
+            privacy.unlock()
+            toast_success(self, "已关闭保护", "保护目录已放行")
+        self._refresh_privacy()
 
     def _library_card(self, parent: QWidget) -> CardWidget:
         card, layout = panel_card(parent, DETAIL_MARGINS)
@@ -483,7 +551,7 @@ class SettingsPage(ScrollArea):
                 release_widget(widget)
         service = LibraryService(self.session)
         library = service.ensure_default()
-        self._path_card.setContent(str(library.path))
+        self._path_card.setContent(str(resources_root()))
         self._library_layout.addWidget(
             self._library_folder_row(
                 paths.GLOBAL_DIR_NAME,
@@ -518,28 +586,31 @@ class SettingsPage(ScrollArea):
         layout.addWidget(open_button)
         return row
 
-    def _open_library_dir(self) -> None:
-        self._open_path(Path(LibraryService(self.session).ensure_default().path))
+    def _open_resource_dir(self) -> None:
+        self._open_path(resources_root())
 
-    def _change_library_path(self) -> None:
-        current = LibraryService(self.session).ensure_default().path
-        directory = QFileDialog.getExistingDirectory(self, "选择新的库文件夹位置", current)
-        if not directory or directory == current:
+    def _change_resource_root(self) -> None:
+        current = resources_root()
+        directory = QFileDialog.getExistingDirectory(self, "选择新的资源文件夹位置", str(current))
+        if not directory or Path(directory).resolve() == current.resolve():
             return
-        if not confirm(self, "更改库文件夹位置", f"将把库内容从\n{current}\n移动到\n{directory}\n继续吗？"):
+        target = paths.resource_root(directory)
+        if not confirm(
+            self,
+            "更改资源文件夹位置",
+            f"将把资源文件夹（库数据与数据库）\n{current}\n移动到\n{target}\n继续吗？",
+        ):
             return
-        service = LibraryService(self.session)
         try:
-            service.set_path(directory)
-            self.session.commit()
+            moved = set_resource_root(directory)
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             toast_warning(self, "无法更改位置", str(exc))
             return
-        for signal in (signalBus.librariesChanged, signalBus.itemsChanged, signalBus.categoriesChanged):
-            signal.emit()
-        self._refresh_libraries()
-        toast_success(self, "库文件夹已迁移", directory)
+        # 引擎已指向新位置，各页面持有的会话随之失效：重启程序最稳妥。
+        privacy.invalidate()
+        toast_success(self, "资源文件夹已迁移", f"{moved}\n程序即将重启")
+        restart_application()
 
     def _scan_library(self) -> None:
         busy = BusyTip(self, "正在扫描库文件夹", "扫描完成后文件才会登记为数据项")

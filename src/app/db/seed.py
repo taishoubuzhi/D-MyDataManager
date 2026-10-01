@@ -51,7 +51,7 @@ def seed(session: Session) -> bool:
 
     root = library_root()
     for directory in paths.global_subdirs(root):
-        directory.mkdir(parents=True, exist_ok=True)
+        paths.make_dir(directory)
     session.add(
         Library(
             name=DEFAULT_LIBRARY_NAME,

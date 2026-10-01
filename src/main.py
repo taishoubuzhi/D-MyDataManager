@@ -21,11 +21,12 @@ from app.core import paths  # noqa: E402
 from app.core.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
 from app.core.config import Language, config  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
-from app.db.database import init_db, session_scope  # noqa: E402
+from app.db.database import dispose_engine, init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
 from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
+from app.services.privacy_service import privacy  # noqa: E402
 from app.ui.common import install_app_theme  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
@@ -57,21 +58,36 @@ def _apply_theme() -> None:
     setTheme({"light": Theme.LIGHT, "dark": Theme.DARK}.get(config.theme.value, Theme.AUTO))
 
 
+def _lock_on_exit() -> None:
+    """退出前收好数据库再按设置重新锁定，让数据「静止时不可读」。"""
+    with privacy.guard():
+        dispose_engine()
+    count, message = privacy.lock()
+    if count:
+        logger.info("已按隐私设置锁定 {} 个目录", count)
+    elif message and message != "没有开启保护":
+        logger.warning("退出前锁定失败：{}", message)
+
+
 def main() -> int:
-    paths.ensure_dirs()
     setup_logging()
     _apply_dpi_scale()
-    init_db()
-    with session_scope() as session:
-        seed(session)
-        migrate_layout(session)
-        migrate_uncategorized(session)
+    # 上一次退出时锁上的资源文件夹要先放行：建目录、开库、补数据都只用这一小段时间
+    with privacy.guard():
+        paths.ensure_dirs()
+        init_db()
+        with session_scope() as session:
+            seed(session)
+            migrate_layout(session)
+            migrate_uncategorized(session)
 
     app = QApplication(sys.argv)
     _setup_translator(app)
     _apply_theme()
     # 换肤只管 QSS：把调色板也换成当前主题，否则系统深色模式下浅色主题会露出发黑的底色
     install_app_theme()
+    # 退出时把资源文件夹与隐藏目录重新锁上（开启保护时）
+    app.aboutToQuit.connect(_lock_on_exit)
 
     # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
