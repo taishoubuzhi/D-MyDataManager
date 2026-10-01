@@ -65,6 +65,10 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 前三个脚本内部会 `init_db(force=True)` 重建数据库：运行前由 `scripts/dev_check_guard.py` 备份真实数据库
 （`logs/_selfcheck-data.db.bak`），结束后自动还原，因此可以随时重跑而不会弄丢已导入的数据。
 
+单元测试按主题拆分：改哪块代码就只跑对应的模块（`.venv\Scripts\python.exe -m unittest tests.test_manage -v`），
+不再全量 `unittest discover`；文件名、基类与模板等范式见 `tests/README.md`，隔离目录与语料由 `tests/harness.py`
+的 `IsolatedCase`（`tests/_tmp/<用例类名>/`）和 `tests/dataset.py` 提供。
+
 `scripts/seed_demo.py` 依赖 `tests/dataset.py` 生成示例文件，向真实环境注入约 100 条数据（含隐藏项、回收站项、
 第二个用户与一个存档快照）且不会自动删除；清空用应用内「设置 → 维护 → 恢复初始化」或 `scripts/dev_reset.py`。
 两者的公共实现是 `src/app/services/maintenance.py`（`reset_config()` 重置全部设置、`reset_runtime_data()` 清数据并重建空库）。

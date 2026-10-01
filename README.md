@@ -4,7 +4,7 @@
 ![python](https://img.shields.io/badge/python-3.13%2B-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.11.0-41cd52)
-![tests](https://img.shields.io/badge/tests-363%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-per--topic-blue)
 
 一个**纯本地**的个人数据管理器，基于 **PyQt6 + PyQt6-Fluent-Widgets** 构建。它把散落在电脑里的资料
 （文档、图片、视频、音频、代码、压缩包……）集中到一个「库文件夹」中统一管理，提供导入、分类树、
@@ -173,7 +173,7 @@ resources/
 logs/                         运行日志
 scripts/                      开发自检脚本（含示例数据注入 seed_demo.py）
 plugins/                      插件目录（内置类型插件 builtin.kind / builtin.kind.viewer / builtin.kind.page、内置弹窗页面插件与 7 个查看器插件；每个插件一个子目录，纯数据插件只有 plugin.json）
-tests/                        单元测试（语料生成 + 各功能用例，数据隔离在 tests/_tmp/）
+tests/                        单元测试框架（隔离基类 harness.py + 语料 dataset.py；按主题新增 test_*.py，范式见 tests/README.md）
 pyappify.yml                  打包配置（PyAppify）
 icons/                        打包用图标（icon.ico / icon.png）
 .github/workflows/build.yml   推送 v* 标签时自动打包并发布
@@ -224,34 +224,20 @@ icons/                        打包用图标（icon.ico / icon.png）
 ### 单元测试
 
 ```powershell
-.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
-.venv\Scripts\python.exe -m unittest tests.test_manage -v      # 单个模块
-$env:DM_KEEP_TMP=1                                              # 保留 tests/_tmp/ 便于排查
+.venv\Scripts\python.exe -m unittest tests.test_library_service -v                 # 只跑相关主题
+.venv\Scripts\python.exe -m unittest tests.test_manage tests.test_libraries -v     # 多个相关主题
+$env:DM_KEEP_TMP=1                                                                # 保留 tests/_tmp/ 便于排查
 ```
 
-- 共 **363 个用例**，每个用例都会在 `tests/_tmp/<用例类名>/` 下重建数据库与库文件夹（库、仓库、封面、导出），
-  互不影响，也不会碰真实的 `resources/`、`config/`、`logs/`。
+- 用例按主题拆分，**改哪块代码只跑哪块的模块**，不再全量 `unittest discover`；整体回归交给上面的四个自检脚本
+  （数据层、服务层、交互流程与 30 项界面检查）。
+- 新增用例的范式（文件名、基类、用例命名、模板、隔离方式）见 [`tests/README.md`](tests/README.md)。
+- `tests/harness.py` 的 `IsolatedCase` 把数据库、库文件夹、内容仓库、封面与导出目录重定向到
+  `tests/_tmp/<用例类名>/`，用例之间互不影响，也不会碰真实的 `resources/`、`config/`、`logs/`。
 - `tests/dataset.py` 生成一份多样化语料并写入临时目录：真实编码的 PNG / JPEG / WEBP / TIFF / 动画 GIF / ICO、
   伪造魔数的视频与音频、真实 ZIP / TAR / WAV / SQLite / PDF、docx / xlsx / pptx / odt / epub，
   以及各类文本（空文件、超过 512 KiB 的大文本、无扩展名、大小写、空格与特殊字符、隐藏文件），
-  另有嵌套子目录、空目录和用于查重的同内容副本。
-- 用例覆盖导入（按类型 / 命名库 / 分类 / 递归目录 / 去重策略 / 扫描登记）、检索与筛选、分页排序、统计、
-  编辑与标签关键词、删除与回收站、分类树、标签库、存档与孤儿清理、库文件夹与扫描、用户与口令、
-  导出与特征提取；另有 `tests/test_layout_migration.py`（旧布局 → 单库 + 用户名文件夹的自动迁移、幂等与备份）、
-  `tests/test_tag_scope.py`（全局 / 个人标签的可见性与创建者权限、重名与清理规则）、
-  `tests/test_archive_pin.py`（标记存档不被按数量 / 容量 / 时间清理，取消标记或手动删除后才会消失）
-  `tests/test_viewer_data.py`（文本编码识别与截断、xlsx / csv 解析、压缩包成员列表与读取、图片尺寸）、
-  `tests/test_open_with.py`（打开方式规则的解析顺序、回退与持久化、`app.open_with` 指定查看器与批量切换）、
-  `tests/test_plugin_options.py`（插件选项协议的解析 / 校验 / 取值规范化、清单选项进 `PluginInfo`、选项读写与重置持久化、插件筛选与排序）、
-  `tests/test_plugins.py`（插件协议字段与校验、依赖排序与缺失 / 循环依赖、类型插件的 kinds 声明与类型未注册 / 登记方法缺失、旧类型字段拒绝、内置插件清单与扩展名一致性、启用 / 禁用、导入目录与 zip 包、不安全路径与伪造内置拦截）、
-  `tests/test_app_ui.py`（主程序界面扩展接口 `app.ui` 的页面登记 / 更新 / 冲突 / 移除、程序本体接口跨重载保留、插件通过 `app.ui` 加页面并在禁用后消失）
-  与 `tests/test_schema_upgrade.py`（旧版库原地补列升级、重名全局标签去重、升级幂等，当前 `SCHEMA_VERSION` 为 5）、
-  `tests/test_tag_page.py`（标签页逐列筛选、重置与计数文案、隐藏行不参与选中、默认全局标签）、
-  `tests/test_user_page.py`（用户卡片网格列数与固定宽度、徽标与权限、当前用户高亮、卡片自洽单元：首字头像、按钮不被裁出与等高）、
-  `tests/test_archive_page.py`（存档表格筛选与分页边界、名称与标记文案、纯逻辑函数）、
-  `tests/test_home_page.py`（KPI 文案与类型分布占比）、
-  `tests/test_manage_page.py`（数据管理页筛选分组、分页控件不裁切与选中摘要、Shift 区间与三态纯函数、单击选中/双击打开、Ctrl 与 Shift 多选、行复选框与全选框同步、右键菜单条目与批量移动、分类树固定标记与右键入口、编辑数据项对话框分类）、
-  `tests/test_logging_setup.py`（控制台格式串按字段上色、等级配色显式覆盖 loguru 默认值、日志文件保持纯文本）。
+  另有嵌套子目录、空目录和用于查重的同内容副本；`scripts/seed_demo.py` 也用它注入示例数据。
 
 ## 打包与发布
 
@@ -283,7 +269,7 @@ git push origin v1.0.0
 - 发现 Bug 或有功能建议，欢迎开 [Issue](https://github.com/taishoubuzhi/D-MyDataManager/issues)；
   提 Issue 时请附上系统版本、Python 版本与 `logs/` 中对应的日志片段。
 - 提交代码前请确保：`.venv\Scripts\python.exe -m compileall -q src` 无输出、
-  363 个单元测试全部通过、四个自检脚本 `RESULT failures=0`。
+  相关主题的单元测试通过（只跑改动涉及的模块，范式见 [`tests/README.md`](tests/README.md)）、四个自检脚本 `RESULT failures=0`。
 - 代码风格：界面文案与注释使用中文；分层保持 `ui → services → repositories → db` 单向依赖。
 
 ## 许可证
