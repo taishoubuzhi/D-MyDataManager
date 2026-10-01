@@ -248,20 +248,26 @@ class ArchiveService:
         return removed, freed
 
     def prune(self, keep: int = 20) -> int:
-        """按数量修剪：只保留最近 keep 个快照。"""
+        """按数量修剪：除已标记的存档外，只保留最近 keep 个快照。"""
         archives = self.archives.latest(limit=MAX_ARCHIVES)
         removed = 0
-        for archive in archives[keep:]:
-            self.session.delete(archive)
-            removed += 1
+        kept = 0
+        for archive in archives:
+            if archive.pinned:
+                continue
+            kept += 1
+            if kept > keep:
+                self.session.delete(archive)
+                removed += 1
         self.session.flush()
         return removed
 
     def prune_by_size(self, max_bytes: int) -> int:
-        """按容量修剪：从最旧的快照开始删除，直到仓库占用不超过 max_bytes。
+        """按容量修剪：从最旧的未标记快照开始删除，直到占用不超过 max_bytes。
 
-        始终保留最新的一个快照。数据项自身引用的内容不会被删除，
-        因此当这些内容本身就超过上限时，只能删到只剩最新快照为止。
+        已标记的快照不会被删除，其内容仍计入占用；也始终保留最新的一个快照。
+        数据项自身引用的内容不会被删除，因此当这些内容本身就超过上限时，
+        只能删到只剩最新快照为止。
         """
         archives = self.archives.latest(limit=MAX_ARCHIVES)
         if len(archives) <= 1:
@@ -284,6 +290,8 @@ class ArchiveService:
         for archive in reversed(archives[1:]):
             if retained <= max_bytes:
                 break
+            if archive.pinned:
+                continue
             freed = 0
             for checksum in per_archive[archive.id]:
                 ids = refs[checksum]
@@ -299,13 +307,15 @@ class ArchiveService:
         return removed
 
     def prune_by_age(self, days: int) -> int:
-        """按时间修剪：删除超过 days 天的快照，始终保留最新的一个。"""
+        """按时间修剪：删除超过 days 天的未标记快照，始终保留最新的一个。"""
         archives = self.archives.latest(limit=MAX_ARCHIVES)
         if len(archives) <= 1:
             return 0
         cutoff = dt.datetime.now() - dt.timedelta(days=days)
         removed = 0
         for archive in archives[1:]:
+            if archive.pinned:
+                continue
             if archive.created_at is not None and archive.created_at < cutoff:
                 self.session.delete(archive)
                 removed += 1
@@ -346,6 +356,16 @@ class ArchiveService:
         if user_id:
             filters.user_ids = {int(user_id)}
         return self.items.query(filters)
+
+    def set_pinned(self, archive: Archive, pinned: bool) -> bool:
+        """标记 / 取消标记存档。
+
+        标记后的存档不会被自动清理删除，只有手动删除或先取消标记才会消失。
+        """
+        archive.pinned = bool(pinned)
+        self.session.flush()
+        logger.info("存档「{}」{}", archive.name, "已标记" if archive.pinned else "已取消标记")
+        return archive.pinned
 
     def delete(self, archive: Archive) -> None:
         self.archives.delete_archive(archive)

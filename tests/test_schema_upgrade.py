@@ -114,7 +114,7 @@ class SchemaUpgradeCase(unittest.TestCase):
         self.assertEqual(user_rows, [(1, "老用户", 1)])
         self.assertIn("user_id", entry_columns)
         self.assertIn("user_name", entry_columns)
-        self.assertEqual(version, "4")
+        self.assertEqual(version, "5")
         self.assertIn("uq_tag_global_name", indexes)
         self.assertIn("ix_users_is_default", indexes)
 
@@ -151,7 +151,7 @@ class SchemaUpgradeCase(unittest.TestCase):
                 "SELECT value FROM app_meta WHERE key = 'schema_version'"
             ).scalar()
         self.assertEqual(count, 1)
-        self.assertEqual(version, "4")
+        self.assertEqual(version, "5")
 
     def test_orm_reads_upgraded_tags(self):
         self._build_v2("(1, '个人标签', 1), (2, '老全局标签', NULL)")

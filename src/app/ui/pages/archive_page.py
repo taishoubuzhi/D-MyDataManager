@@ -107,10 +107,13 @@ class ArchivePage(QWidget):
         restore_button.clicked.connect(self._on_restore)
         self.restore_all_button = PushButton(FluentIcon.SYNC, "还原整个存档", right)
         self.restore_all_button.clicked.connect(self._on_restore_all)
+        self.pin_button = PushButton(FluentIcon.PIN, "标记存档", right)
+        self.pin_button.clicked.connect(self._on_toggle_pin)
         delete_button = PushButton(FluentIcon.DELETE, "删除该存档", right)
         delete_button.clicked.connect(self._on_delete)
         actions.addWidget(restore_button)
         actions.addWidget(self.restore_all_button)
+        actions.addWidget(self.pin_button)
         actions.addWidget(delete_button)
         actions.addStretch(1)
         right_layout.addLayout(actions)
@@ -136,7 +139,8 @@ class ArchivePage(QWidget):
             else "当前用户只能查看与还原本人的条目。"
         )
         self.caption.setText(
-            "存档记录每个数据项的内容指纹，可回溯历史；只有全新内容才会额外占用空间。" + scope
+            "存档记录每个数据项的内容指纹，可回溯历史；只有全新内容才会额外占用空间。"
+            "「标记存档」可让快照不被自动清理删除，只有取消标记或手动删除才会消失。" + scope
         )
 
     def _on_user_changed(self) -> None:
@@ -154,7 +158,8 @@ class ArchivePage(QWidget):
         self.archive_list.clear()
         for archive in self._archives:
             created = format_datetime(archive.created_at, "%Y-%m-%d %H:%M:%S")
-            item = QListWidgetItem(f"{archive.name}　{created}　{archive.item_count} 项")
+            prefix = "【已标记】" if archive.pinned else ""
+            item = QListWidgetItem(f"{prefix}{archive.name}　{created}　{archive.item_count} 项")
             self.archive_list.addItem(item)
         if self._archives:
             self.archive_list.setCurrentRow(min(max(current, 0), len(self._archives) - 1))
@@ -165,6 +170,7 @@ class ArchivePage(QWidget):
             self._entries = []
             self._states = []
             self.table.setRowCount(0)
+        self._update_pin_button()
 
     def _current_archive(self):
         row = self.archive_list.currentRow()
@@ -177,9 +183,11 @@ class ArchivePage(QWidget):
         if archive is None:
             return
         self.detail_title.setText(archive.name)
+        marked = " · 【已标记】不受自动清理影响" if archive.pinned else ""
         self.detail_meta.setText(
             f"创建时间：{format_datetime(archive.created_at, '%Y-%m-%d %H:%M:%S')} · "
-            f"{archive.item_count} 项 · {format_size(archive.total_size)} · 新增内容 {archive.new_blobs} 个"
+            f"{archive.item_count} 项 · {format_size(archive.total_size)} · "
+            f"新增内容 {archive.new_blobs} 个{marked}"
         )
         diff = self.service.compare(archive, None if self._is_admin else self._user_id)
         if diff.is_empty:
@@ -211,6 +219,20 @@ class ArchivePage(QWidget):
             ]
             for column, value in enumerate(values):
                 self.table.setItem(row, column, _cell(str(value)))
+        self._update_pin_button()
+
+    def _update_pin_button(self) -> None:
+        """标记按钮跟随选中存档的状态：未选中时禁用，已标记时显示为取消标记。"""
+        archive = self._current_archive()
+        self.pin_button.setEnabled(archive is not None)
+        pinned = bool(archive is not None and archive.pinned)
+        self.pin_button.setText("取消标记" if pinned else "标记存档")
+        self.pin_button.setIcon(FluentIcon.UNPIN if pinned else FluentIcon.PIN)
+        self.pin_button.setToolTip(
+            "取消标记后该存档会重新参与自动清理"
+            if pinned
+            else "标记后该存档不会被自动清理删除"
+        )
 
     # ------------------------------------------------------------------ 操作
     def _on_create(self) -> None:
@@ -283,11 +305,29 @@ class ArchivePage(QWidget):
         busy.finish(f"还原 {stats['restored']} 项")
         toast_success(self, "整档还原完成", f"成功 {stats['restored']} 项，跳过 {stats['skipped']} 项")
 
+    def _on_toggle_pin(self) -> None:
+        archive = self._current_archive()
+        if archive is None:
+            toast_warning(self, "未选择存档", "请先在左侧选择要标记的存档")
+            return
+        pinned = self.service.set_pinned(archive, not archive.pinned)
+        self.session.commit()
+        self._reload_archives()
+        if pinned:
+            toast_success(self, "已标记存档", f"「{archive.name}」不会被自动清理删除")
+        else:
+            toast_success(self, "已取消标记", f"「{archive.name}」将重新参与自动清理")
+
     def _on_delete(self) -> None:
         archive = self._current_archive()
         if archive is None:
             return
-        if not confirm(self, "删除存档", f"确定删除存档「{archive.name}」吗？数据本身不会被删除。"):
+        note = "该存档已标记，删除后不再受清理保护。" if archive.pinned else ""
+        if not confirm(
+            self,
+            "删除存档",
+            f"确定删除存档「{archive.name}」吗？数据本身不会被删除。{note}",
+        ):
             return
         self.service.delete(archive)
         self.session.commit()

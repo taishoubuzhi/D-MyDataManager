@@ -291,7 +291,11 @@ class Feature(Base):
 
 
 class Archive(Base):
-    """一次存档批次，记录当时的数据状态。"""
+    """一次存档批次，记录当时的数据状态。
+
+    `pinned` 为真表示已标记：自动清理（按数量 / 容量 / 时间）不会删除它，
+    只能先取消标记，或由用户在存档页手动删除。
+    """
 
     __tablename__ = "archives"
 
@@ -301,6 +305,7 @@ class Archive(Base):
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     total_size: Mapped[int] = mapped_column(BigInteger, default=0)
     new_blobs: Mapped[int] = mapped_column(Integer, default=0)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
     entries: Mapped[list["ArchiveEntry"]] = relationship(

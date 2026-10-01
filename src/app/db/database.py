@@ -21,7 +21,7 @@ _engine: Engine | None = None
 _session_factory: sessionmaker | None = None
 
 # 表结构版本：低版本库启动时原地补列升级，高于当前程序的库则备份并重建
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # 全文检索：FTS5 虚拟表（trigram 分词，支持中文子串匹配）+ 同步触发器
 FTS_TABLE = "items_fts"
@@ -157,7 +157,11 @@ def _reset_for_schema_change() -> None:
 
 # 2 -> 3：tags 表补 is_global / created_by，历史 user_id 为空的行视为全局标签
 # 3 -> 4：users 补 is_default（默认用户/管理员），archive_entries 补所属用户
+# 4 -> 5：archives 补 pinned（标记的存档不参与自动清理）
 _COLUMN_PATCHES: dict[str, tuple[tuple[str, str], ...]] = {
+    "archives": (
+        ("pinned", "ALTER TABLE archives ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"),
+    ),
     "tags": (
         ("is_global", "ALTER TABLE tags ADD COLUMN is_global BOOLEAN NOT NULL DEFAULT 0"),
         (

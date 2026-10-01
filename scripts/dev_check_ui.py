@@ -442,6 +442,36 @@ def _check_archive_owner(window) -> list[str]:
     return problems
 
 
+def _check_archive_pin(window) -> list[str]:
+    """存档可标记：按钮随选中存档切换文案，已标记的快照在列表与详情中标出。"""
+    page = window.archive_page
+    problems: list[str] = []
+    if not hasattr(page, "pin_button"):
+        return ["存档页缺少「标记存档」按钮"]
+    if "标记存档" not in page.caption.text():
+        problems.append("存档页说明没有提到「标记存档」")
+    archives = page._archives
+    if not archives:
+        if page.pin_button.isEnabled():
+            problems.append("没有存档时「标记存档」按钮仍可用")
+        return problems
+    pinned = [archive for archive in archives if archive.pinned]
+    target = pinned[0] if pinned else archives[0]
+    index = archives.index(target)
+    page.archive_list.setCurrentRow(index)
+    if not page.pin_button.isEnabled():
+        problems.append("选中存档后「标记存档」按钮仍禁用")
+    expected = "取消标记" if pinned else "标记存档"
+    if page.pin_button.text() != expected:
+        problems.append(f"按钮文案应为「{expected}」，实际为「{page.pin_button.text()}」")
+    if pinned:
+        if "【已标记】" not in page.archive_list.item(index).text():
+            problems.append("列表项没有标出【已标记】")
+        if "【已标记】" not in page.detail_meta.text():
+            problems.append("详情区没有标出【已标记】")
+    return problems
+
+
 def _check_settings_extras(window) -> list[str]:
     """数据仓库配置已删除；日志模式与四张保留卡存在且随模式联动。"""
     from app.core import logging_setup
@@ -684,6 +714,7 @@ def main() -> int:
         ("user_page", lambda: _check_user_page(window)),
         ("user_password_clear", lambda: _check_user_password_clear(app, window)),
         ("archive_owner", lambda: _check_archive_owner(window)),
+        ("archive_pin", lambda: _check_archive_pin(window)),
         ("recent_focus", lambda: _check_recent_focus(app, window)),
         ("settings_extras", lambda: _check_settings_extras(window)),
         ("filter_sections", lambda: _check_filter_sections(app, window)),
