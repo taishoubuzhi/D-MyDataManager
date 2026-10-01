@@ -1,4 +1,42 @@
+# 运行期数据（不随代码分发）
 /logs/
-/.trae/specs/
-/.trae/documents/
 /resources/
+/config/
+/data/
+/cache/
+/exports/
+_tmp_export/
+_tmp/
+
+# 本地环境与 IDE 配置
+/.venv/
+/.idea/
+/.trae/
+/.vscode/
+/.dsh/
+.dsh-acl-recovery/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# 上游参考仓库：仅本地对照 qfluentwidgets 官方示例，不随代码分发
+/PyQt-Fluent-Widgets/
+
+# PyAppify 打包产物
+/pyappify_dist/
+pyappify.exe
+/build/
+/dist/
+*.spec
+
+# 测试临时目录
+tests/_tmp/
+tests/_scratch/
+
+# 开发脚本重定向产生的日志
+_*.log
+
+# 历史残留
+_legacy_src/
+_backup_*/

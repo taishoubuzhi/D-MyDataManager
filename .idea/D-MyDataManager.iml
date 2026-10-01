@@ -6,9 +6,19 @@
       <sourceFolder url="file://$MODULE_DIR$/src/app" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/app/common" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
+      <excludeFolder url="file://$MODULE_DIR$/.trae/documents" />
+      <excludeFolder url="file://$MODULE_DIR$/.trae/specs" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets/.idea" />
+      <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets/PyQt6_Fluent_Widgets.egg-info" />
+      <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets/examples/gallery/app/download" />
+      <excludeFolder url="file://$MODULE_DIR$/config" />
+      <excludeFolder url="file://$MODULE_DIR$/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/resources" />
     </content>
     <orderEntry type="jdk" jdkName="D:\Program\PyCharm\python\LeetCode\D-MyDataManager\.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module" module-name="PyQt-Fluent-Widgets" />
   </component>
 </module>
