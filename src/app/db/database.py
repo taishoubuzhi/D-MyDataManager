@@ -1,0 +1,317 @@
+"""数据库引擎、会话与初始化。"""
+
+from __future__ import annotations
+
+import datetime as dt
+import shutil
+import sqlite3
+from contextlib import closing, contextmanager
+from pathlib import Path
+from typing import Iterator
+
+from loguru import logger
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from ..core.config import config, db_file, db_url
+from .models import Base
+
+_engine: Engine | None = None
+_session_factory: sessionmaker | None = None
+
+# 表结构版本：低版本库启动时原地补列升级，高于当前程序的库则备份并重建
+SCHEMA_VERSION = 4
+
+# 全文检索：FTS5 虚拟表（trigram 分词，支持中文子串匹配）+ 同步触发器
+FTS_TABLE = "items_fts"
+FTS_SOURCE_TABLE = "items"
+
+_FTS_STATEMENTS = (
+    f"""CREATE VIRTUAL TABLE IF NOT EXISTS {FTS_TABLE} USING fts5(
+        name, content, keywords, tokenize='trigram'
+    )""",
+    f"""CREATE TRIGGER IF NOT EXISTS {FTS_TABLE}_ai AFTER INSERT ON {FTS_SOURCE_TABLE} BEGIN
+        INSERT INTO {FTS_TABLE}(rowid, name, content, keywords)
+        VALUES (new.id, new.name, new.content, new.keywords);
+    END""",
+    f"""CREATE TRIGGER IF NOT EXISTS {FTS_TABLE}_ad AFTER DELETE ON {FTS_SOURCE_TABLE} BEGIN
+        DELETE FROM {FTS_TABLE} WHERE rowid = old.id;
+    END""",
+    f"""CREATE TRIGGER IF NOT EXISTS {FTS_TABLE}_au AFTER UPDATE ON {FTS_SOURCE_TABLE} BEGIN
+        DELETE FROM {FTS_TABLE} WHERE rowid = old.id;
+        INSERT INTO {FTS_TABLE}(rowid, name, content, keywords)
+        VALUES (new.id, new.name, new.content, new.keywords);
+    END""",
+)
+
+_FTS_BACKFILL = f"""INSERT INTO {FTS_TABLE}(rowid, name, content, keywords)
+    SELECT id, name, content, keywords FROM {FTS_SOURCE_TABLE}
+    WHERE id NOT IN (SELECT rowid FROM {FTS_TABLE})"""
+
+
+@event.listens_for(Engine, "connect")
+def _sqlite_pragmas(dbapi_connection, _record) -> None:
+    """SQLite 默认关闭外键约束，这里打开并启用 WAL 以改善并发读写。"""
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
+    except Exception:  # 非 SQLite 连接忽略
+        pass
+
+
+def get_engine() -> Engine:
+    global _engine
+    if _engine is None:
+        url = db_url()
+        options: dict = {"echo": bool(config.dbEcho.value), "future": True}
+        if url.startswith("sqlite"):
+            db_file().parent.mkdir(parents=True, exist_ok=True)
+            options["connect_args"] = {"check_same_thread": False}
+        _engine = create_engine(url, **options)
+        logger.info("数据库引擎已创建：{}", url)
+    return _engine
+
+
+def get_session_factory() -> sessionmaker:
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = sessionmaker(bind=get_engine(), expire_on_commit=False, future=True)
+    return _session_factory
+
+
+def new_session() -> Session:
+    return get_session_factory()()
+
+
+@contextmanager
+def session_scope() -> Iterator[Session]:
+    """事务上下文：正常提交，异常回滚。"""
+    session = new_session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _stored_schema_version(engine: Engine) -> int | None:
+    with engine.connect() as connection:
+        tables = {
+            row[0]
+            for row in connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "app_meta" not in tables:
+            return None
+        raw = connection.exec_driver_sql(
+            "SELECT value FROM app_meta WHERE key = 'schema_version'"
+        ).scalar()
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def backup_database_file(target: Path) -> Path | None:
+    """把当前数据库完整复制到 target。
+
+    数据库以 WAL 模式运行，最近提交可能还没落进 data.db，直接复制文件会丢数据；
+    这里用 SQLite 的在线备份接口，复制完再把目标库的日志模式设回单文件 DELETE。
+    """
+    source = db_file()
+    if not source.is_file():
+        return None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        # sqlite3 的 with 只提交事务不关连接，Windows 上必须显式关闭，否则 data.db 一直被占用
+        with closing(sqlite3.connect(str(source))) as src, closing(sqlite3.connect(str(target))) as dst:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+    except sqlite3.Error as exc:
+        logger.error("备份数据库失败：{}", exc)
+        return None
+    return target
+
+
+def _reset_for_schema_change() -> None:
+    """库结构版本高于当前程序时（降级运行）备份旧库并重建空库；低版本走原地升级。"""
+    version = _stored_schema_version(get_engine())
+    if version is None or version <= SCHEMA_VERSION:
+        return
+    path = db_file()
+    dispose_engine()
+    if path.exists() and path.stat().st_size:
+        backup = backup_database_file(path.with_name(f"{path.name}.bak-{dt.datetime.now():%Y%m%d-%H%M%S}"))
+        if backup is not None:
+            logger.warning("数据库结构已更新，旧库已备份为 {}，将重建空库", backup.name)
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
+
+
+# 2 -> 3：tags 表补 is_global / created_by，历史 user_id 为空的行视为全局标签
+# 3 -> 4：users 补 is_default（默认用户/管理员），archive_entries 补所属用户
+_COLUMN_PATCHES: dict[str, tuple[tuple[str, str], ...]] = {
+    "tags": (
+        ("is_global", "ALTER TABLE tags ADD COLUMN is_global BOOLEAN NOT NULL DEFAULT 0"),
+        (
+            "created_by",
+            "ALTER TABLE tags ADD COLUMN created_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        ),
+    ),
+    "users": (
+        ("is_default", "ALTER TABLE users ADD COLUMN is_default BOOLEAN NOT NULL DEFAULT 0"),
+    ),
+    "archive_entries": (
+        (
+            "user_id",
+            "ALTER TABLE archive_entries ADD COLUMN user_id INTEGER "
+            "REFERENCES users(id) ON DELETE SET NULL",
+        ),
+        (
+            "user_name",
+            "ALTER TABLE archive_entries ADD COLUMN user_name VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
+    ),
+}
+
+_DATA_PATCHES: tuple[str, ...] = (
+    "UPDATE tags SET created_by = user_id WHERE created_by IS NULL",
+    "UPDATE tags SET is_global = 1 WHERE user_id IS NULL",
+    "UPDATE users SET is_default = 1 WHERE id = (SELECT MIN(id) FROM users) "
+    "AND NOT EXISTS (SELECT 1 FROM users WHERE is_default = 1)",
+    "UPDATE archive_entries SET user_id = "
+    "(SELECT user_id FROM items WHERE items.id = archive_entries.item_id) "
+    "WHERE user_id IS NULL AND item_id IS NOT NULL",
+    "UPDATE archive_entries SET user_name = COALESCE("
+    "(SELECT name FROM users WHERE users.id = archive_entries.user_id), '') "
+    "WHERE user_name = ''",
+)
+
+_INDEX_PATCHES: tuple[str, ...] = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_tag_global_name ON tags(name) WHERE is_global = 1",
+    "CREATE INDEX IF NOT EXISTS ix_users_is_default ON users(is_default)",
+    "CREATE INDEX IF NOT EXISTS ix_archive_entries_user_id ON archive_entries(user_id)",
+)
+
+
+def _dedupe_global_tags(connection) -> None:
+    """历史数据里可能有同名全局标签，重命名副本，避免唯一索引建立失败。"""
+    names = connection.exec_driver_sql(
+        "SELECT name FROM tags WHERE is_global = 1 GROUP BY name HAVING COUNT(*) > 1"
+    ).fetchall()
+    for (name,) in names:
+        ids = [
+            row[0]
+            for row in connection.exec_driver_sql(
+                "SELECT id FROM tags WHERE is_global = 1 AND name = ? ORDER BY id", (name,)
+            )
+        ]
+        for index, tag_id in enumerate(ids[1:], start=2):
+            connection.exec_driver_sql(
+                "UPDATE tags SET name = ? WHERE id = ?", (f"{name}（{index}）", tag_id)
+            )
+        logger.warning("历史全局标签「{}」重名，已重命名 {} 个副本", name, len(ids) - 1)
+
+
+def _upgrade_schema() -> None:
+    """把旧版本库原地升级到当前结构：只补列 / 补索引并回填，不重建库、不丢数据。"""
+    engine = get_engine()
+    version = _stored_schema_version(engine)
+    if version is None or version >= SCHEMA_VERSION:
+        return
+    with engine.begin() as connection:
+        tables = {
+            row[0]
+            for row in connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        for table, patches in _COLUMN_PATCHES.items():
+            if table not in tables:
+                continue
+            columns = {
+                row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")
+            }
+            for column, statement in patches:
+                if column not in columns:
+                    connection.exec_driver_sql(statement)
+                columns.add(column)
+        for statement in _DATA_PATCHES:
+            try:
+                connection.exec_driver_sql(statement)
+            except Exception as exc:
+                logger.warning("结构升级语句失败（已跳过）：{}", exc)
+        if "tags" in tables:
+            _dedupe_global_tags(connection)
+        for statement in _INDEX_PATCHES:
+            try:
+                connection.exec_driver_sql(statement)
+            except Exception as exc:
+                logger.warning("索引创建失败（已跳过）：{}", exc)
+    logger.info("数据库结构已原地升级：{} -> {}", version, SCHEMA_VERSION)
+
+
+def _write_schema_version(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO app_meta(key, value) VALUES ('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(SCHEMA_VERSION),),
+        )
+
+
+def init_db(force: bool = False) -> None:
+    engine = get_engine()
+    if force:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+        Base.metadata.drop_all(engine)
+        logger.warning("已按要求删除全部数据表")
+    else:
+        _reset_for_schema_change()
+        _upgrade_schema()
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    ensure_fts(engine)
+    _write_schema_version(engine)
+    logger.info("数据表已就绪")
+
+
+def ensure_fts(engine: Engine | None = None) -> int:
+    """建立 FTS5 检索表与同步触发器，并回填尚未索引的数据项；返回回填行数。"""
+    engine = engine or get_engine()
+    with engine.begin() as connection:
+        for statement in _FTS_STATEMENTS:
+            connection.exec_driver_sql(statement)
+        missing = connection.exec_driver_sql(
+            f"SELECT COUNT(*) FROM {FTS_SOURCE_TABLE} "
+            f"WHERE id NOT IN (SELECT rowid FROM {FTS_TABLE})"
+        ).scalar_one()
+        if missing:
+            connection.exec_driver_sql(_FTS_BACKFILL)
+            logger.info("已回填 {} 条数据项的检索索引", missing)
+        return int(missing)
+
+
+def rebuild_fts(engine: Engine | None = None) -> None:
+    """重建整张检索索引（索引损坏或手工改库后使用）。"""
+    engine = engine or get_engine()
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+    ensure_fts(engine)
+    logger.info("检索索引已重建")
+
+
+def dispose_engine() -> None:
+    global _engine, _session_factory
+    if _engine is not None:
+        _engine.dispose()
+    _engine = None
+    _session_factory = None

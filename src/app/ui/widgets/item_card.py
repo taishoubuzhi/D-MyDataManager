@@ -1,0 +1,213 @@
+"""数据项卡片与列表行。"""
+
+from __future__ import annotations
+
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget
+
+from ...db.models import DataItem
+from ..common import elide, format_datetime, format_size, type_icon, type_name
+from .cover_loader import cover_loader
+
+COVER_SIZE = 48
+
+
+class CoverLabel(QLabel):
+    """48×48 的封面：先显示类型图标，缩略图在工作线程加载完成后替换。"""
+
+    def __init__(self, parent: QWidget | None = None, size: int = COVER_SIZE) -> None:
+        super().__init__(parent)
+        self._size = size
+        self._request = 0
+        self.setFixedSize(size, size)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet("border-radius: 6px; background: rgba(128, 128, 128, 0.14);")
+
+    def set_item(self, item: DataItem) -> None:
+        self._request += 1
+        token = self._request
+        self.clear()
+        self.setPixmap(type_icon(item.type).icon().pixmap(self._size // 2, self._size // 2))
+        path = item.cover_path
+        if not path:
+            return
+        loader = cover_loader()
+        cached = loader.cached(path, self._size)
+        if cached is not None:
+            self._apply(cached, token)
+            return
+        loader.request(path, self._size, lambda pixmap: self._apply(pixmap, token))
+
+    def _apply(self, pixmap: QPixmap | None, token: int) -> None:
+        if pixmap is None or token != self._request:
+            return
+        self.setPixmap(pixmap)
+
+
+class _TagRow(QWidget):
+    def __init__(
+        self, parent: QWidget | None = None, rgba: str = "0, 120, 212, 0.14", prefix: str = ""
+    ) -> None:
+        super().__init__(parent)
+        self._rgba = rgba
+        self._prefix = prefix
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(4)
+
+    def set_tags(self, names: list[str]) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for name in names[:4]:
+            chip = CaptionLabel(f"{self._prefix}{name}", self)
+            chip.setStyleSheet(
+                f"background: rgba({self._rgba}); border-radius: 8px; padding: 1px 6px;"
+            )
+            self._layout.addWidget(chip)
+        if len(names) > 4:
+            self._layout.addWidget(CaptionLabel(f"+{len(names) - 4}", self))
+        self._layout.addStretch(1)
+
+
+class ItemCard(CardWidget):
+    """卡片视图中的一个数据项。"""
+
+    activated = pyqtSignal(object)
+    opened = pyqtSignal(object)
+    menuRequested = pyqtSignal(object, object)
+
+    def __init__(self, item: DataItem, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._item = item
+
+        self._indicator = QFrame(self)
+        self._indicator.setFixedWidth(3)
+        self._indicator.setStyleSheet("background: #0a84ff; border-radius: 1px;")
+        self._indicator.setVisible(False)
+
+        self._cover = CoverLabel(self)
+        self._cover.set_item(item)
+
+        self._title = BodyLabel(elide(item.name, 34), self)
+        self._title.setStyleSheet("font-weight: 600;")
+        self._meta = CaptionLabel(
+            f"{type_name(item.type)} · {format_size(item.size)} · {format_datetime(item.created_at)}",
+            self,
+        )
+        tag_names = list(item.tag_names)
+        keywords = [str(word) for word in (item.keywords or []) if str(word).strip()]
+        self._tags = _TagRow(self, prefix="#")
+        self._tags.set_tags(tag_names)
+        self._tags.setToolTip("标签：" + ("、".join(tag_names) or "无"))
+        self._keywords = _TagRow(self, "120, 120, 120, 0.18")
+
+        info = QVBoxLayout()
+        info.setContentsMargins(0, 0, 0, 0)
+        info.setSpacing(2)
+        info.addWidget(self._title)
+        info.addWidget(self._meta)
+        info.addWidget(self._tags)
+        if keywords:
+            self._keywords.set_tags(keywords)
+            self._keywords.setToolTip("关键词：" + "、".join(keywords))
+            info.addWidget(self._keywords)
+
+        for flag in (Qt.WidgetAttribute.WA_TransparentForMouseEvents,):
+            self._title.setAttribute(flag, True)
+            self._meta.setAttribute(flag, True)
+            self._tags.setAttribute(flag, True)
+            self._keywords.setAttribute(flag, True)
+            self._cover.setAttribute(flag, True)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 8, 10, 8)
+        layout.setSpacing(10)
+        layout.addWidget(self._indicator)
+        layout.addWidget(self._cover)
+        layout.addLayout(info, 1)
+
+        self.clicked.connect(lambda: self.activated.emit(self._item))
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(
+            lambda pos: self.menuRequested.emit(self._item, self.mapToGlobal(pos))
+        )
+
+    @property
+    def item(self) -> DataItem:
+        return self._item
+
+    def set_selected(self, selected: bool) -> None:
+        self._indicator.setVisible(selected)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self.opened.emit(self._item)
+        super().mouseDoubleClickEvent(event)
+
+
+class ItemListRow(QWidget):
+    """列表视图中的一行。"""
+
+    activated = pyqtSignal(object)
+    opened = pyqtSignal(object)
+    menuRequested = pyqtSignal(object, object)
+
+    def __init__(self, item: DataItem, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._item = item
+        self._selected = False
+        self.setMinimumHeight(44)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self._cover = CoverLabel(self, 32)
+        self._cover.set_item(item)
+        self._title = BodyLabel(elide(item.name, 46), self)
+        self._meta = CaptionLabel(
+            f"{type_name(item.type)} · {format_size(item.size)} · {format_datetime(item.created_at)}",
+            self,
+        )
+        tag_names = list(item.tag_names)
+        keywords = [str(word) for word in (item.keywords or []) if str(word).strip()]
+        self._tags = CaptionLabel(" ".join(f"#{name}" for name in tag_names[:3]), self)
+        self._tags.setToolTip("标签：" + ("、".join(tag_names) or "无"))
+        self._keywords = CaptionLabel("、".join(keywords[:3]), self)
+        self._keywords.setToolTip("关键词：" + ("、".join(keywords) or "无"))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(10)
+        layout.addWidget(self._cover)
+        layout.addWidget(self._title, 2)
+        layout.addWidget(self._meta, 2)
+        layout.addWidget(self._tags, 1)
+        layout.addWidget(self._keywords, 1)
+
+    @property
+    def item(self) -> DataItem:
+        return self._item
+
+    def set_selected(self, selected: bool) -> None:
+        self._selected = selected
+        self.setStyleSheet(
+            "background: rgba(10, 132, 255, 0.16); border-radius: 6px;"
+            if selected
+            else "background: transparent;"
+        )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        event.accept()
+        self.activated.emit(self._item)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self.opened.emit(self._item)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        self.menuRequested.emit(self._item, event.globalPos())
+
+
+__all__ = ["CoverLabel", "ItemCard", "ItemListRow"]

@@ -1,0 +1,12 @@
+# PyAppify 打包配置（配合 .github/workflows/build.yml 使用）
+# 文档：https://github.com/ok-oldking/pyappify
+name: "D-MyDataManager" # 仅支持英文
+icon: "icons/icon.png"
+website: "https://github.com/taishoubuzhi/D-MyDataManager"
+profiles:
+  - name: "release"
+    # 用户端从这里按标签克隆代码，并在本机创建独立 venv 安装依赖
+    git_url: "https://github.com/taishoubuzhi/D-MyDataManager.git"
+    main_script: "src/main.py"
+    requires_python: "3.13" # pyappify 支持 3.7 - 3.13
+    requirements: "requirements.txt"
