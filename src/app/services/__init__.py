@@ -8,6 +8,8 @@ from .import_service import ImportResult, ImportService, timestamp_name
 from .item_service import ItemService
 from .library_service import LibraryService, sanitize_dir_name
 from .maintenance import reset_config, reset_runtime_data, reset_to_defaults
+from .open_with_service import OpenDecision, OpenRule, OpenWithService
+from .plugin_service import PluginApi, PluginInfo, PluginService, plugin_service
 from .stats_service import overview, recent, storage_usage, type_breakdown
 from .taxonomy_service import CategoryNode, TaxonomyService
 from .user_service import UserInfo, UserService
@@ -23,12 +25,19 @@ __all__ = [
     "ImportService",
     "ItemService",
     "LibraryService",
+    "OpenDecision",
+    "OpenRule",
+    "OpenWithService",
+    "PluginApi",
+    "PluginInfo",
+    "PluginService",
     "TaxonomyService",
     "UserInfo",
     "UserService",
     "build_features",
     "make_cover",
     "overview",
+    "plugin_service",
     "recent",
     "replace_features",
     "reset_config",

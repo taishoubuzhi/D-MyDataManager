@@ -29,6 +29,8 @@ PAGES = (
     "tag_page",
     "user_page",
     "archive_page",
+    "open_with_page",
+    "plugin_page",
     "settings_page",
 )
 
@@ -472,6 +474,67 @@ def _check_archive_pin(window) -> list[str]:
     return problems
 
 
+def _check_open_with(window) -> list[str]:
+    """打开方式页：列出格式、选中后能显示模式，并默认使用内置查看器。"""
+    from pathlib import Path
+
+    from app.core.viewers import viewer_registry
+    from app.services.open_with_service import open_with_service
+    from app.services.plugin_service import plugin_service
+
+    page = window.open_with_page
+    problems: list[str] = []
+    plugin_service.load_viewers()
+    if "md" not in viewer_registry.extensions():
+        problems.append("载入内置插件后注册表里没有 md 查看器")
+    decision = open_with_service.resolve(Path("示例.md"))
+    if not decision.is_builtin:
+        problems.append(f"md 文件默认应使用内置查看器，实际为 {decision.mode}")
+    if page.suffix_list.count() == 0:
+        return problems + ["打开方式页没有列出任何格式"]
+    page.suffix_list.setCurrentRow(0)
+    if not page.detail_title.text():
+        problems.append("选中格式后没有显示格式说明")
+    if page.mode_box.count() == 0:
+        problems.append("选中格式后「打开方式」下拉框没有选项")
+    page._on_manage_plugins()
+    if window.stackedWidget.currentWidget() is not window.plugin_page:
+        problems.append("「管理打开方式插件」没有跳到插件页")
+    elif window.plugin_page.kind_box.currentData() != "viewer":
+        problems.append("跳到插件页后没有按「打开方式」类型筛选")
+    window.switchTo(window.open_with_page)
+    return problems
+
+
+def _check_plugins(window) -> list[str]:
+    """插件页：内置插件齐全、按类型筛选可用、内置插件不能删除。"""
+    page = window.plugin_page
+    problems: list[str] = []
+    page.apply_kind("viewer")
+    if page.plugin_list.count() < 7:
+        problems.append(f"查看器插件不足 7 个，实际 {page.plugin_list.count()} 个")
+    if page.kind_box.currentData() != "viewer":
+        problems.append(f"按查看器类型筛选后下拉框应为 viewer，实际为 {page.kind_box.currentData()!r}")
+    page.apply_kind("theme")
+    if page.kind_box.currentData() not in ("", None):
+        problems.append("未知类型筛选后下拉框应回到「全部类型」")
+    page.apply_kind("viewer")
+    page.source_box.setCurrentIndex(1)
+    for row in range(page.plugin_list.count()):
+        if "内置" not in page.plugin_list.item(row).text():
+            problems.append("按「内置」来源筛选后仍列出了外部插件")
+            break
+    page.source_box.setCurrentIndex(0)
+    page.plugin_list.setCurrentRow(0)
+    if not page.detail_title.text():
+        problems.append("选中插件后没有显示插件详情")
+    if page.delete_button.isEnabled():
+        problems.append("内置插件的「删除」按钮应禁用")
+    if page.toggle_button.text() not in ("启用", "禁用"):
+        problems.append(f"启用按钮文案异常：{page.toggle_button.text()}")
+    return problems
+
+
 def _check_settings_extras(window) -> list[str]:
     """数据仓库配置已删除；日志模式与四张保留卡存在且随模式联动。"""
     from app.core import logging_setup
@@ -715,6 +778,8 @@ def main() -> int:
         ("user_password_clear", lambda: _check_user_password_clear(app, window)),
         ("archive_owner", lambda: _check_archive_owner(window)),
         ("archive_pin", lambda: _check_archive_pin(window)),
+        ("open_with", lambda: _check_open_with(window)),
+        ("plugins", lambda: _check_plugins(window)),
         ("recent_focus", lambda: _check_recent_focus(app, window)),
         ("settings_extras", lambda: _check_settings_extras(window)),
         ("filter_sections", lambda: _check_filter_sections(app, window)),

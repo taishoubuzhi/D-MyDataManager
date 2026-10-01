@@ -40,6 +40,7 @@ from ...repositories import (
 )
 from ...services import ExportService, ItemService, TaxonomyService, UserService
 from ..common import confirm, format_size, toast_error, toast_success, toast_warning, type_name
+from ..viewers.open_flow import open_path
 from ..dialogs import DuplicateDialog, ItemEditDialog, TextInputDialog
 from ..widgets.category_tree import CategoryTree
 from ..widgets.filter_panel import FilterPanel
@@ -395,15 +396,18 @@ class ManagePage(QWidget):
 
     # ------------------------------------------------------------------ 选择
     def _on_item_activated(self, item) -> None:
+        """单击：默认直接在程序内查看；按住 Ctrl 改为多选（不打开）。"""
         modifiers = QApplication.keyboardModifiers()
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             if item.id in self._selected:
                 self._selected.discard(item.id)
             else:
                 self._selected.add(item.id)
-        else:
-            self._selected = {item.id}
+            self._sync_selection()
+            return
+        self._selected = {item.id}
         self._sync_selection()
+        self._on_open(item)
 
     def selected_items(self) -> list:
         """选中的项按 id 从库中取回，跨页选择同样有效。"""
@@ -453,8 +457,14 @@ class ManagePage(QWidget):
 
     # ------------------------------------------------------------------ 操作
     def _on_open(self, item) -> None:
-        if not self.item_service.open_item(item):
+        """打开数据：优先用内置查看器，没有内置方式时交给系统默认程序。"""
+        path = self.item_service.file_path_of(item)
+        if path is None:
             toast_error(self, "无法打开", f"文件不存在或无法打开：{item.name}")
+            return
+        ok, message = open_path(path, self.window())
+        if not ok:
+            toast_error(self, "无法打开", message)
 
     def _on_reveal(self, item) -> None:
         if not self.item_service.reveal_item(item):

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import itertools
 import os
 import shutil
 import sys
@@ -25,6 +26,33 @@ TMP_ROOT = ROOT / "tests" / "_tmp"
 KEEP_TMP = bool(os.environ.get("DM_KEEP_TMP"))
 
 
+class TempDir:
+    """临时目录。
+
+    tempfile.mkdtemp 以 0o700 建目录，本机沙箱下该目录里无法再写入文件，因此改用普通 mkdir 建目录。
+    """
+
+    _counter = itertools.count(1)
+
+    def __init__(self, prefix: str = "case") -> None:
+        TMP_ROOT.mkdir(parents=True, exist_ok=True)
+        self.name = str(TMP_ROOT / f"{prefix}-{os.getpid()}-{next(self._counter)}")
+        Path(self.name).mkdir(parents=True, exist_ok=True)
+
+    @property
+    def path(self) -> Path:
+        return Path(self.name)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.name, ignore_errors=True)
+
+    def __enter__(self) -> Path:
+        return self.path
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.cleanup()
+
+
 def redirect_paths(root: Path) -> None:
     """把 paths 里的运行期目录整体指向临时根目录。"""
     data = root / "resources"
@@ -35,6 +63,9 @@ def redirect_paths(root: Path) -> None:
     paths.DEFAULT_EXPORT_DIR = root / "exports"
     paths.CONFIG_DIR = root / "config"
     paths.CONFIG_FILE = paths.CONFIG_DIR / "config.json"
+    paths.PLUGIN_DIR = root / "plugins"
+    paths.PLUGIN_STATE_FILE = paths.CONFIG_DIR / "plugins.json"
+    paths.OPEN_WITH_FILE = paths.CONFIG_DIR / "open_with.json"
     paths.ensure_dirs()
 
 

@@ -40,6 +40,13 @@ LOG_DIR = ROOT / "logs"
 DEFAULT_EXPORT_DIR = ROOT / "exports"
 DEFAULT_LIBRARY_DIR = DATA_DIR / "library"
 
+# 插件：第三方插件放在项目根（打包后为可执行文件同级），随程序分发的内置插件在代码里
+PLUGIN_DIR = ROOT / "plugins"
+PLUGIN_STATE_FILE = CONFIG_DIR / "plugins.json"
+# 打开方式规则：扩展名 → 内置 / 继承 / 自定义
+OPEN_WITH_FILE = CONFIG_DIR / "open_with.json"
+PLUGIN_MANIFEST = "plugin.json"
+
 # 库文件夹结构（单一库）：<库>/全局/ 放全局资源，<库>/<用户名>/ 放该用户的数据
 GLOBAL_DIR_NAME = "全局"
 LIBRARY_STORE_DIRNAME = "store"
@@ -69,7 +76,14 @@ def global_subdirs(library_root: Path) -> tuple[Path, ...]:
 
 def ensure_dirs() -> None:
     """创建运行期需要的目录（幂等）。"""
-    directories = [DATA_DIR, LOG_DIR, CONFIG_DIR, DEFAULT_LIBRARY_DIR, *global_subdirs(DEFAULT_LIBRARY_DIR)]
+    directories = [
+        DATA_DIR,
+        LOG_DIR,
+        CONFIG_DIR,
+        DEFAULT_LIBRARY_DIR,
+        PLUGIN_DIR,
+        *global_subdirs(DEFAULT_LIBRARY_DIR),
+    ]
     for directory in directories:
         directory.mkdir(parents=True, exist_ok=True)
 

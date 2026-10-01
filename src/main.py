@@ -14,6 +14,7 @@ if __package__ in (None, ""):  # 允许直接以脚本方式运行
 
 from PyQt6.QtCore import QTimer, QTranslator  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
+from loguru import logger  # noqa: E402
 from qfluentwidgets import FluentTranslator, Theme, setTheme  # noqa: E402
 
 from app.core import paths  # noqa: E402
@@ -22,6 +23,7 @@ from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.services.layout_migration import migrate_layout  # noqa: E402
+from app.services.plugin_service import plugin_service  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -64,6 +66,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     _setup_translator(app)
     _apply_theme()
+
+    logger.info("已载入 {} 个查看器插件", plugin_service.load_viewers())
 
     window = MainWindow()
     window.show()

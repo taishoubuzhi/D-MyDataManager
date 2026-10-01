@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core import shell
 from ..core.config import store_dir
 from ..db.models import ArchiveEntry, DataItem, DataType, Library
 from ..repositories import BlobRepository, ItemRepository, TagRepository
@@ -128,41 +126,36 @@ class ItemService:
         return path if path is not None and path.exists() else None
 
     def open_item(self, item: DataItem) -> bool:
+        """用系统默认程序打开；内置查看器由界面层按「打开方式」规则处理。"""
         path = self.file_path_of(item)
         if path is None:
             logger.warning("文件不存在，无法打开：{}", item.name)
             return False
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(str(path))  # noqa: S606
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path)])
-            return True
-        except Exception as exc:
-            logger.error("打开文件失败：{}", exc)
-            return False
+        return shell.open_default(path)
 
     def reveal_item(self, item: DataItem) -> bool:
         path = self.file_path_of(item)
         if path is None:
             return False
-        try:
-            if sys.platform.startswith("win"):
-                subprocess.Popen(["explorer", "/select,", str(path)])
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", str(path)])
-            else:
-                subprocess.Popen(["xdg-open", str(path.parent)])
-            return True
-        except Exception as exc:
-            logger.error("定位文件失败：{}", exc)
-            return False
+        return shell.reveal(path)
 
     def copy_path(self, item: DataItem) -> str:
         path = self.file_path_of(item)
         return str(path) if path else item.source_path
+
+    def extensions_in_use(self, user_id: int | None = None) -> dict[str, int]:
+        """库里实际出现的扩展名 → 数量，供「打开方式」页列出可配置的格式。"""
+        from ..repositories import ItemFilter
+
+        filters = ItemFilter(include_hidden=True, include_deleted=True)
+        if user_id:
+            filters.user_ids = {int(user_id)}
+        counts: dict[str, int] = {}
+        for item in self.items.query(filters):
+            suffix = Path(item.file_path or item.source_path).suffix.lower().lstrip(".")
+            if suffix:
+                counts[suffix] = counts.get(suffix, 0) + 1
+        return counts
 
     # ----------------------------------------------------------------- 查重
     def duplicate_map(self, user_id: int | None = None) -> dict[str, list[DataItem]]:

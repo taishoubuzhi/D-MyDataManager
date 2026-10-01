@@ -11,10 +11,13 @@ class SignalBus(QObject):
     tagsChanged = pyqtSignal()
     userChanged = pyqtSignal()
     archivesChanged = pyqtSignal()
+    openWithChanged = pyqtSignal()
+    pluginsChanged = pyqtSignal()
 
     requestImport = pyqtSignal()
     requestManage = pyqtSignal()
     requestArchive = pyqtSignal()
+    requestPlugins = pyqtSignal(str)
     focusItem = pyqtSignal(int)
     librariesChanged = pyqtSignal()
 

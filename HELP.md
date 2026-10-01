@@ -114,6 +114,45 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 只有先取消标记、或在存档页手动删除才会消失。`ArchiveService.set_pinned()` 切换标记，`SCHEMA_VERSION` 升到 5 时给旧库原地补上该列。
 存档页的「标记存档 / 取消标记」按钮跟随选中存档（未选中时禁用），列表项与详情都会标出【已标记】。
 
+## 打开方式与查看器插件
+
+打开文件走 `src/app/services/open_with_service.py`：`OpenWithService.resolve(path)` 按顺序决定用哪种方式 —— 自定义规则且填了程序 →
+`custom`；自定义规则没填程序 → `ask`（交给系统选择）；规则为内置且查看器已注册 → `builtin`；规则为内置但查看器不可用（插件被禁用）→
+回退 `inherit`；没有规则时，有内置查看器就用内置，否则用系统默认。规则按扩展名（不含点）存在 `config/open_with.json`，形如
+`{mode, program, args}`，`mode` 取 `builtin` / `inherit` / `custom`，参数里的 `{path}` 会替换成实际路径（没有占位符时自动补在末尾，
+见 `src/app/core/shell.py` 的 `build_command()`）。「打开方式」页列出库内数据用到的全部扩展名，可逐个设置、恢复默认并「测试打开」；
+执行外部程序、交给系统选择、在资源管理器中定位分别是 `shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
+
+内置查看器本身也是插件（`src/app/plugins/builtin_viewers.py` 的 `builtin_plugins()`，共七个：图片 / 视频 / 音频 / 文本 / Markdown /
+压缩包 / 表格），只声明扩展名与控件工厂，控件模块在真正打开文件时才导入 Qt。查看器控件是普通 `QWidget`，构造签名 `(path, parent=None)`，
+可提供 `caption` 属性作为窗口标题栏的补充说明，由 `src/app/ui/viewers/window.py` 的 `open_viewer()` 套上统一外壳（标题、说明、
+「用系统程序打开」与「在资源管理器中显示」按钮）。数据管理页的条目在激活或「打开」时（`ManagePage._on_item_activated()` /
+`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开。
+
+查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），`PluginService.load_viewers()` 在启动时
+（`src/main.py`）清空注册表并按已启用插件重建，单个插件出错只记录该插件的异常信息。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
+文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
+
+外部插件放在 `plugins/<id>/` 目录，清单 `plugin.json` 至少要有 `id` 与 `entry`（查看器插件还要有 `extensions`）：
+
+```json
+{
+  "id": "sample.viewer",
+  "name": "示例查看器",
+  "version": "1.0.0",
+  "kind": "viewer",
+  "description": "说明文字",
+  "author": "作者",
+  "entry": "sample_plugin.py",
+  "extensions": ["dmx"]
+}
+```
+
+入口文件必须定义 `register(api)`，通过 `api.add_viewer(name, extensions, factory, kind, description, capabilities)` 注册控件工厂
+（`factory(path, parent)` 返回 `QWidget`；`PluginApi.default_extensions` 是清单里声明的扩展名，`api.plugin_id` / `api.plugin_name` 是插件信息）。
+「插件」页可导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名与备注、打开插件目录、删除外部插件；
+启用状态与备注存 `config/plugins.json`。内置插件不能删除；载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。
+
 ## 日志与保留策略
 
 `src/app/core/logging_setup.py` 按 `Log/Mode` 决定文件名与切分方式：`single`（恒为 `app.log`）、`session`（每次启动 `app-<时间戳>.log`）、
