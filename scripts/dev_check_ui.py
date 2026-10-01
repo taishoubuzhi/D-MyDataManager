@@ -15,6 +15,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
+
+def _configure_stdout() -> None:
+    """GBK 控制台下打印 ✔/✗ 会抛 UnicodeEncodeError，这里统一兜底成 UTF-8。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+_configure_stdout()
+
 from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -22,6 +34,7 @@ from app.core import paths  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
+from app.services.layout_migration import migrate_uncategorized  # noqa: E402
 
 PAGES = (
     "home_page",
@@ -84,6 +97,52 @@ def _check_category_filter(app, window) -> list[str]:
     return problems
 
 
+def _check_uncategorized_fixed(app, window) -> list[str]:
+    """「未分类」是固定分类：带标识、排在树的最底下、没有重命名/删除/新建子分类入口。"""
+    from PyQt6.QtCore import Qt
+
+    from app.services import is_uncategorized
+    from app.ui.widgets.category_tree import FIXED_SUFFIX, category_label, menu_entries
+
+    page = window.manage_page
+    _show_page(window, page)
+    app.processEvents()
+    user_id = page.user_service.current_id()
+    uncategorized = page.taxonomy.uncategorized_category(user_id=user_id, create=False)
+    if uncategorized is None:
+        return []
+    problems: list[str] = []
+    if not is_uncategorized(uncategorized):
+        problems.append("「未分类」没有被判定为固定分类")
+    if menu_entries(fixed=True):
+        problems.append("「未分类」的右键菜单仍提供修改入口")
+    if not menu_entries(fixed=False):
+        problems.append("普通分类的右键菜单为空")
+    nodes = page.taxonomy.tree(user_id=user_id)
+    roots = [node for node in nodes if node.depth == 0]
+    if not roots or roots[-1].category.id != uncategorized.id:
+        problems.append("「未分类」没有排在分类树最后")
+    elif FIXED_SUFFIX not in category_label(roots[-1], fixed=True):
+        problems.append("「未分类」的树标签没有固定标识")
+
+    items = list(page.tree._iter_items())
+    fixed = [item for item in items if item.data(0, Qt.ItemDataRole.UserRole) == uncategorized.id]
+    if not fixed:
+        problems.append("分类树里找不到「未分类」节点")
+    elif FIXED_SUFFIX not in fixed[0].text(0):
+        problems.append(f"「未分类」节点缺少固定标识：{fixed[0].text(0)!r}")
+    elif uncategorized.id not in page.tree.fixed_ids():
+        problems.append("分类树没有把「未分类」登记为固定分类")
+    # 根分类是「全部数据」节点的子项，「未分类」必须是最后一个。
+    if page.tree.topLevelItemCount():
+        parent = page.tree.topLevelItem(0)
+        if parent.childCount() and parent.child(parent.childCount() - 1).data(
+            0, Qt.ItemDataRole.UserRole
+        ) != uncategorized.id:
+            problems.append("分类树里「未分类」不是最后一个根分类")
+    return problems
+
+
 def _show_page(window, page) -> None:
     """把堆叠页切到目标页面，确保页面内的控件真正参与布局。"""
     try:
@@ -93,20 +152,35 @@ def _show_page(window, page) -> None:
 
 
 def _check_import_categories(window) -> list[str]:
-    """导入页的分类下拉此前用 tree() 取到所有用户的分类，同名项重复出现。"""
+    """导入页的分类下拉只能列出当前用户的分类（含「未分类」），不能串到别的用户。"""
+    from app.repositories import CategoryRepository
     from app.services import TaxonomyService, UserService
 
     page = window.import_page
     _show_page(window, page)
-    user_id = UserService(page.session).current_id()
-    expected = len(TaxonomyService(page.session).tree(user_id=user_id))
-    labels = [page.category_box.itemText(index) for index in range(page.category_box.count())]
-    body = labels[1:]  # 首项为「未分类」
+    session = page.session
+    user_service = UserService(session)
+    user_id = user_service.current_id()
+    expected = {node.category.id for node in TaxonomyService(session).tree(user_id=user_id)}
+    ids = [page.category_box.itemData(index) for index in range(page.category_box.count())]
     problems = []
-    if len(body) != expected:
-        problems.append(f"导入页分类项 {len(body)} 个，应为 {expected} 个")
-    if len(set(labels)) != len(labels):
-        problems.append(f"导入页分类项重复：{labels}")
+    if set(ids) != expected:
+        problems.append(f"导入页分类项为 {sorted(set(ids))}，应为当前用户的 {sorted(expected)}")
+    others = {
+        category.id
+        for info in user_service.list_users()
+        if info.user.id != user_id
+        for category in CategoryRepository(session).roots(user_id=info.user.id)
+    }
+    if others & set(ids):
+        problems.append("导入页分类下拉混入了其它用户的分类")
+    uncategorized = CategoryRepository(session).by_name("未分类", None, user_id)
+    if uncategorized is None:
+        problems.append("当前用户缺少「未分类」分类")
+    elif uncategorized.id not in ids:
+        problems.append("导入页分类下拉缺少「未分类」")
+    if page.category_box.currentData() is None:
+        problems.append("导入页分类下拉没有选中项")
     return problems
 
 
@@ -234,6 +308,175 @@ def _check_tag_page(app, window) -> list[str]:
         wanted = "全局" if tag.is_global else "个人"
         if not scope_cell.text().startswith(wanted):
             problems.append(f"标签「{tag.name}」归属显示为 {scope_cell.text()!r}，应为 {wanted}")
+    return problems
+
+
+SELFCHECK_IMPORT_NAME = "selfcheck_import"
+
+
+def _cleanup_selfcheck_import(window) -> None:
+    """清掉自检真导入产生的分类、数据项与落盘文件，避免污染开发库。"""
+    import shutil
+    from pathlib import Path
+
+    from app.repositories import CategoryRepository, ItemRepository
+    from app.services import ItemService, TaxonomyService
+
+    session = window.import_page.session
+    node = CategoryRepository(session).by_name(SELFCHECK_IMPORT_NAME)
+    if node is None:
+        return
+    try:
+        items = list(ItemRepository(session).in_category(node.id))
+        paths = [ItemService(session).file_path_of(item) for item in items]
+        if items:
+            ItemService(session).purge(items)
+        TaxonomyService(session).delete_category(node, recursive=True)
+        session.commit()
+    except Exception as exc:  # 自检清理失败不应影响检查结论
+        session.rollback()
+        print(f"自检清理：导入页自检数据未清干净：{exc}")
+        return
+    folders: set[Path] = set()
+    for path in paths:
+        for parent in path.parents if path else ():
+            if parent.name == SELFCHECK_IMPORT_NAME:
+                folders.add(parent)
+                break
+    for folder in folders:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def _check_import_batch(app, window) -> list[str]:
+    """导入页：可切换导入用户、显示完整文件信息，并把文件夹作为新分类整体导入。"""
+    try:
+        return _run_import_batch_check(app, window)
+    finally:
+        _cleanup_selfcheck_import(window)
+
+
+def _run_import_batch_check(app, window) -> list[str]:
+    """批量导入自检主体；真导入的数据由 _cleanup_selfcheck_import 清掉。"""
+    import time
+    from pathlib import Path
+
+    page = window.import_page
+    _show_page(window, page)
+    page.refresh()
+    app.processEvents()
+    problems: list[str] = []
+
+    if page.user_box.count() < 1:
+        problems.append("导入页没有「导入用户」下拉")
+    elif not any("（当前用户）" in page.user_box.itemText(index) for index in range(page.user_box.count())):
+        problems.append("导入用户下拉没有标注当前用户")
+    if page.details_card.isVisibleTo(page):
+        problems.append("尚未选择文件时不应显示「待导入文件信息」")
+
+    folder = Path(__file__).resolve().parents[1] / "tests" / "_tmp" / "selfcheck_import"
+    sub = folder / "sub"
+    sub.mkdir(parents=True, exist_ok=True)
+    (folder / "自检一.txt").write_text("自检内容一", encoding="utf-8")
+    (folder / "自检二.txt").write_text("自检内容二", encoding="utf-8")
+    (sub / "自检三.txt").write_text("自检内容三", encoding="utf-8")
+
+    page._set_mode("file")
+    page._on_directory(str(folder))
+    app.processEvents()
+    if page.details_table.rowCount() != 3:
+        problems.append(f"文件夹展开后应有 3 行文件信息，实际 {page.details_table.rowCount()} 行")
+    if "3 个文件" not in page.details_summary.text():
+        problems.append(f"文件信息摘要没有统计总数：{page.details_summary.text()!r}")
+    subdirs = {page.details_table.item(row, 4).text() for row in range(page.details_table.rowCount())}
+    if "sub" not in subdirs:
+        problems.append(f"文件信息没有保留子目录：{sorted(subdirs)}")
+    if page.category_box.isEnabled():
+        problems.append("文件夹导入时分类下拉应禁用（文件夹名即新分类）")
+    if folder.name not in page.category_hint.text():
+        problems.append(f"分类提示没有说明新分类名：{page.category_hint.text()!r}")
+
+    page._on_files([str(folder / "自检一.txt"), str(folder / "自检二.txt")])
+    app.processEvents()
+    if page.details_table.rowCount() != 2:
+        problems.append(f"选择两个文件后应有 2 行信息，实际 {page.details_table.rowCount()} 行")
+    if not page.category_box.isEnabled():
+        problems.append("多文件导入时分类下拉应可用")
+
+    page._on_directory(str(folder))
+    app.processEvents()
+    page.import_now()
+    deadline = time.time() + 60
+    while page._worker is not None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.05)
+    app.processEvents()
+    if page._worker is not None:
+        problems.append("批量导入没有在 60 秒内结束")
+        return problems
+    if page.progress_bar.value() != 100:
+        problems.append(f"导入完成后进度条为 {page.progress_bar.value()}，应为 100")
+    if page.result_table.rowCount() < 3:
+        problems.append(f"导入结果表只有 {page.result_table.rowCount()} 行，应有 3 行")
+    if "成功" not in page.progress_label.text():
+        problems.append(f"导入摘要没有成功计数：{page.progress_label.text()!r}")
+    if page.details_card.isVisibleTo(page):
+        problems.append("导入完成后没有清空待导入文件信息")
+    return problems
+
+
+def _check_tag_filters(app, window) -> list[str]:
+    """标签页：表头可拖动、逐列筛选（含选项列）、重置筛选与计数文案。"""
+    page = window.tag_page
+    _show_page(window, page)
+    page.refresh()
+    app.processEvents()
+    problems: list[str] = []
+    if not page.table.horizontalHeader().sectionsMovable():
+        problems.append("标签页表头不能拖动调整列宽/顺序")
+    total = page.table.rowCount()
+    if total == 0:
+        return problems + ["标签页没有任何标签"]
+
+    def visible_rows() -> list[int]:
+        return [row for row in range(total) if not page.table.isRowHidden(row)]
+
+    names = [page.table.item(row, 0).text() for row in range(total)]
+    unique = next(
+        (
+            name
+            for name in names
+            if sum(1 for other in names if name.strip().lower() in other.strip().lower()) == 1
+        ),
+        None,
+    )
+    if unique is None:
+        return problems + ["标签页没有名称唯一的标签，无法校验按名称筛选"]
+    page.filter_bar.set_filter("name", unique)
+    app.processEvents()
+    if len(visible_rows()) != 1:
+        problems.append(f"按名称「{unique}」筛选后仍有 {len(visible_rows())} 行")
+    if page.filter_caption.text() != f"显示 1 / {total} 个标签":
+        problems.append(f"筛选计数文案为 {page.filter_caption.text()!r}")
+
+    page.filter_bar.set_filter("name", "绝不存在的标签")
+    app.processEvents()
+    if visible_rows():
+        problems.append("筛选不存在的名称后仍有可见行")
+    page._on_reset_filters()
+    app.processEvents()
+    if len(visible_rows()) != total:
+        problems.append("重置筛选后没有恢复全部行")
+    if page.table.selectionModel().hasSelection():
+        problems.append("筛选后仍保留着已隐藏行的选中状态")
+
+    page.filter_bar.set_filter("scope", "全局")
+    app.processEvents()
+    for row in visible_rows():
+        if page.table.item(row, 1).text() != "全局":
+            problems.append(f"按归属「全局」筛选后出现 {page.table.item(row, 1).text()!r} 行")
+            break
+    page._on_reset_filters()
+    app.processEvents()
     return problems
 
 
@@ -401,11 +644,14 @@ def _check_global_tag_marks(app, window) -> list[str]:
     return problems
 
 
-def _check_user_page(window) -> list[str]:
+def _check_user_page(app, window) -> list[str]:
     """用户管理已独立成页，且用户管理入口不再留在设置页。"""
     from PyQt6.QtWidgets import QPushButton
 
     page = window.user_page
+    previous = window.stackedWidget.currentWidget()
+    _show_page(window, page)  # 非当前堆叠页不会参与布局，先切过去量尺寸
+    app.processEvents()
     problems: list[str] = []
     if page.objectName() != "userPage":
         problems.append(f"用户页 objectName={page.objectName()!r}，应为 'userPage'")
@@ -421,14 +667,81 @@ def _check_user_page(window) -> list[str]:
         problems.append("用户页缺少「新建用户」按钮")
     elif not any(button.isVisibleTo(page) for button in buttons):
         problems.append("默认用户看不到「新建用户」按钮")
+    cards = page.cards() if hasattr(page, "cards") else []
+    if not cards:
+        problems.append("用户页没有用户卡片")
+    else:
+        users = page.service.list_users()
+        if len(cards) != len(users):
+            problems.append(f"用户卡片数量 {len(cards)} 与用户数 {len(users)} 不一致")
+        current = page.current_card()
+        if current is None:
+            problems.append("用户页找不到当前用户卡片")
+        elif not current.is_highlighted():
+            problems.append("当前用户卡片没有高亮")
+        # 固定宽度卡片：卡片必须完整落在滚动区域内，且宽度恒为 CARD_WIDTH。
+        page._layout_cards(force=True)
+        app.processEvents()
+        viewport = page.scroll.viewport().width()
+        from app.ui.pages.user_page import CARD_SPACING, CARD_WIDTH, grid_columns
+
+        for card in cards:
+            if card.geometry().right() > viewport:
+                problems.append(
+                    f"用户卡片越出滚动区域：右边界 {card.geometry().right()} > 视口 {viewport}"
+                )
+            elif card.width() != CARD_WIDTH:
+                problems.append(f"用户卡片宽度应为 {CARD_WIDTH}，实际 {card.width()}")
+        # 卡片即对象：每张卡片自带首字头像与本用户的操作按钮，且按钮完整落在卡片内。
+        from PyQt6.QtWidgets import QLabel
+        from qfluentwidgets import PushButton
+
+        from app.ui.pages.user_page import AVATAR_SIZE
+
+        heights = {card.height() for card in cards}
+        if len(heights) != 1:
+            problems.append(f"用户卡片高度不一致：{sorted(heights)}")
+        for card in cards:
+            avatars = [
+                label
+                for label in card.findChildren(QLabel)
+                if label.width() == AVATAR_SIZE and label.height() == AVATAR_SIZE
+            ]
+            if len(avatars) != 1:
+                problems.append(f"用户卡片 {card.user_id} 的首字头像数量应为 1，实际 {len(avatars)}")
+            card_buttons = card.findChildren(PushButton)
+            if not card_buttons:
+                problems.append(f"用户卡片 {card.user_id} 缺少操作按钮")
+            for button in card_buttons:
+                if (
+                    button.geometry().right() > card.width()
+                    or button.geometry().bottom() > card.height()
+                ):
+                    problems.append(
+                        f"用户卡片 {card.user_id} 的按钮 {button.text()!r} 被裁出卡片范围"
+                    )
+        # 卡片列不伸缩，其后有一个占位伸缩列 → 卡片靠左且不被拉宽。
+        if page.grid.columnStretch(page._columns) != 1:
+            problems.append("用户卡片网格缺少占位伸缩列，卡片不会被左对齐")
+        if page.grid.columnStretch(0) != 0:
+            problems.append("用户卡片列被设置了拉伸，卡片宽度会随窗口变化")
+        # 窄视口（700px）下固定宽度网格必须放得下。
+        available = 700 - 24
+        columns = min(grid_columns(available, card_width=CARD_WIDTH), len(cards))
+        needed = columns * CARD_WIDTH + (columns - 1) * CARD_SPACING
+        if needed > available:
+            problems.append(f"700px 视口下卡片网格放不下：需要 {needed}px > {available}px")
     settings_texts = _widget_texts(window.settings_page)
     for banned in ("新建用户", "切换用户", "删除用户"):
         if any(banned in text for text in settings_texts):
             problems.append(f"设置页仍残留用户管理入口：{banned}")
+    if previous is not None and previous is not page:
+        _show_page(window, previous)
+        app.processEvents()
     return problems
 
 
-def _check_archive_owner(window) -> list[str]:
+def _check_archive_owner(app, window) -> list[str]:
     """存档条目要标注归属用户，只有默认用户能整档还原。"""
     page = window.archive_page
     problems: list[str] = []
@@ -440,14 +753,45 @@ def _check_archive_owner(window) -> list[str]:
         problems.append(f"存档表格缺少「所属用户」列：{headers}")
     if not page._is_admin:
         problems.append("默认用户没有被识别为管理员")
+    page.switch_tab("entries")  # 「还原整个存档」位于「存档内条目」Tab
+    app.processEvents()
     if page.restore_all_button.isHidden():
         problems.append("管理员看不到「还原整个存档」按钮")
+    page.switch_tab("archives")
+    app.processEvents()
     return problems
 
 
-def _check_archive_pin(window) -> list[str]:
+def _check_archive_tabs(app, window) -> list[str]:
+    """存档页拆成两个 Tab：选中存档自动切到条目 Tab，也能手动切回。"""
+    page = window.archive_page
+    problems: list[str] = []
+    keys = page.tab_keys()
+    if keys != ["archives", "entries"]:
+        problems.append(f"存档页 Tab 定义异常：{keys}")
+    if page.stack.count() != 2:
+        problems.append(f"存档页分页容器应有 2 页，实际 {page.stack.count()}")
+    page.switch_tab("archives")
+    app.processEvents()
+    if page.current_tab() != "archives" or page.stack.currentIndex() != 0:
+        problems.append("无法切回「存档列表」Tab")
+    if page._archives:
+        page.archive_list.setCurrentRow(0)
+        app.processEvents()
+        if page.current_tab() != "entries" or page.stack.currentIndex() != 1:
+            problems.append("选中存档后没有自动切到「存档内条目」Tab")
+        page.switch_tab("archives")
+        app.processEvents()
+        if page.current_tab() != "archives" or page.stack.currentIndex() != 0:
+            problems.append("手动切回「存档列表」Tab 失败")
+    return problems
+
+
+def _check_archive_pin(app, window) -> list[str]:
     """存档可标记：按钮随选中存档切换文案，已标记的快照在列表与详情中标出。"""
     page = window.archive_page
+    page.switch_tab("archives")  # 「标记存档」按钮位于「存档列表」Tab
+    app.processEvents()
     problems: list[str] = []
     if not hasattr(page, "pin_button"):
         return ["存档页缺少「标记存档」按钮"]
@@ -472,6 +816,35 @@ def _check_archive_pin(window) -> list[str]:
             problems.append("列表项没有标出【已标记】")
         if "【已标记】" not in page.detail_meta.text():
             problems.append("详情区没有标出【已标记】")
+    page.switch_tab("archives")
+    app.processEvents()
+    return problems
+
+
+def _check_archive_table(app, window) -> list[str]:
+    """存档表格：表头可拖动、有分页控件、支持逐列筛选。"""
+    page = window.archive_page
+    page.switch_tab("archives")  # 分页与筛选栏位于「存档列表」Tab
+    app.processEvents()
+    problems: list[str] = []
+    if not page.archive_list.horizontalHeader().sectionsMovable():
+        problems.append("存档表头不能拖动调整列")
+    if not hasattr(page, "pager"):
+        problems.append("存档页缺少分页控件")
+    elif page.pager.isHidden():
+        problems.append("存档页分页控件被隐藏")
+    if not hasattr(page, "filter_bar"):
+        problems.append("存档页缺少逐列筛选栏")
+    else:
+        before = len(page._visible)
+        page.filter_bar.set_filter("name", "绝不存在的存档")
+        app.processEvents()
+        if page._visible:
+            problems.append("存档按名称筛选不存在后仍有可见行")
+        page.filter_bar.reset()
+        app.processEvents()
+        if len(page._visible) != before:
+            problems.append(f"存档重置筛选后可见行由 {before} 变为 {len(page._visible)}")
     return problems
 
 
@@ -558,9 +931,12 @@ def _check_plugins(window) -> list[str]:
     page.apply_kind("page")
     if page.plugin_list.count() != 1:
         problems.append(f"弹窗页面插件应为 1 个，实际 {page.plugin_list.count()} 个")
+    page.apply_kind("kind")
+    if page.plugin_list.count() != 3:
+        problems.append(f"插件类型插件应为 3 个，实际 {page.plugin_list.count()} 个")
     page.apply_kind("")
-    if page.plugin_list.count() != 8:
-        problems.append(f"内置插件应为 8 个，实际 {page.plugin_list.count()} 个")
+    if page.plugin_list.count() != 11:
+        problems.append(f"内置插件应为 11 个，实际 {page.plugin_list.count()} 个")
     page.apply_kind("theme")
     if page.kind_box.currentData() not in ("", None):
         problems.append("未知类型筛选后下拉框应回到「全部类型」")
@@ -599,14 +975,14 @@ def _check_plugins(window) -> list[str]:
     page.reverse_button.setChecked(False)
     if "个插件" not in page.count_label.text():
         problems.append("插件页没有显示插件总数")
-    # 默认（全部类型）下所有插件都要在列表里，弹窗插件排在最前
-    if page.plugin_list.count() != 8:
-        problems.append(f"「全部类型」下应列出 8 个插件，实际 {page.plugin_list.count()} 个")
+    # 默认（全部类型）下所有插件都要在列表里，列表项显示类型与来源
+    if page.plugin_list.count() != 11:
+        problems.append(f"「全部类型」下应列出 11 个插件，实际 {page.plugin_list.count()} 个")
     first = page.plugin_list.item(0).text()
-    if "弹窗页面" not in first or "内置" not in first:
+    if "内置" not in first or "·" not in first:
         problems.append(f"插件列表项应显示类型与来源，实际为 {first!r}")
-    if page.plugin_list.item(0).data(Qt.ItemDataRole.UserRole) != "builtin.dialog":
-        problems.append("内置弹窗插件应排在插件列表最前面")
+    if page.kind_box.count() != 4:
+        problems.append(f"类型下拉应有「全部类型」+3 种插件类型，实际 {page.kind_box.count()} 项")
 
     # 插件选项：详情里显示选项摘要与清单路径，并能打开选项对话框
     page._select_plugin("builtin.image")
@@ -932,10 +1308,17 @@ def main() -> int:
     init_db()
     with session_scope() as session:
         seed(session)
+        # 与 main.py 一致：老库启动时补齐「未分类」分类并归置无分类数据
+        migrate_uncategorized(session)
 
     app = QApplication(sys.argv)
 
     from app.ui.main_window import MainWindow
+
+    from app.services.plugin_service import plugin_service
+
+    # 与 main.py 一致：先载入内置插件，插件类型表与查看器注册表才完整
+    plugin_service.load_viewers()
 
     window = MainWindow()
     window.resize(1200, 780)
@@ -964,18 +1347,23 @@ def main() -> int:
     for label, check in (
         ("home_stats", lambda: _check_home_stats(window)),
         ("category_filter", lambda: _check_category_filter(app, window)),
+        ("uncategorized_fixed", lambda: _check_uncategorized_fixed(app, window)),
         ("import_categories", lambda: _check_import_categories(window)),
         ("tag_picker", lambda: _check_tag_picker(app, window)),
         ("keyword_filter", lambda: _check_keyword_filter(app, window)),
         ("keyword_display", lambda: _check_keyword_display(window)),
         ("tag_page", lambda: _check_tag_page(app, window)),
+        ("tag_filters", lambda: _check_tag_filters(app, window)),
+        ("import_batch", lambda: _check_import_batch(app, window)),
         ("single_library", lambda: _check_single_library(window)),
         ("no_library_picker", lambda: _check_no_library_picker(window)),
         ("global_tag_marks", lambda: _check_global_tag_marks(app, window)),
-        ("user_page", lambda: _check_user_page(window)),
+        ("user_page", lambda: _check_user_page(app, window)),
         ("user_password_clear", lambda: _check_user_password_clear(app, window)),
-        ("archive_owner", lambda: _check_archive_owner(window)),
-        ("archive_pin", lambda: _check_archive_pin(window)),
+        ("archive_tabs", lambda: _check_archive_tabs(app, window)),
+        ("archive_owner", lambda: _check_archive_owner(app, window)),
+        ("archive_pin", lambda: _check_archive_pin(app, window)),
+        ("archive_table", lambda: _check_archive_table(app, window)),
         ("open_with", lambda: _check_open_with(window)),
         ("plugins", lambda: _check_plugins(window)),
         ("recent_focus", lambda: _check_recent_focus(app, window)),

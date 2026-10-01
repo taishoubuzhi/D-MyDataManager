@@ -18,6 +18,7 @@ from qfluentwidgets import (
 )
 
 from ..db.models import DataItem
+from ..db.seed import UNCATEGORIZED_NAME
 from .common import format_size
 from .widgets.keyword_input import KeywordInput
 from .widgets.tag_picker import TagPicker
@@ -61,6 +62,48 @@ class TextInputDialog(MessageBoxBase):
         return self.edit.text().strip()
 
 
+class CategoryConflictDialog(MessageBoxBase):
+    """删除分类时子分类上移会与同级重名：可自动加 -1、-2，也可逐个改名。"""
+
+    def __init__(self, rows: list[tuple[str, str]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._edits: list[LineEdit] = []
+        self._auto = False
+        self.titleLabel = SubtitleLabel("处理重名子分类", self)
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(
+            BodyLabel("以下子分类上移后会与同级分类重名，可自动加 -1、-2 后缀，也可以逐个改名：", self)
+        )
+        for name, suggested in rows:
+            row = QWidget(self)
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(BodyLabel(f"{name} →", row))
+            edit = LineEdit(row)
+            edit.setText(suggested)
+            layout.addWidget(edit, 1)
+            self.viewLayout.addWidget(row)
+            self._edits.append(edit)
+        self.auto_button = PushButton("自动编号（-1、-2）", self)
+        self.auto_button.clicked.connect(self._on_auto)
+        self.buttonLayout.insertWidget(0, self.auto_button)
+        self.yesButton.setText("重命名并删除")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(480)
+
+    def _on_auto(self, *_args) -> None:
+        self._auto = True
+        self.accept()
+
+    def auto(self) -> bool:
+        """用户选择了自动编号。"""
+        return self._auto
+
+    def renames(self) -> list[str]:
+        """逐行输入的新名称，顺序与传入 rows 一致。"""
+        return [edit.text().strip() for edit in self._edits]
+
+
 class ItemEditDialog(MessageBoxBase):
     """编辑单个数据项的名称、分类、标签、关键词与隐藏状态。"""
 
@@ -85,13 +128,24 @@ class ItemEditDialog(MessageBoxBase):
         self.name_edit.setText(item.name)
 
         self.category_box = ComboBox(self)
-        self.category_box.addItem("未分类")
         for category_id, label in categories:
             self.category_box.addItem(label, userData=category_id)
+        if UNCATEGORIZED_NAME not in [label.lstrip("　") for _, label in categories]:
+            # 兜底：用户还没有真实的「未分类」分类时，保留一个空占位项。
+            self.category_box.addItem(UNCATEGORIZED_NAME)
+        selected = 0
         for index in range(self.category_box.count()):
             if self.category_box.itemData(index) == item.category_id:
-                self.category_box.setCurrentIndex(index)
+                selected = index
                 break
+        else:
+            if item.category_id is None:
+                # 没有分类的数据默认落到真实的「未分类」分类，保存后会归入 <用户名>/未分类/。
+                for index in range(self.category_box.count()):
+                    if self.category_box.itemText(index).lstrip("　") == UNCATEGORIZED_NAME:
+                        selected = index
+                        break
+        self.category_box.setCurrentIndex(selected)
 
         self.tag_input = TagPicker(
             known_tags, "输入标签后回车，或点右侧按钮选择已有标签", self, global_tags=global_tags

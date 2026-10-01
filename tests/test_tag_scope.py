@@ -105,12 +105,16 @@ class TagScopeCase(IsolatedCase):
         self.assertFalse(taxonomy.set_tag_global(personal, True, user_id=other.id))
         self.assertFalse(personal.is_global)
 
-    def test_imported_tags_are_personal_and_record_creator(self):
+    def test_default_tags_are_global_and_imported_tags_are_personal(self):
         owner = self._users().current()
+        other = self._extra_user("另一个用户")
         seeded = {tag.name: tag for tag in self._service().tags.all(user_id=owner.id)}
         for name in ("重要", "待整理", "收藏"):
-            self.assertEqual(seeded[name].user_id, owner.id)
+            # 基础标签是全局标签：开箱即用，所有用户可见。
+            self.assertTrue(seeded[name].is_global)
+            self.assertIsNone(seeded[name].user_id)
             self.assertEqual(seeded[name].created_by, owner.id)
+            self.assertIn(name, self._service().tags.names(user_id=other.id))
 
         item = self.importer().import_text("笔记", "内容", tags=["学习", "课题"])
         self.session.commit()

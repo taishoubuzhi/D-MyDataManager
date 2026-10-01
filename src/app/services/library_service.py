@@ -213,6 +213,18 @@ class LibraryService:
             logger.info("用户文件夹已并入：{} -> {}", old_dir_name, target)
         return target
 
+    def remove_user_dir(self, library: Library, name: str) -> bool:
+        """删除用户的用户名文件夹；目录里还有文件时保留（返回 False）。"""
+        directory = Path(library.path) / sanitize_dir_name(name)
+        if not directory.is_dir():
+            return False
+        if any(path.is_file() for path in directory.rglob("*")):
+            logger.warning("用户文件夹仍有文件，保留：{}", directory)
+            return False
+        shutil.rmtree(directory, ignore_errors=True)
+        logger.info("已删除用户文件夹：{}", directory)
+        return True
+
     def category_chain(self, category_id: int | None) -> list[str]:
         names: list[str] = []
         category = self.categories.get(category_id) if category_id else None
@@ -228,10 +240,17 @@ class LibraryService:
         return Path(library.path).joinpath(self.owner_dir_name(user_id), *self.category_chain(category_id))
 
     def unique_rel_path(
-        self, library: Library, category_id: int | None, filename: str, user_id: int | None = None
+        self,
+        library: Library,
+        category_id: int | None,
+        filename: str,
+        user_id: int | None = None,
+        subdir: str = "",
     ) -> str:
-        """在库内为 filename 取一个不冲突的相对路径（POSIX 风格）。"""
+        """在库内为 filename 取一个不冲突的相对路径（POSIX 风格）。`subdir` 保留原始文件夹里的子目录。"""
         base = self.directory_for(library, category_id, user_id)
+        if subdir:
+            base = base.joinpath(*(part for part in Path(subdir).parts if part not in ("", ".", "..")))
         base.mkdir(parents=True, exist_ok=True)
         stem, suffix = Path(filename).stem or "未命名", Path(filename).suffix
         candidate = base / f"{stem}{suffix}"

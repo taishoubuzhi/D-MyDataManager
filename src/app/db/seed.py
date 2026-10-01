@@ -11,7 +11,9 @@ from ..core.config import library_root
 from .models import Category, Library, Tag, User
 
 DEFAULT_USER = "默认用户"
-DEFAULT_CATEGORIES = ("学习资料", "工作文档", "图片素材", "影音资料")
+# 「未分类」是收纳未指定分类数据的固定分类，新建用户时同样写入（放在最后）。
+UNCATEGORIZED_NAME = "未分类"
+DEFAULT_CATEGORIES = ("学习资料", "工作文档", "图片素材", "影音资料", UNCATEGORIZED_NAME)
 DEFAULT_TAGS = ("重要", "待整理", "收藏")
 DEFAULT_LIBRARY_NAME = "默认库"
 
@@ -21,16 +23,19 @@ def is_initialized(session: Session) -> bool:
 
 
 def seed_user_defaults(session: Session, user: User) -> None:
-    """为新用户写入默认分类与标签（每个用户拥有自己的分类与标签）。"""
+    """为新用户写入默认分类；基础标签是全局标签，只在首次初始化时写入一次。"""
     session.add_all(
         [
             Category(name=name, user_id=user.id, sort_order=index)
             for index, name in enumerate(DEFAULT_CATEGORIES)
         ]
     )
-    session.add_all(
-        [Tag(name=name, user_id=user.id, created_by=user.id) for name in DEFAULT_TAGS]
-    )
+    for name in DEFAULT_TAGS:
+        exists = session.scalar(
+            select(Tag.id).where(Tag.name == name, Tag.is_global.is_(True)).limit(1)
+        )
+        if exists is None:
+            session.add(Tag(name=name, user_id=None, created_by=user.id, is_global=True))
     session.flush()
 
 

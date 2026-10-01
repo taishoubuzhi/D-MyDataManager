@@ -143,8 +143,14 @@ class UserService:
     def verify(self, user: User, password: str) -> bool:
         return verify_hash(user.password_hash, password)
 
+    def data_count(self, user: User) -> int:
+        """该用户的数据项数量。"""
+        return int(
+            self.session.scalar(select(func.count(DataItem.id)).where(DataItem.user_id == user.id)) or 0
+        )
+
     def delete(self, user: User, move_to: User | None = None) -> bool:
-        """删除用户：其数据与标签一律并入默认用户（显式传入 move_to 时并入该用户）。"""
+        """删除用户：有数据时并入默认用户（显式传入 move_to 时并入该用户），没有数据时只清理其分类与目录。"""
         if user.is_default:
             logger.warning("默认用户不可删除")
             return False
@@ -152,17 +158,20 @@ class UserService:
         if target is None or target.id == user.id:
             logger.warning("没有可接收数据的用户，取消删除")
             return False
-        mapping = self._mirror_categories(user, target)
         libraries = _library_service(self.session)
         library = libraries.ensure_default()
         old_dir = libraries.dir_name_of(user.name)
-        for item in self.session.scalars(select(DataItem).where(DataItem.user_id == user.id)):
-            item.user_id = target.id
-            if item.category_id in mapping:
-                item.category_id = mapping[item.category_id]
-            prefix = f"{old_dir}/"
-            if item.file_path.startswith(prefix):
-                item.file_path = f"{libraries.dir_name_of(target.name)}/{item.file_path}"
+        has_data = self.data_count(user) > 0
+        # 用户没有数据时不再把它的一级分类与空目录并入目标用户。
+        mapping = self._mirror_categories(user, target) if has_data else {}
+        if has_data:
+            for item in self.session.scalars(select(DataItem).where(DataItem.user_id == user.id)):
+                item.user_id = target.id
+                if item.category_id in mapping:
+                    item.category_id = mapping[item.category_id]
+                prefix = f"{old_dir}/"
+                if item.file_path.startswith(prefix):
+                    item.file_path = f"{libraries.dir_name_of(target.name)}/{item.file_path}"
         for category in self.session.scalars(select(Category).where(Category.user_id == user.id)):
             self.session.delete(category)
         for tag in self.session.scalars(select(Tag).where(Tag.user_id == user.id)):
@@ -177,12 +186,18 @@ class UserService:
             entry.user_id = target.id
             entry.user_name = target.name
             entry.category = f"{user.name} / {entry.category}" if entry.category else user.name
-        libraries.relocate_user_dir(library, user.name, target.name)
+        if has_data:
+            libraries.relocate_user_dir(library, user.name, target.name)
+        else:
+            libraries.remove_user_dir(library, user.name)
         if config.currentUserId.value == user.id:
             self.set_current(target)
         self.session.delete(user)
         self.session.flush()
-        logger.info("已删除用户 {}，数据并入 {}", user.name, target.name)
+        if has_data:
+            logger.info("已删除用户 {}，数据并入 {}", user.name, target.name)
+        else:
+            logger.info("已删除无数据的用户 {}，其分类与目录已清理", user.name)
         return True
 
     def _mirror_categories(self, source: User, target: User) -> dict[int, int]:
@@ -201,7 +216,7 @@ class UserService:
                     continue
                 parent_id = mapping.get(category.parent_id, root.id)
                 new_category = self.categories.create(
-                    category.name,
+                    self.categories.unique_sibling_name(category.name, parent_id, target.id),
                     parent_id,
                     description=category.description,
                     icon=category.icon,
@@ -215,7 +230,10 @@ class UserService:
             if not progressed:  # 结构异常（父分类丢失）时不再等待，挂到一级分类下
                 for category in pending:
                     mapping[category.id] = self.categories.create(
-                        category.name, root.id, user_id=target.id, is_hidden=category.is_hidden
+                        self.categories.unique_sibling_name(category.name, root.id, target.id),
+                        root.id,
+                        user_id=target.id,
+                        is_hidden=category.is_hidden,
                     ).id
                 break
         return mapping

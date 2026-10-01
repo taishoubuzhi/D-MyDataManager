@@ -15,11 +15,13 @@ import shutil
 from pathlib import Path
 
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core import paths
 from ..db.database import backup_database_file
-from ..db.models import DataItem, Library
+from ..db.models import DataItem, Library, User
+from ..db.seed import UNCATEGORIZED_NAME
 from .library_service import LibraryService, sanitize_dir_name
 
 
@@ -145,4 +147,46 @@ def migrate_layout(session: Session) -> dict:
     return {"migrated": True, **stats}
 
 
-__all__ = ["migrate_layout", "sanitize_dir_name"]
+def migrate_uncategorized(session: Session) -> dict:
+    """给每个用户补齐「未分类」分类，并把没有分类的数据项归入其中（幂等）。
+
+    数据文件同时移进 <库>/<用户名>/未分类/ 目录；无归属（user_id 为空）的数据保持原样，归入「未归属」目录。
+    """
+    service = LibraryService(session)
+    library = service.ensure_default()
+    root = Path(library.path)
+    stats = {"created": 0, "moved": 0, "updated": 0, "unassigned": 0}
+    for user in session.scalars(select(User).order_by(User.id)):
+        if service.categories.by_name(UNCATEGORIZED_NAME, None, user.id) is None:
+            service.categories.create(UNCATEGORIZED_NAME, None, user_id=user.id)
+            stats["created"] += 1
+
+    for item in session.scalars(select(DataItem).where(DataItem.category_id.is_(None))):
+        category = (
+            service.categories.by_name(UNCATEGORIZED_NAME, None, item.user_id)
+            if item.user_id is not None
+            else None
+        )
+        if category is None:  # 无归属数据或用户已不存在
+            stats["unassigned"] += 1
+            continue
+        target_rel = service.unique_rel_path(
+            library, category.id, Path(item.file_path).name, user_id=item.user_id
+        )
+        source = root / item.file_path
+        if source.is_file():
+            destination = root / target_rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(destination))
+            stats["moved"] += 1
+        item.category_id = category.id
+        item.file_path = target_rel
+        stats["updated"] += 1
+
+    if stats["created"] or stats["updated"]:
+        session.flush()
+        logger.info("未分类数据已归入「{}」分类：{}", UNCATEGORIZED_NAME, stats)
+    return stats
+
+
+__all__ = ["migrate_layout", "migrate_uncategorized", "sanitize_dir_name"]

@@ -42,6 +42,20 @@ class CategoryRepository(Repository[Category]):
             stmt = stmt.where(Category.user_id == user_id)
         return self.session.scalars(stmt).first()
 
+    def unique_sibling_name(
+        self, name: str, parent_id: int | None = None, user_id: int | None = None
+    ) -> str:
+        """同级不允许重名：name 已被占用时依次尝试 name-1、name-2…"""
+        name = (name or "").strip()
+        if not name or self.by_name(name, parent_id, user_id) is None:
+            return name
+        index = 1
+        while True:
+            candidate = f"{name}-{index}"
+            if self.by_name(candidate, parent_id, user_id) is None:
+                return candidate
+            index += 1
+
     def create(
         self,
         name: str,

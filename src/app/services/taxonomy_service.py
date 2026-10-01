@@ -9,6 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db.models import Category, DataItem, Tag
+from ..db.seed import UNCATEGORIZED_NAME
 from ..repositories import CategoryRepository, TagRepository
 
 
@@ -18,6 +19,15 @@ class CategoryNode:
     depth: int
     item_count: int
     total_count: int
+
+
+def is_uncategorized(category: Category | None) -> bool:
+    """「未分类」是系统固定的根分类：不可重命名、删除，也不能在其下新建子分类。"""
+    return bool(
+        category is not None
+        and category.name == UNCATEGORIZED_NAME
+        and category.parent_id is None
+    )
 
 
 class TaxonomyService:
@@ -32,7 +42,10 @@ class TaxonomyService:
         nodes: list[CategoryNode] = []
         queue: list[tuple[Category, int]] = [
             (category, 0)
-            for category in self.categories.roots(include_hidden=include_hidden, user_id=user_id)
+            for category in sorted(
+                self.categories.roots(include_hidden=include_hidden, user_id=user_id),
+                key=lambda item: (is_uncategorized(item), item.sort_order, item.name),
+            )
         ]
         while queue:
             category, depth = queue.pop(0)
@@ -62,6 +75,9 @@ class TaxonomyService:
         name = (name or "").strip()
         if not name:
             return None
+        if parent_id is not None and is_uncategorized(self.session.get(Category, parent_id)):
+            logger.warning("「{}」是固定分类，不能创建子分类", UNCATEGORIZED_NAME)
+            return None
         if self.categories.by_name(name, parent_id, user_id) is not None:
             logger.warning("同级下已存在分类：{}", name)
             return None
@@ -74,18 +90,71 @@ class TaxonomyService:
         self.session.flush()
         return category
 
+    def uncategorized_category(self, user_id: int | None = None, create: bool = True) -> Category | None:
+        """用户的「未分类」根级分类，用来收纳没有指定分类的数据。"""
+        category = self.categories.by_name(UNCATEGORIZED_NAME, None, user_id)
+        if category is None and create:
+            category = self.categories.create(UNCATEGORIZED_NAME, None, user_id=user_id)
+        return category
+
+    def rename_category(self, category: Category, name: str) -> bool:
+        """重命名分类；同级已有同名分类时拒绝（返回 False）。"""
+        name = (name or "").strip()
+        if is_uncategorized(category):
+            logger.warning("「{}」是固定分类，不能重命名", UNCATEGORIZED_NAME)
+            return False
+        if not name or name == category.name:
+            return False
+        existing = self.categories.by_name(name, category.parent_id, category.user_id)
+        if existing is not None and existing.id != category.id:
+            logger.warning("同级下已存在分类：{}", name)
+            return False
+        category.name = name
+        self.session.flush()
+        return True
+
     def move_category(self, category: Category, parent_id: int | None) -> bool:
+        if is_uncategorized(category):
+            logger.warning("「{}」是固定分类，不能移动", UNCATEGORIZED_NAME)
+            return False
+        if parent_id is not None and is_uncategorized(self.session.get(Category, parent_id)):
+            logger.warning("「{}」是固定分类，不能创建子分类", UNCATEGORIZED_NAME)
+            return False
         return self.categories.move(category, parent_id)
 
+    def promotion_conflicts(self, category: Category) -> list[Category]:
+        """删除该分类时，上移后会与父级下已有分类重名的子分类。"""
+        conflicts: list[Category] = []
+        for child in self.categories.children_of(category.id):
+            existing = self.categories.by_name(child.name, category.parent_id, child.user_id)
+            if existing is not None and existing.id != child.id:
+                conflicts.append(child)
+        return conflicts
+
     def delete_category(
-        self, category: Category, move_items_to: int | None = None, recursive: bool = False
+        self,
+        category: Category,
+        move_items_to: int | None = None,
+        recursive: bool = False,
+        renames: dict[int, str] | None = None,
     ) -> int:
-        """删除分类；子分类默认上移到父级，recursive 时一并删除。"""
+        """删除分类；子分类默认上移到父级，recursive 时一并删除。
+
+        上移的子分类与父级下已有分类重名时：renames 里给了新名字就用它，否则自动加 -1、-2 后缀，
+        保证同一父级下不会出现重名分类。
+        """
+        if is_uncategorized(category):
+            logger.warning("「{}」是固定分类，不能删除", UNCATEGORIZED_NAME)
+            return 0
+        renames = dict(renames or {})
         for child in self.categories.children_of(category.id):
             if recursive:
                 self.delete_category(child, move_items_to, recursive=True)
-            else:
-                child.parent_id = category.parent_id
+                continue
+            child.name = self.categories.unique_sibling_name(
+                renames.get(child.id) or child.name, category.parent_id, child.user_id
+            )
+            child.parent_id = category.parent_id
         items = list(self.session.scalars(select(DataItem).where(DataItem.category_id == category.id)))
         for item in items:
             item.category_id = move_items_to

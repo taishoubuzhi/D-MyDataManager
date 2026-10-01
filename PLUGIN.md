@@ -6,7 +6,9 @@
 - 相关源码：`src/app/core/plugins.py`（清单与依赖排序）、`src/app/core/plugin_kinds.py`（类型表）、
   `src/app/core/extensions.py`（扩展接口注册表）、`src/app/core/app_ui.py`（主程序界面扩展接口）、
   `src/app/services/plugin_service.py`（发现 / 载入 / 启停 / 导入）。
-- 现成样例：`plugins/builtin.dialog/`（提供 `dialog` 扩展接口）、`plugins/builtin.image/`（依赖它显示图片）。
+- 现成样例：`plugins/builtin.kind/`（引导类型插件，提供 `plugin.kind` 接口）、`plugins/builtin.kind.viewer/`
+  （纯数据插件，声明 `viewer` 类型）、`plugins/builtin.dialog/`（提供 `dialog` 扩展接口）、`plugins/builtin.image/`
+  （依赖它显示图片）。
 
 ## 1. 插件是什么
 
@@ -14,10 +16,15 @@
 
 ```
 plugins/
-├─ builtin.dialog/          # 内置插件（随仓库分发）
-│  ├─ plugin.json           # 清单：元信息 + 依赖 + 对外接口
-│  └─ plugin.py             # 入口脚本，必须定义 register(api)
-└─ demo.hello/              # 你自己的插件，放进同一个目录即可
+├─ builtin.kind/             # 内置类型插件：提供 plugin.kind 接口
+│  ├─ plugin.json
+│  └─ plugin.py
+├─ builtin.kind.viewer/      # 纯数据类型插件：只有清单，用 kinds 声明 viewer 类型
+│  └─ plugin.json
+├─ builtin.dialog/           # 内置插件（随仓库分发）
+│  ├─ plugin.json            # 清单：元信息 + 依赖 + 对外接口
+│  └─ plugin.py              # 入口脚本，必须定义 register(api)
+└─ demo.hello/               # 你自己的插件，放进同一个目录即可
    ├─ plugin.json
    └─ plugin.py
 ```
@@ -44,7 +51,7 @@ plugins/
   "author": "你的名字",
   "manager_version": "0.1.0",
   "entry": "plugin.py",
-  "depends": [],
+  "depends": ["builtin.kind.page"],
   "provides": ["hello"]
 }
 ```
@@ -76,20 +83,18 @@ def _build() -> QWidget:
 | --- | --- | --- |
 | `id` | ✅ | 插件唯一 id，`^[A-Za-z0-9][A-Za-z0-9_.\-]{1,63}$`，通常用 `作者.功能` 形式（如 `demo.hello`） |
 | `name` | ✅ | 显示名，出现在「插件」页与界面标题里 |
-| `kind` | ✅ | 插件类型，自由字符串，`^[a-z][a-z0-9_.\-]{1,63}$`；内置类型见第 6 节 |
+| `kind` | ✅ | 插件类型，`^[a-z][a-z0-9_.\-]{1,63}$`，必须已被某个类型插件声明（内置类型见第 6 节） |
 | `version` | 建议 | 插件版本号，仅用于展示 |
-| `entry` | ✅ | 相对插件目录的入口脚本，必须存在；里面要有 `register(api)` |
+| `entry` | 外部插件必填 | 相对插件目录的入口脚本，必须存在；里面要有 `register(api)`。内置插件与纯数据类型插件可省略 |
 | `description` | 可选 | 一句话介绍 |
 | `author` | 可选 | 作者 |
 | `manager_version` | 可选 | 需要的最低管理器版本；当前版本见 `src/app/core/version.py` 的 `APP_VERSION`，不满足时插件被标为「异常」 |
-| `depends` | 可选 | 依赖的插件 id 列表（字符串或数组），不能依赖自己，必须都已安装 |
+| `depends` | 可选 | 依赖的插件 id 列表（字符串或数组），不能依赖自己，必须都已安装；**用某个类型就要依赖声明它的类型插件** |
 | `provides` | 可选 | 对外提供的扩展接口名列表，`^[a-z][a-z0-9_.\-]{1,63}$`，对应 `api.provide(name, provider)` |
 | `capabilities` | 可选 | 能力标签（字符串或数组），在插件详情里展示 |
 | `extensions` | 类型要求时必填 | 适用的文件扩展名（字符串或数组），如 `[".PNG", "jpg"]`；自动转小写、去掉点、去重 |
 | `builtin` | 可选 | `true` 表示随程序分发；导入的插件会被强制为 `false`。**外部插件不要写 `true`** |
-| `kind_label` | 可选 | 自定义类型的显示名（如 `"主题"`），写进类型表 |
-| `kind_description` | 可选 | 自定义类型的说明 |
-| `kind_requires_extensions` | 可选 | 自定义类型是否强制要求声明 `extensions`，默认 `false` |
+| `kinds` | 类型插件用 | 声明插件类型（列表），每项字段见第 6 节；只有 `kind = "kind"` 的类型插件需要它 |
 | `options` | 可选 | 用户可配置的选项声明（列表或对象），插件页据此生成「插件选项」页；插件用 `api.option("键")` 读回，见第 5 节 |
 
 字符串型列表字段（`depends` / `provides` / `capabilities` / `extensions`）既可以写成数组，也可以写成
@@ -100,8 +105,15 @@ def _build() -> QWidget:
 ```
 扫描 plugins/*/            →  校验清单  →  套用启用状态（config/plugins.json）
         ↓                                        ↓
-依赖拓扑排序（内置优先、依赖在前） → 逐个 import 入口并执行 register(api) → 收集查看器/接口/页面
+依赖拓扑排序（内置优先、依赖在前） → 清空类型表并登记引导类型 kind
+        ↓
+逐个载入：类型插件声明 kinds（登记类型）→ 校验自己的 kind 已登记 → import 入口并执行 register(api)
+        ↓
+收集查看器 / 接口 / 页面
 ```
+
+- **类型声明**：类型插件（`kind = "kind"`）在载入时把自己的 `kinds` 登记进类型表，其他插件必须 `depends` 它，
+  否则在拓扑序里可能先载入而报 `插件类型未注册：xxx`（见第 6 节）。
 
 - **顺序**：依赖插件一定先于依赖它的插件载入，所以 `register` 里 `api.require("xxx")` 一定能拿到已载入的接口。
 - **程序本体接口**（如 `app.ui`）在每次清空注册表后由主程序重新提供，插件可以直接依赖。
@@ -118,6 +130,10 @@ def _build() -> QWidget:
 | `插件清单缺少 id` / `插件清单缺少 name` | 必填字段没写 |
 | `插件 id 不合法：xxx` | id 不满足命名规则 |
 | `插件类型不合法：xxx` | `kind` 不满足命名规则 |
+| `插件类型未注册：xxx（请依赖声明该类型的类型插件：…）` | 用了某个类型却没 `depends` 声明它的类型插件（第 6 节） |
+| `插件清单不再用 kind_label 声明类型信息：请改由类型插件的 kinds 声明` | 用了旧的类型字段 |
+| `缺少插件类型接口「plugin.kind」` | 类型插件声明了 `kinds`，但没有可用的 `builtin.kind` |
+| `插件类型 panorama 的登记方法不存在：add_panorama` | `contributor` 指向的方法主程序里没有 |
 | `需要管理器版本 9.9.9，当前 0.1.0` | `manager_version` 高于当前程序版本 |
 | `缺少依赖插件：xxx` | `depends` 里写了没安装的插件 |
 | `插件依赖存在循环：a → b → a` | 依赖成环 |
@@ -235,6 +251,7 @@ def register(api) -> None:
 
 | 接口名 | 提供者 | 能力 |
 | --- | --- | --- |
+| `plugin.kind` | 内置类型插件 `builtin.kind` | `declare(spec, plugin_id="")` 登记一个插件类型、`kinds()` 读当前所有类型；服务会替类型插件调用它，一般不用手动用 |
 | `dialog` | 内置插件 `builtin.dialog` | `open_page(title, content_factory, meta="", buttons=(), width=980, height=700)` → 独立弹窗；`windows()`、`close_all()` |
 | `app.ui` | 主程序本体 | `add_page(key, title, factory, icon="", bottom=False, plugin_id="")` 等，见第 7 节 |
 | `app.open_with` | 主程序本体 | `set_viewer` / `use_viewer_for_all` / `reset_viewer` 等，见上 |
@@ -242,27 +259,71 @@ def register(api) -> None:
 大插件可以像内置插件一样 `api.provide("自己的接口", 对象)`，让别的插件依赖你 —— 依赖关系写在
 清单的 `provides` / `depends` 里，程序会保证载入顺序。
 
-## 6. 插件类型（kind）与自定义类型
+## 6. 插件类型（kind）与类型插件
 
-- `kind` **不是枚举**：它是自由字符串，内置两个类型：
-  - `viewer`（显示名「打开方式」）：声明了至少一个 `extensions`，用 `api.add_viewer(...)` 注册查看器；
-  - `page`（显示名「弹窗页面」）：界面类插件，用 `api.provide(...)` 提供扩展接口。
-- 类型表是**累积**的：类型信息来自写清单的插件（`kind_label` / `kind_description` /
-  `kind_requires_extensions`）。两个插件声明同一个 `kind` **不会冲突**，只会合并显示信息；
-  你也可以完全自定义一个新类型：
+### 6.1 类型由「类型插件」声明
+
+- `kind` **不是枚举**：它由**类型插件**在清单的 `kinds` 数组里声明，其他插件只要 `depends` 那个类型插件，
+  就能使用这个类型。内置三个类型插件（源码目录 `plugins/builtin.kind*`）：
+  - `builtin.kind`：引导类型插件，`kind` 为 `kind`，对外提供 `plugin.kind` 扩展接口；
+  - `builtin.kind.viewer`：声明 `viewer`（显示名「打开方式」，要求 `extensions`，`contributor` 为 `add_viewer`）；
+  - `builtin.kind.page`：声明 `page`（显示名「弹窗页面」）。
+- 类型插件本身是**纯数据插件**：只有 `plugin.json`，不需要 `plugin.py`（内置插件可以不写 `entry`）。
+- 类型表在**每次载入插件时重建**：先登记引导类型 `kind`，再按依赖顺序执行每个类型插件的 `kinds` 声明。
+  所以类型插件被禁用 / 删除后，它声明的类型也会从表里消失，依赖该类型的插件随即报
+  `插件类型未注册：xxx`。
+- 多个类型插件声明同一个类型**不会报错**：已有的非空字段优先，`plugins` 记录声明过它的插件。
+
+`plugins/demo.kind/plugin.json`（一个自定义类型插件）：
+
+```json
+{
+  "id": "demo.kind",
+  "name": "全景类型插件",
+  "version": "1.0.0",
+  "kind": "kind",
+  "author": "你的名字",
+  "manager_version": "0.1.0",
+  "depends": ["builtin.kind"],
+  "provides": ["panorama.kind"],
+  "kinds": [
+    {
+      "id": "panorama",
+      "label": "全景",
+      "description": "球面全景浏览。",
+      "requires_extensions": true,
+      "order": 30
+    }
+  ]
+}
+```
+
+`kinds` 每项的字段：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `id` | ✅ | 类型名，`^[a-z][a-z0-9_.\-]{1,63}$` |
+| `label` | 可选 | 显示名（插件页类型下拉里显示的名字），缺省用 `id` |
+| `description` | 可选 | 类型说明 |
+| `requires_extensions` | 可选 | 该类型是否必须声明 `extensions`，默认 `false` |
+| `contributor` | 可选 | 登记方法名：类型插件声明 `contributor` 后，`api.add(kind, ...)` 会路由到 `PluginApi` 上同名的方法（如 `add_viewer`），所以**只有主程序已经实现了该方法的类型才能写** `contributor` |
+| `order` | 可选 | 类型下拉里的排序值，越小越靠前（内置：`kind` 1、`viewer` 10、`page` 20） |
+
+> 旧写法 `kind_label` / `kind_description` / `kind_requires_extensions` 已**不再支持**：清单里写了会直接报
+> `插件清单不再用 kind_label 声明类型信息：请改由类型插件的 kinds 声明`。
+
+### 6.2 用新类型登记条目
+
+声明了新类型的插件（依赖 `demo.kind`）可以这样用：
 
 ```json
 {
   "id": "demo.panorama",
   "name": "全景插件",
   "kind": "panorama",
-  "kind_label": "全景",
-  "kind_description": "球面全景浏览。",
-  "kind_requires_extensions": true,
   "entry": "plugin.py",
   "extensions": [".jpg", ".png"],
-  "depends": [],
-  "provides": ["panorama"]
+  "depends": ["demo.kind"]
 }
 ```
 
@@ -280,9 +341,11 @@ for entry in plugin_service.contributions("panorama"):
     print(entry.plugin_id, entry.name, entry.fields)
 ```
 
-- 如果某个类型的 `contributor` 指向主程序内部的登记方法（例如 `viewer` → `add_viewer`），
-  `api.add("viewer", ...)` 会直接路由到那个方法；**`contributor` 只能由主程序设置**，清单里不能写。
-- 「插件」页的类型下拉框里的类型，就是当前已发现插件累积出来的类型表，所以新类型装上插件后立刻可选。
+- 类型插件通过 `api.provide("plugin.kind", ...)` 暴露声明能力（内置 `builtin.kind` 就是这样做的，
+  接口对象是 `KindApi`，方法 `declare(spec, plugin_id="")` / `kinds()`）；自定义类型插件如果不用
+  `contributor`，只要写 `kinds` 就会由服务在载入时登记。
+- 「插件」页的类型下拉框里的类型，就是当前载入插件重建出来的类型表，所以新类型装上类型插件后立刻可选；
+  跳转过来的「打开方式」筛选会选中 `viewer` 类型（`PluginPage.apply_kind("viewer")`）。
 
 ## 7. 大型插件：挂页面、复用主程序能力
 
@@ -336,13 +399,13 @@ plugins/demo.hello/
   "name": "演示插件",
   "version": "0.1.0",
   "kind": "page",
-  "description": "演示页面、扩展接口与自定义类型。",
+  "description": "演示页面、扩展接口与主程序能力。",
   "author": "你的名字",
   "manager_version": "0.1.0",
   "entry": "plugin.py",
-  "depends": ["builtin.dialog"],
+  "depends": ["builtin.kind.page", "builtin.dialog"],
   "provides": ["hello"],
-  "capabilities": ["演示页面", "对外接口", "自定义类型"]
+  "capabilities": ["演示页面", "对外接口", "弹窗"]
 }
 ```
 
@@ -376,8 +439,8 @@ def _popup() -> None:
 def register(api) -> None:
     api.require("dialog")           # 清单里 depends 声明了 builtin.dialog
     api.provide("hello", HelloApi())
-    api.add("panorama", "球面全景", fov=110)   # 自定义类型的条目
     api.require("app.ui").add_page("hello", "演示页", _build, icon="HOME", plugin_id=api.plugin_id)
+    # 想登记自定义类型条目（api.add("panorama", ...)）得先 depends 声明该类型的类型插件，见第 6 节
 ```
 
 其它插件装了 `demo.hello` 后，只要在清单里写 `"depends": ["demo.hello"]`，就能：
@@ -391,12 +454,12 @@ print(hello.greet("世界"))
 
 | 我想…… | 怎么做 |
 | --- | --- |
-| 让某种文件用我的界面打开 | `kind: "viewer"` + `extensions` + `api.add_viewer(..., factory, host="dialog")` |
+| 让某种文件用我的界面打开 | 清单 `depends: ["builtin.kind.viewer", "builtin.dialog"]` + `kind: "viewer"` + `extensions` + `api.add_viewer(..., factory, host="dialog")` |
 | 在程序里加一个页面 | 依赖主程序的 `app.ui`：`api.require("app.ui").add_page(...)`（第 7 节） |
 | 弹一个独立窗口 | `api.require("dialog").open_page(title, content_factory)` |
 | 给别的插件提供能力 | 清单 `provides` + `api.provide("名字", 对象)` |
 | 用别的插件的能力 | 清单 `depends` + `api.require("名字")` |
-| 造一个新插件类型 | 清单 `kind` 写新名字，可选 `kind_label` / `kind_description` / `kind_requires_extensions`，用 `api.add(kind, ...)` 登记条目 |
+| 造一个新插件类型 | 写一个类型插件（`kind: "kind"` + `depends: ["builtin.kind"]` + `kinds: [{"id": "新名字", ...}]`，可纯数据无 `entry`），用它的插件 `depends` 该类型插件后用 `api.add(kind, ...)` 登记条目（第 6 节） |
 | 让用户配置插件参数 | 清单写 `options`（bool / text / choice），`register` 里用 `api.option("键")` 读回（第 5 节） |
 | 让某种格式固定用我的查看器打开 | `api.require("app.open_with").set_viewer("png", viewer.id)`，或 `use_viewer_for_all(viewer.id)` |
 | 声明最低程序版本 | 清单 `manager_version` |

@@ -23,7 +23,7 @@ from app.core.config import Language, config  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
-from app.services.layout_migration import migrate_layout  # noqa: E402
+from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
 from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
@@ -64,6 +64,7 @@ def main() -> int:
     with session_scope() as session:
         seed(session)
         migrate_layout(session)
+        migrate_uncategorized(session)
 
     app = QApplication(sys.argv)
     _setup_translator(app)

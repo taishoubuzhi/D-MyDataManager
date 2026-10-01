@@ -1,16 +1,9 @@
-"""标签管理页：全局标签与个人标签的创建、归属切换与清理。"""
+"""标签管理页：全局标签与个人标签的创建、归属切换、清理与逐列筛选。"""
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QAbstractItemView,
-    QHBoxLayout,
-    QHeaderView,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
@@ -27,6 +20,20 @@ from ...db.models import Tag
 from ...services import TaxonomyService, UserService
 from ..common import confirm, toast_error, toast_success, toast_warning
 from ..dialogs import TextInputDialog
+from ..widgets.data_table import (
+    TableFilterBar,
+    column_values,
+    fit_columns,
+    match_filters,
+    prepare_table,
+)
+
+_FILTER_COLUMNS = (
+    ("name", "名称", "text"),
+    ("scope", "归属", "choice"),
+    ("owner", "创建者", "choice"),
+    ("usage", "数据项数", "text"),
+)
 
 
 class TagPage(QWidget):
@@ -40,6 +47,7 @@ class TagPage(QWidget):
         self.users = UserService(self.session)
         self.tag_repo = self.taxonomy.tags
         self._tags: list[Tag] = []
+        self._row_values: list[dict[str, str]] = []
         self._user_id: int | None = None
 
         root = QVBoxLayout(self)
@@ -57,8 +65,8 @@ class TagPage(QWidget):
         root.addLayout(header)
         root.addWidget(
             CaptionLabel(
-                "全局标签对所有用户可见，个人标签只属于创建者，其他用户看不到。默认用户可以看到全部标签；"
-                "只有创建者能改名、删除或切换归属；个人标签不能与已有全局标签重名。",
+                "全局标签对所有用户可见，个人标签只属于创建者。基础标签（重要 / 待整理 / 收藏）默认即全局标签，"
+                "开箱即用；只有创建者能改名、删除或切换归属，个人标签不能与已有全局标签重名。",
                 self,
             )
         )
@@ -78,19 +86,26 @@ class TagPage(QWidget):
         actions.addStretch(1)
         root.addLayout(actions)
 
+        self.filter_bar = TableFilterBar(self)
+        self.filter_bar.configure(_FILTER_COLUMNS)
+        self.filter_bar.changed.connect(self._apply_filters)
+        root.addWidget(self.filter_bar)
+
+        info_row = QHBoxLayout()
+        self.filter_caption = CaptionLabel("", self)
+        info_row.addWidget(self.filter_caption)
+        info_row.addStretch(1)
+        reset_button = PushButton(FluentIcon.CLEAR_SELECTION, "重置筛选", self)
+        reset_button.clicked.connect(self._on_reset_filters)
+        info_row.addWidget(reset_button)
+        root.addLayout(info_row)
+
         self.table = TableWidget(self)
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["名称", "归属", "创建者", "数据项数"])
-        self.table.verticalHeader().setVisible(False)
         self.table.setBorderVisible(True)
         self.table.setBorderRadius(8)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        head = self.table.horizontalHeader()
-        head.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in (1, 2, 3):
-            head.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        prepare_table(self.table, movable=True)
         root.addWidget(self.table, 1)
 
         signalBus.tagsChanged.connect(self.refresh)
@@ -104,10 +119,13 @@ class TagPage(QWidget):
         owners = {info.user.id: info.name for info in self.users.list_users()}
         usage = self.taxonomy.usage(user_id=self._user_id)
         # 默认用户（管理员）可以看到全部标签，其他用户只看全局标签与自己创建的标签。
-        self._tags = self.tag_repo.all() if self.users.is_admin() else self.tag_repo.all(
-            user_id=self._user_id
+        self._tags = (
+            self.tag_repo.all()
+            if self.users.is_admin()
+            else self.tag_repo.all(user_id=self._user_id)
         )
         self.table.setRowCount(len(self._tags))
+        self._row_values = []
         for row, tag in enumerate(self._tags):
             creator = self.tag_repo.is_creator(tag, self._user_id)
             if tag.is_global:
@@ -115,7 +133,9 @@ class TagPage(QWidget):
             else:
                 scope = "个人（我）" if creator else "个人"
             owner_id = tag.created_by or tag.user_id
-            cells = [tag.name, scope, owners.get(owner_id, "—"), str(usage.get(tag.name, 0))]
+            owner = owners.get(owner_id, "—")
+            count = str(usage.get(tag.name, 0))
+            cells = [tag.name, scope, owner, count]
             for column, text in enumerate(cells):
                 cell = QTableWidgetItem(text)
                 cell.setData(Qt.ItemDataRole.UserRole, tag.id)
@@ -124,12 +144,33 @@ class TagPage(QWidget):
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 self.table.setItem(row, column, cell)
+            self._row_values.append(
+                {"name": tag.name, "scope": scope, "owner": owner, "usage": count}
+            )
+        self.filter_bar.set_options("scope", column_values(self.table, 1))
+        self.filter_bar.set_options("owner", column_values(self.table, 2))
+        self._apply_filters()
+
+    # ---------------------------------------------------------------- 筛选
+    def _apply_filters(self) -> None:
+        filters = self.filter_bar.filters()
+        visible = 0
+        for row, values in enumerate(self._row_values):
+            hit = match_filters(values, filters)
+            self.table.setRowHidden(row, not hit)
+            visible += int(hit)
         self.table.clearSelection()
+        self.filter_caption.setText(f"显示 {visible} / {len(self._row_values)} 个标签")
+        fit_columns(self.table, min_width=64, max_width=220)
+
+    def _on_reset_filters(self) -> None:
+        self.filter_bar.reset()
+        self._apply_filters()
 
     # ---------------------------------------------------------------- 校验
     def _selected_tag(self) -> Tag | None:
         row = self.table.currentRow()
-        if row < 0 or row >= len(self._tags):
+        if row < 0 or row >= len(self._tags) or self.table.isRowHidden(row):
             return None
         return self._tags[row]
 

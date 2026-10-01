@@ -6,9 +6,30 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QTreeWidgetItem, QWidget
 from qfluentwidgets import Action, FluentIcon, RoundMenu, TreeWidget
 
-from ...services import CategoryNode
+from ...services import CategoryNode, is_uncategorized
 
 ALL_ID = None
+FIXED_ROLE = Qt.ItemDataRole.UserRole + 1
+FIXED_SUFFIX = "（固定）"
+FIXED_TIP = "系统分类：不能重命名、删除，也不能创建子分类"
+
+
+def category_label(node: CategoryNode, *, fixed: bool = False) -> str:
+    """分类树里的显示文本：固定分类追加「（固定）」标记。"""
+    label = f"{node.category.name} ({node.total_count})"
+    return f"{label}{FIXED_SUFFIX}" if fixed else label
+
+
+def menu_entries(*, all_data: bool = False, fixed: bool = False) -> list[tuple[str, str]]:
+    """右键菜单项（action, 文本）：「未分类」是固定分类，不提供任何修改入口。"""
+    if fixed:
+        return []
+    if all_data:
+        return [("add", "新建子分类")]
+    return [("add", "新建子分类"), ("rename", "重命名"), ("delete", "删除分类")]
+
+
+MENU_ICONS = {"add": FluentIcon.ADD, "rename": FluentIcon.EDIT, "delete": FluentIcon.DELETE}
 
 
 class CategoryTree(TreeWidget):
@@ -34,9 +55,12 @@ class CategoryTree(TreeWidget):
 
         items: dict[int, QTreeWidgetItem] = {}
         for node in nodes:
-            label = f"{node.category.name} ({node.total_count})"
-            item = QTreeWidgetItem([label])
+            fixed = is_uncategorized(node.category)
+            item = QTreeWidgetItem([category_label(node, fixed=fixed)])
             item.setData(0, Qt.ItemDataRole.UserRole, node.category.id)
+            item.setData(0, FIXED_ROLE, fixed)
+            if fixed:
+                item.setToolTip(0, FIXED_TIP)
             parent = items.get(node.category.parent_id) if node.category.parent_id else root
             if parent is None:
                 self.addTopLevelItem(item)
@@ -69,6 +93,14 @@ class CategoryTree(TreeWidget):
             yield item
             stack.extend(item.child(i) for i in range(item.childCount()))
 
+    def fixed_ids(self) -> set[int]:
+        """固定分类（「未分类」）对应的分类 id 集合。"""
+        return {
+            item.data(0, Qt.ItemDataRole.UserRole)
+            for item in self._iter_items()
+            if item.data(0, FIXED_ROLE)
+        }
+
     def _on_selection(self) -> None:
         self.categorySelected.emit(self.current_category())
 
@@ -77,18 +109,23 @@ class CategoryTree(TreeWidget):
         if item is None:
             return
         category_id = item.data(0, Qt.ItemDataRole.UserRole)
-        menu = RoundMenu(parent=self)
-        menu.addAction(
-            Action(FluentIcon.ADD, "新建子分类", triggered=lambda: self.actionRequested.emit("add", category_id))
+        entries = menu_entries(
+            all_data=category_id is None, fixed=bool(item.data(0, FIXED_ROLE))
         )
-        if category_id is not None:
+        if not entries:
+            return
+        menu = RoundMenu(parent=self)
+        for action, text in entries:
             menu.addAction(
-                Action(FluentIcon.EDIT, "重命名", triggered=lambda: self.actionRequested.emit("rename", category_id))
-            )
-            menu.addAction(
-                Action(FluentIcon.DELETE, "删除分类", triggered=lambda: self.actionRequested.emit("delete", category_id))
+                Action(
+                    MENU_ICONS[action],
+                    text,
+                    triggered=lambda _=False, name=action, target=category_id: (
+                        self.actionRequested.emit(name, target)
+                    ),
+                )
             )
         menu.exec(self.viewport().mapToGlobal(pos))
 
 
-__all__ = ["CategoryTree"]
+__all__ = ["ALL_ID", "FIXED_SUFFIX", "CategoryTree", "category_label", "menu_entries"]

@@ -102,6 +102,18 @@ def _retention(files) -> list[str]:
     return _select_outdated(list(files))
 
 
+def _console_stream():
+    """控制台流：GBK 控制台写不出 ✔/✗ 时会抛 UnicodeEncodeError，这里把编码错误降级。"""
+    stream = sys.stdout
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
+    return stream
+
+
 def _cleanup_logs() -> None:
     """启动时按保留策略清理历史日志（loguru 只在切分时触发）。"""
     for raw in _select_outdated([str(path) for path in paths.LOG_DIR.glob(LOG_GLOB)]):
@@ -191,7 +203,7 @@ def setup_logging() -> None:
         # 控制台写 stdout：PyCharm 等 IDE 会把 stderr 整体标红，让 INFO 看着像错误
         console = dict(common)
         console["format"] = console_format(str(config.logFormat.value))
-        _add_sink(sys.stdout, colorize=True, **console)
+        _add_sink(_console_stream(), colorize=True, **console)
 
     _add_sink(
         paths.LOG_DIR / _file_name(mode),

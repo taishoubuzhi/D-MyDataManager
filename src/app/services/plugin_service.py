@@ -26,7 +26,14 @@ from loguru import logger
 
 from ..core import paths
 from ..core.extensions import ExtensionRegistry, extension_registry
-from ..core.plugin_kinds import KIND_VIEWER, plugin_kinds, valid_kind_name
+from ..core.plugin_kinds import (
+    KIND_EXTENSION,
+    KIND_PLUGIN_ID,
+    KIND_VIEWER,
+    plugin_kinds,
+    register_builtin_kinds,
+    valid_kind_name,
+)
 from ..core.plugin_options import coerce_option, defaults
 from ..core.plugins import (
     MANIFEST_NAME,
@@ -36,6 +43,7 @@ from ..core.plugins import (
     PluginInfo,
     load_manifest,
     sort_by_dependency,
+    validate_kind,
 )
 from ..core.viewers import Viewer, viewer_registry
 
@@ -95,15 +103,17 @@ class PluginApi:
     def add(self, kind: str, name: str = "", *args: object, **fields: object) -> object:
         """按插件类型登记条目：类型有登记方法（查看器为 add_viewer）就路由过去。
 
-        类型由插件清单累积登记，所以插件可以自定义新类型：这类类型的条目会记成
+        类型由类型插件声明，所以插件可以自定义新类型：这类类型的条目会记成
         `PluginContribution`，其他插件用 `api.entries(kind)` 读取。
         """
         if not valid_kind_name(kind):
             raise PluginError(f"插件类型不合法：{kind}")
         spec = plugin_kinds.get(kind)
         contributor = spec.contributor if spec is not None else ""
-        method = getattr(self, contributor, None) if contributor else None
-        if callable(method):
+        if contributor:
+            method = getattr(self, contributor, None)
+            if not callable(method):
+                raise PluginError(f"插件类型 {kind} 的登记方法不存在：{contributor}")
             return method(name, *args, **fields)  # type: ignore[operator]
         item = PluginContribution(
             kind=kind,
@@ -458,6 +468,8 @@ class PluginService:
         """按依赖顺序载入所有启用的插件，返回注册的查看器数量。"""
         viewer_registry.clear()
         extension_registry.clear()
+        plugin_kinds.clear()
+        register_builtin_kinds()
         self._provide_bootstrap()
         self._viewers = {}
         self._apis = {}
@@ -474,8 +486,11 @@ class PluginService:
             if not info.enabled:
                 continue  # 非查看器类型的插件同样要载入：它们为别的插件提供扩展接口
             try:
-                self._viewers[info.id] = self._load_plugin(info)
-                count += len(self._viewers[info.id])
+                self._declare_kinds(info)
+                validate_kind(info)
+                viewers = self._load_plugin(info) if info.entry else []
+                self._viewers[info.id] = viewers
+                count += len(viewers)
             except PluginError as exc:
                 extension_registry.drop_plugin(info.id)
                 self._errors[info.id] = str(exc)
@@ -486,6 +501,21 @@ class PluginService:
                 logger.exception("插件载入异常：{}", info.id)
         self._sync_bootstrap()
         return count
+
+    def _declare_kinds(self, info: PluginInfo) -> None:
+        """把类型插件声明的插件类型登记进全局类型表（类型插件是纯数据插件）。"""
+        if not info.kinds:
+            return
+        provider = extension_registry.provider(KIND_EXTENSION)
+        declare = getattr(provider, "declare", None)
+        if not callable(declare):
+            raise PluginError(
+                f"缺少插件类型接口「{KIND_EXTENSION}」：请先启用插件类型插件 {KIND_PLUGIN_ID}"
+            )
+        for spec in info.kinds:
+            if spec.contributor and not hasattr(PluginApi, spec.contributor):
+                raise PluginError(f"插件类型 {spec.id} 的登记方法不存在：{spec.contributor}")
+            declare(spec, info.id)
 
     def load(self) -> int:
         """统一载入入口：重建注册表并返查看器数量。"""

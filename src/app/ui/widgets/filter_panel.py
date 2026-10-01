@@ -1,8 +1,8 @@
 """筛选面板：搜索、类型、标签、关键词、分类、排序与回收站。
 
-每个筛选分组（类型 / 标签 / 关键词 / 分类）都是可折叠、可滑动的区域：标题栏右侧带搜索框
-（只显示匹配的选项）与三态全选框（空 = 全不选，横杠 = 部分选中，勾 = 全选），三态框与
-分组内的勾选状态双向同步。
+每个筛选分组（类型 / 标签 / 关键词 / 分类）都是一张卡片：标题栏带折叠按钮、选项计数、
+搜索框（只显示匹配的选项）与三态全选框（空 = 全不选，横杠 = 部分选中，勾 = 全选），
+三态框与分组内的勾选状态双向同步。分组内的选项区独立滚动、高度受控，整栏可整体滚动。
 """
 
 from __future__ import annotations
@@ -17,13 +17,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
+    CardWidget,
     CheckBox,
     ComboBox,
     FluentIcon,
     PushButton,
     SearchLineEdit,
+    StrongBodyLabel,
     TransparentToolButton,
 )
 
@@ -38,10 +39,11 @@ SORT_OPTIONS: list[tuple[str, str, bool]] = [
 ]
 
 SECTION_BODY_HEIGHT = 116
+SECTION_SEARCH_WIDTH = 92
 
 
-class FilterSection(QWidget):
-    """单个筛选分组：可折叠、可滑动、可搜索，标题栏右侧是三态全选框。"""
+class FilterSection(CardWidget):
+    """单个筛选分组卡片：可折叠、可滑动、可搜索，标题栏右侧是三态全选框。"""
 
     changed = pyqtSignal()
 
@@ -55,12 +57,13 @@ class FilterSection(QWidget):
         self.toggle_button.setFixedSize(22, 22)
         self.toggle_button.setToolTip("展开 / 折叠")
         self.toggle_button.clicked.connect(self._toggle_body)
-        title_label = BodyLabel(title, self)
-        title_label.setStyleSheet("font-weight: 600;")
+        self.title_label = StrongBodyLabel(title, self)
+        self.count_label = CaptionLabel("", self)
+        self.count_label.setToolTip("已选 / 全部")
 
         self.search = SearchLineEdit(self)
         self.search.setPlaceholderText("搜索")
-        self.search.setFixedWidth(84)
+        self.search.setFixedWidth(SECTION_SEARCH_WIDTH)
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _text: self._rebuild())
 
@@ -73,7 +76,8 @@ class FilterSection(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(4)
         header.addWidget(self.toggle_button)
-        header.addWidget(title_label)
+        header.addWidget(self.title_label)
+        header.addWidget(self.count_label)
         header.addStretch(1)
         header.addWidget(self.search)
         header.addWidget(self.all_box)
@@ -95,8 +99,8 @@ class FilterSection(QWidget):
         self._empty.hide()
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(4)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(6)
         root.addLayout(header)
         root.addWidget(self.scroll)
 
@@ -163,6 +167,7 @@ class FilterSection(QWidget):
         """让三态框反映分组内的勾选情况：全不选 / 部分选中 / 全选。"""
         total = len(self._boxes)
         checked = len(self.checked_keys())
+        self.count_label.setText(f"{checked}/{total}")
         if total == 0 or checked == 0:
             state = Qt.CheckState.Unchecked
         elif checked == total:
@@ -222,12 +227,14 @@ class FilterPanel(QWidget):
 
         self.search = SearchLineEdit(self)
         self.search.setPlaceholderText("全文检索：名称、内容、关键词（空格分隔多个词）")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _text: self.changed.emit())
 
         self.sort_box = ComboBox(self)
         for label, _key, _desc in SORT_OPTIONS:
             self.sort_box.addItem(label)
         self.sort_box.setCurrentIndex(0)
+        self.sort_box.setMinimumWidth(120)
         self.sort_box.currentIndexChanged.connect(lambda _index: self.changed.emit())
 
         self.hidden_box = CheckBox("显示隐藏项", self)
@@ -235,28 +242,35 @@ class FilterPanel(QWidget):
         self.hidden_box.stateChanged.connect(lambda _state: self.changed.emit())
         self.trash_box.stateChanged.connect(lambda _state: self.changed.emit())
 
-        reset = PushButton("重置筛选", self)
-        reset.clicked.connect(self.reset)
+        self.reset_button = PushButton("重置筛选", self)
+        self.reset_button.setToolTip("清空全部筛选条件")
+        self.reset_button.clicked.connect(self.reset)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-        layout.addWidget(self.search)
+        options_card = CardWidget(self)
+        options_layout = QVBoxLayout(options_card)
+        options_layout.setContentsMargins(10, 8, 10, 10)
+        options_layout.setSpacing(6)
+        options_layout.addWidget(StrongBodyLabel("范围与排序", options_card))
 
-        sort_row = QWidget(self)
+        sort_row = QWidget(options_card)
         sort_layout = QHBoxLayout(sort_row)
         sort_layout.setContentsMargins(0, 0, 0, 0)
+        sort_layout.setSpacing(6)
         sort_layout.addWidget(CaptionLabel("排序", sort_row))
         sort_layout.addStretch(1)
         sort_layout.addWidget(self.sort_box)
-        layout.addWidget(sort_row)
+        options_layout.addWidget(sort_row)
+        options_layout.addWidget(self.hidden_box)
+        options_layout.addWidget(self.trash_box)
+        options_layout.addWidget(self.reset_button)
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self.search)
         for section in self.sections():
             layout.addWidget(section)
-
-        layout.addWidget(self.hidden_box)
-        layout.addWidget(self.trash_box)
-        layout.addWidget(reset)
+        layout.addWidget(options_card)
         layout.addStretch(1)
 
         self.set_options()

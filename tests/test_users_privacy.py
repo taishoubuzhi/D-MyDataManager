@@ -5,11 +5,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
 
+from pathlib import Path
+
 from app.core.config import config
 from app.core.security import ITERATIONS, hash_password, verify_hash
 from app.db.models import Tag
 from app.repositories import CategoryRepository, ItemFilter, ItemRepository, TagRepository
-from app.services import ItemService, UserService, overview
+from app.services import ItemService, LibraryService, UserService, overview
 from tests.harness import IsolatedCase
 
 
@@ -35,7 +37,7 @@ class UserCase(IsolatedCase):
         self.assertIsNotNone(other)
         self.assertIsNone(self.service.create("小明", "x"))
         self.assertEqual([info.name for info in self.service.list_users()], ["默认用户", "小明"])
-        self.assertEqual(len(CategoryRepository(self.session).roots(user_id=other.id)), 4)
+        self.assertEqual(len(CategoryRepository(self.session).roots(user_id=other.id)), 5)
         self.assertEqual(len(TagRepository(self.session).all(user_id=other.id)), 3)
         self.assertTrue(self.service.verify(other, "pw123456"))
         self.assertFalse(self.service.verify(other, "wrong"))
@@ -87,10 +89,51 @@ class UserCase(IsolatedCase):
         self.session.refresh(item)
         self.assertEqual(item.user_id, self.user.id)
         self.assertEqual(item.tag_names, ["重要"])
-        self.assertEqual(len(TagRepository(self.session).all(user_id=other.id)), 0)
+        # 基础标签是全局标签，删除用户不会带走它们；该用户自己的标签必须全部消失。
+        remaining = [
+            tag.name
+            for tag in TagRepository(self.session).all(user_id=other.id)
+            if not tag.is_global
+        ]
+        self.assertEqual(remaining, [])
         self.assertEqual(
             ItemRepository(self.session).count(ItemFilter(user_ids={self.user.id})), 1,
         )
+
+    def test_delete_empty_user_cleans_directory_and_categories(self):
+        other = self.service.create("小红")
+        self.session.commit()
+        libraries = LibraryService(self.session)
+        library = libraries.ensure_default()
+        user_dir = Path(library.path) / libraries.dir_name_of(other.name)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        self.assertTrue(user_dir.is_dir())
+
+        self.assertTrue(self.service.delete(other))
+        self.session.commit()
+
+        # 数据为空时目录直接清理，不搬到默认用户名下。
+        self.assertFalse(user_dir.exists())
+        self.assertFalse((Path(library.path) / self.user.name / other.name).exists())
+        # 也不把已删除用户的分类镜像给默认用户。
+        roots = {c.name for c in CategoryRepository(self.session).roots(user_id=self.user.id)}
+        self.assertEqual(roots, {"学习资料", "工作文档", "图片素材", "影音资料", "未分类"})
+
+    def test_delete_empty_user_keeps_directory_with_leftover_files(self):
+        other = self.service.create("小红")
+        self.session.commit()
+        libraries = LibraryService(self.session)
+        library = libraries.ensure_default()
+        user_dir = Path(library.path) / libraries.dir_name_of(other.name)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "残留.txt").write_text("surprise", encoding="utf-8")
+
+        self.assertTrue(self.service.delete(other))
+        self.session.commit()
+
+        # 目录里还有数据库不认识的文件时保留目录，避免误删用户手工放进去的内容。
+        self.assertTrue(user_dir.is_dir())
+        self.assertTrue((user_dir / "残留.txt").is_file())
 
     def test_cannot_delete_last_user(self):
         self.assertFalse(self.service.delete(self.user))

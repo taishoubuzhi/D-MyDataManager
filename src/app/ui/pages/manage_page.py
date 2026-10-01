@@ -32,20 +32,21 @@ from qfluentwidgets import (
 from ...core.signals import signalBus
 from ...db import database
 from ...db.models import DataType
+from ...db.seed import UNCATEGORIZED_NAME
 from ...repositories import (
     CategoryRepository,
     ItemFilter,
     ItemRepository,
     TagRepository,
 )
-from ...services import ExportService, ItemService, TaxonomyService, UserService
+from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
 from ..common import confirm, format_size, toast_error, toast_success, toast_warning, type_name
 from ..viewers.open_flow import open_path
-from ..dialogs import DuplicateDialog, ItemEditDialog, TextInputDialog
+from ..dialogs import CategoryConflictDialog, DuplicateDialog, ItemEditDialog, TextInputDialog
 from ..widgets.category_tree import CategoryTree
 from ..widgets.filter_panel import FilterPanel
 from ..widgets.item_card import ItemCard, ItemListRow
-from ..widgets.pager import DEFAULT_PAGE_SIZE, Pager
+from ..widgets.pager import DEFAULT_PAGE_SIZE, Pager, selection_summary
 
 TOOLBAR_BUTTON_HEIGHT = 32
 TOOLBAR_MAX_ROWS = 2
@@ -203,13 +204,14 @@ class ManagePage(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setFixedWidth(264)
+        scroll.setFixedWidth(288)
 
         host = QWidget(scroll)
         layout = QVBoxLayout(host)
-        layout.setContentsMargins(4, 4, 8, 4)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 10, 6)
+        layout.setSpacing(10)
         layout.addWidget(StrongBodyLabel("筛选", host))
+        layout.addWidget(CaptionLabel("按类型、标签、关键词与分类组合过滤", host))
 
         self.filter_panel = FilterPanel(host)
         self.filter_panel.changed.connect(self._on_filter_changed)
@@ -320,7 +322,11 @@ class ManagePage(QWidget):
         return max(1, -(-self._total // self._page_size))
 
     def _update_count_label(self) -> None:
-        self.count_label.setText(f"共 {self._total} 项 · 已选 {len(self._selected)} 项")
+        self.count_label.setText(selection_summary(self._total, len(self._selected)))
+        # 翻页区底部的总数/选中数/跨页提示与选择状态保持同步。
+        pager = getattr(self, "pager", None)
+        if pager is not None:
+            pager.set_selection(len(self._selected), visible=len(getattr(self, "_items", ())))
         # 还原只对回收站中已删除的数据有意义。
         if self.restore_button is not None:
             self.restore_button.setEnabled(
@@ -657,6 +663,13 @@ class ManagePage(QWidget):
         self._load_items()
 
     def _on_tree_action(self, action: str, category_id) -> None:
+        if category_id is not None and is_uncategorized(self.category_repo.get(category_id)):
+            toast_warning(
+                self,
+                "固定分类",
+                f"「{UNCATEGORIZED_NAME}」是固定分类，不能重命名、删除或创建子分类",
+            )
+            return
         if action == "add":
             dialog = TextInputDialog("新建分类", "分类名称", parent=self.window(), hint="留空以取消")
             if not dialog.exec():
@@ -681,9 +694,11 @@ class ManagePage(QWidget):
             if not dialog.exec():
                 return
             name = dialog.value()
-            if not name:
+            if not name or name == category.name:
                 return
-            self.taxonomy.update_category(category, name=name)
+            if not self.taxonomy.rename_category(category, name):
+                toast_warning(self, "无法重命名", f"同级已存在分类「{name}」")
+                return
             self.session.commit()
             signalBus.categoriesChanged.emit()
             toast_success(self, "已重命名", name)
@@ -693,7 +708,24 @@ class ManagePage(QWidget):
                 return
             if not confirm(self, "删除分类", f"确定删除分类「{category.name}」吗？其中的数据会变成未分类。"):
                 return
-            count = self.taxonomy.delete_category(category)
+            renames: dict[int, str] = {}
+            conflicts = self.taxonomy.promotion_conflicts(category)
+            if conflicts:
+                repo = self.taxonomy.categories
+                rows = [
+                    (child.name, repo.unique_sibling_name(child.name, category.parent_id, child.user_id))
+                    for child in conflicts
+                ]
+                dialog = CategoryConflictDialog(rows, self.window())
+                if not dialog.exec():
+                    return
+                if not dialog.auto():
+                    renames = {
+                        child.id: name
+                        for child, name in zip(conflicts, dialog.renames())
+                        if name
+                    }
+            count = self.taxonomy.delete_category(category, renames=renames)
             self.session.commit()
             signalBus.categoriesChanged.emit()
             signalBus.itemsChanged.emit()

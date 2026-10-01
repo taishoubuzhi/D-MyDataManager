@@ -3,8 +3,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.db.seed import UNCATEGORIZED_NAME
 from app.repositories import CategoryRepository, ItemFilter, ItemRepository, TagRepository
-from app.services import TaxonomyService
+from app.services import TaxonomyService, is_uncategorized
 from tests.harness import IsolatedCase
 
 
@@ -24,7 +25,7 @@ class CategoryCase(IsolatedCase):
         roots = [node for node in self.taxonomy.tree(user_id=self.user.id) if node.depth == 0]
         self.assertEqual(
             {node.category.name for node in roots},
-            {"学习资料", "工作文档", "图片素材", "影音资料"},
+            {"学习资料", "工作文档", "图片素材", "影音资料", "未分类"},
         )
 
     def test_duplicate_sibling_is_rejected(self):
@@ -101,6 +102,88 @@ class CategoryCase(IsolatedCase):
         self.session.commit()
         rows = ItemRepository(self.session).query(ItemFilter(category_ids={target.id}))
         self.assertEqual(len(rows), 1)
+
+    def test_rename_category_rejects_duplicate_sibling(self):
+        first = self.taxonomy.create_category("甲", user_id=self.user.id)
+        second = self.taxonomy.create_category("乙", user_id=self.user.id)
+        self.session.commit()
+        self.assertFalse(self.taxonomy.rename_category(second, "甲"))
+        self.assertFalse(self.taxonomy.rename_category(second, "   "))
+        self.assertFalse(self.taxonomy.rename_category(second, "乙"))
+        self.assertEqual(second.name, "乙")
+        self.assertTrue(self.taxonomy.rename_category(second, "丙"))
+        self.session.commit()
+        self.assertEqual(second.name, "丙")
+        self.assertEqual(first.name, "甲")
+
+    def test_delete_category_renames_conflicting_children(self):
+        parent = self.taxonomy.create_category("父", user_id=self.user.id)
+        sibling = self.taxonomy.create_category("子", user_id=self.user.id)
+        child = self.taxonomy.create_category("子", parent_id=parent.id, user_id=self.user.id)
+        self.session.commit()
+        self.assertEqual([conflict.id for conflict in self.taxonomy.promotion_conflicts(parent)], [child.id])
+
+        self.taxonomy.delete_category(parent)
+        self.session.commit()
+        self.assertIsNone(child.parent_id)
+        # 子分类上移后与真实的同级分类重名，自动加编号后缀而不是撞名。
+        self.assertEqual(child.name, "子-1")
+        self.assertEqual(sibling.name, "子")
+        roots = [c.name for c in CategoryRepository(self.session).roots(user_id=self.user.id)]
+        self.assertEqual(roots.count("子"), 1)
+
+    def test_delete_category_applies_explicit_renames(self):
+        parent = self.taxonomy.create_category("父", user_id=self.user.id)
+        self.taxonomy.create_category("子", user_id=self.user.id)
+        child = self.taxonomy.create_category("子", parent_id=parent.id, user_id=self.user.id)
+        self.session.commit()
+        self.taxonomy.delete_category(parent, renames={child.id: "拷贝"})
+        self.session.commit()
+        self.assertEqual(child.name, "拷贝")
+        self.assertIsNone(child.parent_id)
+
+    def test_uncategorized_category_is_created_on_demand(self):
+        category = self.taxonomy.uncategorized_category(user_id=self.user.id)
+        self.assertEqual(category.name, UNCATEGORIZED_NAME)
+        self.assertIsNone(category.parent_id)
+        self.assertEqual(
+            self.taxonomy.uncategorized_category(user_id=self.user.id, create=False).id, category.id,
+        )
+        self.assertEqual(len(CategoryRepository(self.session).roots(user_id=self.user.id)), 5)
+
+    def test_uncategorized_is_fixed_and_sorted_last(self):
+        self.taxonomy.create_category("甲", user_id=self.user.id)
+        self.session.commit()
+        category = self.taxonomy.uncategorized_category(user_id=self.user.id)
+        self.assertTrue(is_uncategorized(category))
+        self.assertFalse(is_uncategorized(None))
+        self.assertFalse(is_uncategorized(self._node("学习资料").category))
+        roots = [node for node in self.taxonomy.tree(user_id=self.user.id) if node.depth == 0]
+        # 「未分类」固定排在最后，其余根分类保持在它前面。
+        self.assertEqual(roots[-1].category.id, category.id)
+        self.assertNotIn(category.id, [node.category.id for node in roots[:-1]])
+
+    def test_uncategorized_cannot_be_renamed_or_deleted(self):
+        category = self.taxonomy.uncategorized_category(user_id=self.user.id)
+        self.session.commit()
+        self.assertFalse(self.taxonomy.rename_category(category, "杂物"))
+        self.assertEqual(category.name, UNCATEGORIZED_NAME)
+        self.assertEqual(self.taxonomy.delete_category(category), 0)
+        self.session.commit()
+        self.assertIsNotNone(self.session.get(type(category), category.id))
+
+    def test_uncategorized_rejects_child_categories(self):
+        category = self.taxonomy.uncategorized_category(user_id=self.user.id)
+        other = self.taxonomy.create_category("甲", user_id=self.user.id)
+        self.session.commit()
+        self.assertIsNone(
+            self.taxonomy.create_category("子", parent_id=category.id, user_id=self.user.id)
+        )
+        self.assertFalse(self.taxonomy.move_category(other, category.id))
+        self.assertFalse(self.taxonomy.move_category(category, other.id))
+        self.session.commit()
+        self.assertIsNone(other.parent_id)
+        self.assertIsNone(category.parent_id)
 
 
 class TagCase(IsolatedCase):

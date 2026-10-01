@@ -9,8 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pathlib import Path
 
 from app.core import paths
+from app.repositories import CategoryRepository
 from app.services import LibraryService
-from app.services.layout_migration import migrate_layout
+from app.services.layout_migration import migrate_layout, migrate_uncategorized
 from tests.harness import IsolatedCase
 
 
@@ -99,3 +100,44 @@ class LayoutMigrationCase(IsolatedCase):
         with closing(sqlite3.connect(str(backup))) as connection:
             stored = [row[0] for row in connection.execute("SELECT file_path FROM items")]
         self.assertEqual(stored, ["学习资料/笔记.txt"])
+
+    def test_uncategorized_migration_moves_files_into_category(self):
+        library = self.service.ensure_default()
+        item = self._legacy_file("学习资料/散落.txt", "散落内容", user_id=self.user.id)
+        item.category_id = None
+        self.session.flush()
+
+        stats = migrate_uncategorized(self.session)
+        self.session.commit()
+
+        category = CategoryRepository(self.session).by_name(
+            "未分类", None, self.user.id,
+        )
+        self.assertIsNotNone(category)
+        self.assertEqual(item.category_id, category.id)
+        self.assertEqual(item.file_path, f"{self.user.name}/未分类/散落.txt")
+        self.assertTrue((Path(library.path) / item.file_path).is_file())
+        self.assertEqual(stats["moved"], 1)
+        self.assertEqual(stats["updated"], 1)
+        self.assertEqual(stats["created"], 0)
+        # 已有归属的数据不受影响。
+        self.assertEqual(migrate_uncategorized(self.session)["moved"], 0)
+
+    def test_uncategorized_migration_creates_missing_category(self):
+        library = self.service.ensure_default()
+        item = self._legacy_file("学习资料/散落.txt", "散落内容", user_id=self.user.id)
+        item.category_id = None
+        # 模拟老用户：注册文件时补出的「未分类」再被删掉。
+        category = CategoryRepository(self.session).by_name("未分类", None, self.user.id)
+        self.session.delete(category)
+        self.session.flush()
+        self.assertIsNone(CategoryRepository(self.session).by_name("未分类", None, self.user.id))
+
+        stats = migrate_uncategorized(self.session)
+        self.session.commit()
+
+        created = CategoryRepository(self.session).by_name("未分类", None, self.user.id)
+        self.assertIsNotNone(created)
+        self.assertEqual(stats["created"], 1)
+        self.assertEqual(item.category_id, created.id)
+        self.assertTrue((Path(library.path) / item.file_path).is_file())

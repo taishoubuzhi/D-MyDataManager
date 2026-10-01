@@ -14,13 +14,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from tests.harness import TempDir  # noqa: E402
 from app.core import paths, viewer_data  # noqa: E402
 from app.core.extensions import extension_registry  # noqa: E402
-from app.core.plugin_kinds import KIND_PAGE, KIND_VIEWER, PluginKindSpec, plugin_kinds, valid_kind_name  # noqa: E402
+from app.core.plugin_kinds import (  # noqa: E402
+    KIND_EXTENSION,
+    KIND_KIND,
+    KIND_PAGE,
+    KIND_VIEWER,
+    PluginKindSpec,
+    plugin_kinds,
+    register_builtin_kinds,
+    valid_kind_name,
+)
 from app.core.plugins import (  # noqa: E402
     SOURCE_EXTERNAL,
     PluginError,
     load_manifest,
+    parse_kinds,
     parse_manifest,
     sort_by_dependency,
+    validate_kind,
 )
 from app.core.viewers import viewer_registry  # noqa: E402
 from app.services.plugin_service import PluginApi, PluginService  # noqa: E402
@@ -41,6 +52,17 @@ def register(api):
                    description="测试用")
 '''
 
+#: 测试类型插件：类型完全由清单的 kinds 声明，入口文件只是协议要求
+KIND_MODULE = '''"""测试类型插件：清单的 kinds 由服务载入时登记。"""
+
+
+def register(api):
+    pass
+'''
+
+#: 七个内置查看器的类型依赖：先由类型插件声明 viewer 类型，再依赖弹窗页面插件
+VIEWER_DEPENDS = ("builtin.kind.viewer", "builtin.dialog")
+
 #: 内置查看器清单里的扩展名应当与扫描模块保持一致
 BUILTIN_EXTENSIONS = {
     "builtin.image": viewer_data.IMAGE_EXTENSIONS,
@@ -50,6 +72,14 @@ BUILTIN_EXTENSIONS = {
     "builtin.markdown": ("md", "markdown"),
     "builtin.archive": viewer_data.ARCHIVE_EXTENSIONS,
     "builtin.spreadsheet": viewer_data.SPREADSHEET_EXTENSIONS,
+}
+
+#: 随仓库分发的全部内置插件
+BUILTIN_PLUGIN_IDS = set(BUILTIN_EXTENSIONS) | {
+    "builtin.dialog",
+    "builtin.kind",
+    "builtin.kind.viewer",
+    "builtin.kind.page",
 }
 
 
@@ -64,7 +94,7 @@ def manifest(**fields) -> dict:
         "description": "测试插件",
         "author": "测试者",
         "manager_version": "0.1.0",
-        "depends": [],
+        "depends": ["builtin.kind.viewer"],
         "provides": ["viewer"],
         "capabilities": ["演示功能"],
     }
@@ -72,11 +102,29 @@ def manifest(**fields) -> dict:
     return data
 
 
-def install_plugin(root: Path, name: str = "demo.viewer", **fields) -> Path:
+def install_plugin(root: Path, name: str = "demo.viewer", module: str = PLUGIN_MODULE, **fields) -> Path:
     folder = root / name
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "plugin.json").write_text(json.dumps(manifest(id=name, **fields), ensure_ascii=False), encoding="utf-8")
-    (folder / "plugin.py").write_text(PLUGIN_MODULE, encoding="utf-8")
+    (folder / "plugin.py").write_text(module, encoding="utf-8")
+    return folder
+
+
+def install_kind_plugin(root: Path, name: str, kinds: list, depends: list | None = None) -> Path:
+    """写一个类型插件（纯数据 + 空入口），用来测试自定义插件类型。"""
+    folder = root / name
+    folder.mkdir(parents=True, exist_ok=True)
+    data = {
+        "id": name,
+        "name": name,
+        "version": "0.1.0",
+        "kind": KIND_KIND,
+        "entry": "plugin.py",
+        "depends": ["builtin.kind"] if depends is None else list(depends),
+        "kinds": kinds,
+    }
+    (folder / "plugin.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    (folder / "plugin.py").write_text(KIND_MODULE, encoding="utf-8")
     return folder
 
 
@@ -85,12 +133,13 @@ class ManifestCase(unittest.TestCase):
         info = parse_manifest(manifest())
         self.assertEqual(info.id, "demo.viewer")
         self.assertEqual(info.kind, KIND_VIEWER)
-        self.assertEqual(info.kind_label, "打开方式")
+        self.assertEqual(info.kinds, ())
+        self.assertEqual(info.kinds_text, "—")
         self.assertEqual(info.extensions, ("dmx",))
         self.assertEqual(info.source_label, "外部")
         self.assertEqual(info.state_label, "已启用")
         self.assertEqual(info.extensions_text, "dmx")
-        self.assertEqual(info.depends_text, "无")
+        self.assertEqual(info.depends_text, "builtin.kind.viewer")
         self.assertEqual(info.provides_text, "viewer")
         self.assertEqual(info.capabilities_text, "演示功能")
         self.assertEqual(info.manager_text, "0.1.0")
@@ -103,7 +152,7 @@ class ManifestCase(unittest.TestCase):
 
     def test_parse_manifest_accepts_page_plugin_without_extensions(self) -> None:
         info = parse_manifest({"id": "demo.page", "name": "演示页面", "kind": KIND_PAGE, "entry": "plugin.py"})
-        self.assertEqual(info.kind_label, "弹窗页面")
+        self.assertEqual(info.kind, KIND_PAGE)
         self.assertEqual(info.extensions, ())
         self.assertEqual(info.extensions_text, "—")
 
@@ -114,7 +163,6 @@ class ManifestCase(unittest.TestCase):
             manifest(id="有中文"),
             manifest(name=""),
             manifest(entry=""),
-            manifest(extensions=""),
             manifest(manager_version="99.0"),
             manifest(depends=["bad id!"]),
             manifest(depends=["demo.viewer"]),
@@ -128,6 +176,14 @@ class ManifestCase(unittest.TestCase):
         info = parse_manifest(manifest(entry=""), builtin=True)
         self.assertTrue(info.builtin)
         self.assertEqual(info.source_label, "内置")
+        self.assertEqual(info.entry, "")
+
+    def test_parse_manifest_allows_manifest_marked_builtin_without_entry(self) -> None:
+        info = parse_manifest(manifest(entry="", builtin=True))
+        self.assertTrue(info.builtin)
+        self.assertEqual(info.entry, "")
+        with self.assertRaisesRegex(PluginError, "缺少 entry"):
+            parse_manifest(manifest(entry=""))
 
     def test_parse_manifest_reports_manager_version(self) -> None:
         with self.assertRaisesRegex(PluginError, "需要管理器版本"):
@@ -144,7 +200,7 @@ class ManifestCase(unittest.TestCase):
             self.assertEqual(load_manifest(folder).id, "demo.viewer")
 
     def test_sort_by_dependency_orders_and_reports(self) -> None:
-        base = parse_manifest(manifest(id="demo.base"))
+        base = parse_manifest(manifest(id="demo.base", depends=[]))
         viewer = parse_manifest(manifest(id="demo.viewer", depends=["demo.base"]))
         missing = parse_manifest(manifest(id="demo.missing", depends=["demo.nope"]))
         left = parse_manifest(manifest(id="demo.a", depends=["demo.b"]))
@@ -157,25 +213,53 @@ class ManifestCase(unittest.TestCase):
 
 
 class PluginKindCase(unittest.TestCase):
-    """插件类型由清单累积登记：可以自定义、重复声明只合并、类型表随时增长。"""
+    """插件类型由类型插件声明：可以自定义、重复声明只合并、类型表随载入重建。"""
+
+    def setUp(self) -> None:
+        # 模拟载入内置类型插件：清表 → 引导类型 → 两个类型插件声明的 viewer / page
+        plugin_kinds.clear()
+        register_builtin_kinds()
+        plugin_kinds.register(
+            PluginKindSpec(
+                KIND_VIEWER,
+                "打开方式",
+                "按扩展名显示文件内容的查看器",
+                requires_extensions=True,
+                contributor="add_viewer",
+                order=10,
+            ).declared_by("builtin.kind.viewer")
+        )
+        plugin_kinds.register(
+            PluginKindSpec(KIND_PAGE, "弹窗页面", order=20).declared_by("builtin.kind.page")
+        )
 
     def tearDown(self) -> None:
-        plugin_kinds.unregister("theme")
-        plugin_kinds.unregister("panorama")
         viewer_registry.unregister_plugin("demo.viewer")
+        plugin_kinds.clear()
+        register_builtin_kinds()
 
-    def test_builtin_kinds_are_registered(self) -> None:
-        self.assertEqual(plugin_kinds.ids(), (KIND_VIEWER, KIND_PAGE))
+    def test_bootstrap_only_registers_the_kind_type(self) -> None:
+        plugin_kinds.clear()
+        register_builtin_kinds()
+        self.assertEqual(plugin_kinds.ids(), (KIND_KIND,))
+        spec = plugin_kinds.get(KIND_KIND)
+        assert spec is not None
+        self.assertEqual(spec.name, "插件类型")
+        self.assertEqual(spec.plugins, ())
+        self.assertEqual(plugin_kinds.label("未知类型"), "未知类型")
+
+    def test_declared_kinds_are_sorted_and_labelled(self) -> None:
+        self.assertEqual(plugin_kinds.ids(), (KIND_KIND, KIND_VIEWER, KIND_PAGE))
         viewer = plugin_kinds.get(KIND_VIEWER)
         page = plugin_kinds.get(KIND_PAGE)
         assert viewer is not None and page is not None
-        self.assertEqual(viewer.name, "打开方式")
         self.assertEqual(viewer.text, "打开方式（viewer）")
         self.assertEqual(viewer.contributor, "add_viewer")
         self.assertTrue(viewer.requires_extensions)
+        self.assertEqual(viewer.plugins, ("builtin.kind.viewer",))
         self.assertEqual(page.contributor, "")
         self.assertFalse(page.requires_extensions)
-        self.assertEqual(plugin_kinds.label("未知类型"), "未知类型")
+        self.assertIn((KIND_VIEWER, "打开方式"), plugin_kinds.labels())
 
     def test_kind_names_are_validated(self) -> None:
         self.assertTrue(valid_kind_name("theme"))
@@ -184,43 +268,99 @@ class PluginKindCase(unittest.TestCase):
         self.assertFalse(valid_kind_name("2theme"))
         self.assertFalse(valid_kind_name(""))
 
-    def test_manifest_registers_its_own_kind(self) -> None:
-        info = parse_manifest(manifest(kind="theme", kind_label="主题", kind_description="配色方案"))
-        self.assertEqual(info.kind, "theme")
-        self.assertEqual(info.kind_label, "主题")
-        self.assertIn(("theme", "主题"), plugin_kinds.labels())
-        spec = plugin_kinds.get("theme")
-        assert spec is not None
-        self.assertEqual(spec.description, "配色方案")
-        self.assertEqual(spec.plugins, ("demo.viewer",))
-        self.assertEqual(spec.order, 100)
-        self.assertFalse(spec.requires_extensions)
-        # 类型没写显示名时用 id 兜底
-        self.assertTrue(plugin_kinds.unregister("theme"))
-        named = plugin_kinds.register(PluginKindSpec("theme", plugins=("demo.viewer",)))
-        self.assertEqual(named.name, "theme")
-        self.assertEqual(plugin_kinds.label("theme"), "theme")
-
-    def test_two_plugins_can_declare_the_same_kind(self) -> None:
-        first = parse_manifest(manifest(kind="theme", kind_label="主题"))
-        second = parse_manifest(manifest(id="demo.other", kind="theme"))
-        self.assertEqual(first.kind_label, "主题")
-        self.assertEqual(second.kind_label, "主题")  # 后声明的插件不必再写显示名
-        spec = plugin_kinds.get("theme")
-        assert spec is not None
-        self.assertEqual(spec.name, "主题")
-        self.assertEqual(set(spec.plugins), {"demo.viewer", "demo.other"})
-        merged = plugin_kinds.register(PluginKindSpec("theme", "另一个名字"))
+    def test_declared_by_plugin_and_merge(self) -> None:
+        spec = PluginKindSpec("theme", "主题", "配色方案").declared_by("demo.kind")
+        self.assertEqual(spec.plugins, ("demo.kind",))
+        self.assertEqual(spec.declared_by("demo.kind").plugins, ("demo.kind",))  # 同一插件不重复记
+        self.assertEqual(spec.declared_by("").plugins, ("demo.kind",))
+        self.assertEqual(plugin_kinds.register(spec).name, "主题")
+        merged = plugin_kinds.register(PluginKindSpec("theme", "另一个名字").declared_by("demo.other"))
         self.assertEqual(merged.name, "主题")  # 先声明的显示名优先，重复登记不报错
-        with self.assertRaises(ValueError):
-            plugin_kinds.register(PluginKindSpec("Theme", "非法"))
-        self.assertTrue(plugin_kinds.unregister("theme"))
-        self.assertFalse(plugin_kinds.unregister("theme"))
+        self.assertEqual(merged.description, "配色方案")
+        self.assertEqual(set(merged.plugins), {"demo.kind", "demo.other"})
+        self.assertEqual(plugin_kinds.label("theme"), "主题")
 
-    def test_kind_requires_extensions_can_be_declared_by_manifest(self) -> None:
+    def test_remove_by_plugin(self) -> None:
+        plugin_kinds.register(PluginKindSpec("theme", "主题").declared_by("demo.kind"))
+        plugin_kinds.register(PluginKindSpec("theme").declared_by("demo.other"))
+        self.assertEqual(plugin_kinds.remove_by_plugin("demo.kind"), ())
+        spec = plugin_kinds.get("theme")
+        assert spec is not None
+        self.assertEqual(spec.plugins, ("demo.other",))
+        self.assertEqual(plugin_kinds.remove_by_plugin("demo.other"), ("theme",))
+        self.assertIsNone(plugin_kinds.get("theme"))
+        self.assertEqual(plugin_kinds.remove_by_plugin("demo.other"), ())
+
+    def test_parse_kinds_declares_types(self) -> None:
+        specs = parse_kinds(
+            [
+                {
+                    "id": "theme",
+                    "label": "主题",
+                    "description": "配色方案",
+                    "contributor": "add_theme",
+                    "order": 30,
+                }
+            ],
+            "demo.kind",
+        )
+        self.assertEqual(len(specs), 1)
+        spec = specs[0]
+        self.assertEqual(spec.id, "theme")
+        self.assertEqual(spec.name, "主题")
+        self.assertEqual(spec.contributor, "add_theme")
+        self.assertEqual(spec.order, 30)
+        self.assertEqual(spec.plugins, ("demo.kind",))
+        self.assertFalse(spec.requires_extensions)
+        self.assertEqual(parse_kinds(None, "demo.kind"), ())
+        self.assertEqual(parse_kinds([], "demo.kind"), ())
+
+    def test_parse_kinds_rejects_bad_input(self) -> None:
+        for bad, message in (
+            ("theme", "必须是一个列表"),
+            (["theme"], "每一项都必须是一个对象"),
+            ([{}], "缺少 id"),
+            ([{"id": "Theme"}], "插件类型不合法"),
+            ([{"id": "theme"}, {"id": "theme"}], "重复声明"),
+            ([{"id": "theme", "contributor": "add theme"}], "登记方法不合法"),
+            ([{"id": "theme", "order": "30"}], "排序值不是整数"),
+            ([{"id": "theme", "order": True}], "排序值不是整数"),
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(PluginError, message):
+                    parse_kinds(bad, "demo.kind")
+
+    def test_manifest_rejects_legacy_kind_fields(self) -> None:
+        for field_name in ("kind_label", "kind_description", "kind_requires_extensions"):
+            with self.subTest(field=field_name):
+                with self.assertRaisesRegex(PluginError, f"不再用 {field_name} 声明类型信息"):
+                    parse_manifest(manifest(**{field_name: "主题"}))
+
+    def test_manifest_parses_kinds(self) -> None:
+        info = parse_manifest(
+            manifest(kind=KIND_KIND, depends=["builtin.kind"], kinds=[{"id": "theme", "label": "主题"}])
+        )
+        self.assertEqual(info.kind, KIND_KIND)
+        self.assertEqual(info.kind_label, "插件类型")
+        self.assertEqual(info.kinds_text, "主题（theme）")
+        self.assertEqual(info.kinds[0].id, "theme")
+        self.assertEqual(info.kinds[0].plugins, ("demo.viewer",))
+        self.assertEqual(parse_manifest(manifest()).kinds_text, "—")
+
+    def test_unknown_kind_is_rejected_at_load(self) -> None:
+        plugin_kinds.clear()
+        register_builtin_kinds()
+        info = parse_manifest(manifest())
+        self.assertEqual(info.kind, KIND_VIEWER)
+        with self.assertRaisesRegex(PluginError, "插件类型未注册：viewer"):
+            validate_kind(info)
+
+    def test_validate_kind_checks_extensions(self) -> None:
+        plugin_kinds.register(PluginKindSpec("panorama", "全景", requires_extensions=True))
         with self.assertRaisesRegex(PluginError, "至少要声明一个扩展名"):
-            parse_manifest(manifest(kind="panorama", kind_requires_extensions=True, extensions=""))
-        self.assertIsNone(plugin_kinds.get("panorama"))  # 校验失败的类型不会登记
+            validate_kind(parse_manifest(manifest(kind="panorama", extensions="")))
+        spec = validate_kind(parse_manifest(manifest(kind="panorama", extensions="pan")))
+        self.assertEqual(spec.name, "全景")
 
     def test_invalid_kind_is_rejected(self) -> None:
         with self.assertRaisesRegex(PluginError, "插件类型不合法"):
@@ -253,14 +393,38 @@ class BuiltinProtocolCase(unittest.TestCase):
 
     def test_builtin_plugins_are_on_disk(self) -> None:
         found = {folder.name for folder in REPO_PLUGIN_DIR.iterdir() if (folder / "plugin.json").exists()}
-        self.assertSetEqual(found, set(BUILTIN_EXTENSIONS) | {"builtin.dialog"})
+        self.assertSetEqual(found, BUILTIN_PLUGIN_IDS)
+
+    def test_builtin_kind_plugins_are_on_disk(self) -> None:
+        kind = load_manifest(REPO_PLUGIN_DIR / "builtin.kind")
+        self.assertEqual(kind.id, "builtin.kind")
+        self.assertEqual(kind.kind, KIND_KIND)
+        self.assertEqual(kind.provides, (KIND_EXTENSION,))
+        self.assertTrue(kind.entry)
+        viewer = load_manifest(REPO_PLUGIN_DIR / "builtin.kind.viewer")
+        self.assertEqual(viewer.kind, KIND_KIND)
+        self.assertEqual(viewer.depends, ("builtin.kind",))
+        self.assertEqual(viewer.entry, "")  # 纯数据插件不需要入口
+        self.assertEqual(viewer.kinds[0].id, KIND_VIEWER)
+        self.assertEqual(viewer.kinds[0].label, "打开方式")
+        self.assertEqual(viewer.kinds[0].contributor, "add_viewer")
+        self.assertTrue(viewer.kinds[0].requires_extensions)
+        self.assertEqual(viewer.kinds[0].plugins, ("builtin.kind.viewer",))
+        page = load_manifest(REPO_PLUGIN_DIR / "builtin.kind.page")
+        self.assertEqual(page.kind, KIND_KIND)
+        self.assertEqual(page.depends, ("builtin.kind",))
+        self.assertEqual(page.entry, "")
+        self.assertEqual(page.kinds[0].id, KIND_PAGE)
+        self.assertEqual(page.kinds[0].label, "弹窗页面")
 
     def test_builtin_manifest_extensions_match_viewer_data(self) -> None:
         for plugin_id, expected in BUILTIN_EXTENSIONS.items():
             info = load_manifest(REPO_PLUGIN_DIR / plugin_id)
             with self.subTest(plugin=plugin_id):
+                self.assertEqual(info.kind, KIND_VIEWER)
+                self.assertEqual(info.kinds, ())
                 self.assertEqual(info.extensions, tuple(expected))
-                self.assertEqual(info.depends, ("builtin.dialog",))
+                self.assertEqual(info.depends, VIEWER_DEPENDS)
                 self.assertEqual(info.provides, ("viewer",))
                 self.assertTrue(info.builtin)
                 self.assertTrue(info.entry)
@@ -282,10 +446,20 @@ class BuiltinProtocolCase(unittest.TestCase):
         infos = {info.id: info for info in service.discover()}
         self.assertEqual(len(service.all(kind=KIND_VIEWER)), 7)
         self.assertEqual(len(service.all(kind=KIND_PAGE)), 1)
+        self.assertEqual(len(service.all(kind=KIND_KIND)), 3)
         self.assertEqual(load_manifest(REPO_PLUGIN_DIR / "builtin.dialog").provides, ("dialog",))
-        self.assertEqual(infos["builtin.dialog"].depends, ())
+        self.assertEqual(infos["builtin.dialog"].depends, ("builtin.kind.page",))
+        self.assertEqual(infos["builtin.kind"].depends, ())
+        self.assertEqual(infos["builtin.kind.viewer"].entry, "")
+        self.assertTrue(infos["builtin.kind.viewer"].enabled)
         self.assertEqual(service.load_viewers(), 7)
+        self.assertEqual(service.errors(), {})
         self.assertIn("dialog", extension_registry.names())
+        self.assertIn(KIND_EXTENSION, extension_registry.names())
+        spec = plugin_kinds.get(KIND_VIEWER)
+        assert spec is not None
+        self.assertEqual(spec.plugins, ("builtin.kind.viewer",))
+        self.assertEqual(spec.label, "打开方式")
 
 
 class PluginServiceCase(unittest.TestCase):
@@ -304,10 +478,53 @@ class PluginServiceCase(unittest.TestCase):
 
     def test_builtin_plugins_cover_viewers_and_page(self) -> None:
         builtin = self.service.builtin()
-        self.assertEqual(len(builtin), 8)
+        self.assertEqual(len(builtin), len(BUILTIN_PLUGIN_IDS))
         self.assertTrue(all(info.builtin for info in builtin))
         self.assertEqual(len(self.service.all(kind=KIND_VIEWER)), 7)
-        self.assertEqual(len(self.service.discover()), 8)
+        self.assertEqual(len(self.service.all(kind=KIND_KIND)), 3)
+        self.assertEqual(len(self.service.discover()), len(BUILTIN_PLUGIN_IDS))
+
+    def test_type_plugin_declares_a_new_kind(self) -> None:
+        install_kind_plugin(self.plugin_dir, "demo.kind", [{"id": "theme", "label": "主题", "order": 30}])
+        install_plugin(
+            self.plugin_dir, name="demo.theme", module=KIND_MODULE, kind="theme", depends=["demo.kind"]
+        )
+        self.assertEqual(self.service.load_viewers(), 7)
+        self.assertEqual(self.service.errors(), {})
+        spec = plugin_kinds.get("theme")
+        assert spec is not None
+        self.assertEqual(spec.name, "主题")
+        self.assertEqual(spec.order, 30)
+        self.assertEqual(spec.plugins, ("demo.kind",))
+        self.assertEqual(len(self.service.all(kind="theme")), 1)
+        self.assertTrue(self.service.get("demo.theme").enabled)
+
+    def test_two_type_plugins_can_declare_the_same_kind(self) -> None:
+        install_kind_plugin(self.plugin_dir, "demo.kind.a", [{"id": "theme", "label": "主题"}])
+        install_kind_plugin(self.plugin_dir, "demo.kind.b", [{"id": "theme"}])
+        self.assertEqual(self.service.load_viewers(), 7)
+        self.assertEqual(self.service.errors(), {})
+        spec = plugin_kinds.get("theme")
+        assert spec is not None
+        self.assertEqual(spec.name, "主题")  # 先声明的显示名优先，重复声明不报错
+        self.assertEqual(set(spec.plugins), {"demo.kind.a", "demo.kind.b"})
+
+    def test_unregistered_kind_is_reported_as_error(self) -> None:
+        install_plugin(self.plugin_dir, name="demo.theme", module=KIND_MODULE, kind="theme", depends=["builtin.kind"])
+        self.assertEqual(self.service.load_viewers(), 7)
+        error = self.service.errors()["demo.theme"]
+        self.assertIn("插件类型未注册：theme", error)
+
+    def test_kind_plugin_without_the_kind_interface_is_reported(self) -> None:
+        self.assertTrue(self.service.set_enabled("builtin.kind", False))
+        install_kind_plugin(self.plugin_dir, "demo.kind", [{"id": "theme", "label": "主题"}], depends=[])
+        self.service.load_viewers()
+        self.assertIn("缺少插件类型接口", self.service.errors()["demo.kind"])
+
+    def test_kind_plugin_with_unknown_contributor_is_reported(self) -> None:
+        install_kind_plugin(self.plugin_dir, "demo.kind", [{"id": "theme", "contributor": "add_theme"}])
+        self.service.load_viewers()
+        self.assertIn("登记方法不存在：add_theme", self.service.errors()["demo.kind"])
 
     def test_filters_by_query_state_and_source(self) -> None:
         install_plugin(self.plugin_dir)
@@ -338,7 +555,7 @@ class PluginServiceCase(unittest.TestCase):
         self.assertTrue(self.service.set_enabled("builtin.dialog", False))
         self.assertEqual(self.service.load_viewers(), 0)
         self.assertEqual(len(self.service.all(state="error")), 7)
-        self.assertEqual(extension_registry.names(), ())
+        self.assertEqual(extension_registry.names(), (KIND_EXTENSION,))
 
     def test_broken_manifest_is_reported_as_error(self) -> None:
         folder = self.plugin_dir / "broken"

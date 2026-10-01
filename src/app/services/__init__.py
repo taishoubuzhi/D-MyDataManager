@@ -11,7 +11,7 @@ from .maintenance import reset_config, reset_runtime_data, reset_to_defaults
 from .open_with_service import OpenDecision, OpenRule, OpenWithService
 from .plugin_service import PluginApi, PluginInfo, PluginService, plugin_service
 from .stats_service import overview, recent, storage_usage, type_breakdown
-from .taxonomy_service import CategoryNode, TaxonomyService
+from .taxonomy_service import CategoryNode, TaxonomyService, is_uncategorized
 from .user_service import UserInfo, UserService
 
 __all__ = [
@@ -35,6 +35,7 @@ __all__ = [
     "UserInfo",
     "UserService",
     "build_features",
+    "is_uncategorized",
     "make_cover",
     "overview",
     "plugin_service",

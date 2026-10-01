@@ -1,13 +1,43 @@
-"""分页控件：翻页、页码跳转与每页条数。"""
+"""分页控件：翻页、页码跳转、每页条数与选择摘要。
+
+翻页区用流式布局排列，宽度不足时自动换行、绝不被裁切；`summary_label` 显示总数/选中数，
+`hint_label` 在跨页多选时给出提示。分页文案与每页条数选项抽成模块级纯函数，便于单测。
+"""
 
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QHBoxLayout, QWidget
+from collections.abc import Iterable
+
 from PyQt6.QtCore import pyqtSignal
-from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, PushButton, SpinBox
+from PyQt6.QtWidgets import QWidget
+from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, FlowLayout, PushButton, SpinBox
 
 PAGE_SIZES = (50, 100, 200, 500)
 DEFAULT_PAGE_SIZE = 100
+
+
+def pages_of(total: int, page_size: int) -> int:
+    """按每页条数计算总页数（至少 1 页）。"""
+    size = max(1, int(page_size))
+    return max(1, -(-max(0, int(total)) // size))
+
+
+def page_size_options(sizes: Iterable[int] = PAGE_SIZES) -> list[tuple[int, str]]:
+    """每页条数选项：(条数, 文案)，默认给出 50/100/200/500 四档。"""
+    return [(int(size), f"每页 {int(size)} 条") for size in sizes]
+
+
+def selection_summary(total: int, selected: int) -> str:
+    """总数与选中数文案，例如「共 128 项 · 已选 3 项」。"""
+    return f"共 {max(0, int(total))} 项 · 已选 {max(0, int(selected))} 项"
+
+
+def selection_hint(selected: int, visible: int) -> str:
+    """跨页多选提示：选中数超过当前页可见数时才返回文案，否则返回空串。"""
+    count = max(0, int(selected))
+    if count > max(0, int(visible)):
+        return f"已跨页选择 {count} 项"
+    return ""
 
 
 class Pager(QWidget):
@@ -21,34 +51,59 @@ class Pager(QWidget):
         self._total = 0
         self._page = 0
         self._page_size = page_size
+        self._selected = 0
+        self._visible = 0
         self._updating = False
 
         self.first_button = PushButton(FluentIcon.LEFT_ARROW, "首页", self)
         self.prev_button = PushButton(FluentIcon.LEFT_ARROW, "上一页", self)
         self.next_button = PushButton(FluentIcon.RIGHT_ARROW, "下一页", self)
         self.last_button = PushButton(FluentIcon.RIGHT_ARROW, "末页", self)
+        for button, tip in (
+            (self.first_button, "跳到第一页"),
+            (self.prev_button, "上一页"),
+            (self.next_button, "下一页"),
+            (self.last_button, "跳到最后一页"),
+        ):
+            button.setToolTip(tip)
+
         self.page_box = SpinBox(self)
         self.page_box.setRange(1, 1)
         self.page_box.setFixedWidth(90)
+        self.page_box.setToolTip("输入页码快速跳转")
         self.page_label = CaptionLabel("共 1 页", self)
+
         self.size_box = ComboBox(self)
-        for size in PAGE_SIZES:
-            self.size_box.addItem(f"每页 {size} 条", userData=size)
+        self.size_box.setToolTip("每页显示条数")
+        for size, label in page_size_options():
+            self.size_box.addItem(label, userData=size)
         index = self.size_box.findData(page_size)
         self.size_box.setCurrentIndex(index if index >= 0 else PAGE_SIZES.index(DEFAULT_PAGE_SIZE))
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.first_button)
-        layout.addWidget(self.prev_button)
-        layout.addWidget(CaptionLabel("第", self))
-        layout.addWidget(self.page_box)
-        layout.addWidget(self.page_label)
-        layout.addWidget(self.next_button)
-        layout.addWidget(self.last_button)
-        layout.addStretch(1)
-        layout.addWidget(self.size_box)
+        self.summary_label = CaptionLabel("", self)
+        self.hint_label = CaptionLabel("", self)
+        self.hint_label.setToolTip("选择会跨页保留")
+        self.hint_label.hide()
+
+        self.page_prefix = CaptionLabel("第", self)
+
+        self.flow = FlowLayout(self, needAni=False, isTight=True)
+        self.flow.setContentsMargins(0, 0, 0, 0)
+        self.flow.setHorizontalSpacing(6)
+        self.flow.setVerticalSpacing(4)
+        for widget in (
+            self.first_button,
+            self.prev_button,
+            self.page_prefix,
+            self.page_box,
+            self.page_label,
+            self.next_button,
+            self.last_button,
+            self.size_box,
+            self.summary_label,
+            self.hint_label,
+        ):
+            self.flow.addWidget(widget)
 
         self.first_button.clicked.connect(lambda: self._go(0))
         self.prev_button.clicked.connect(lambda: self._go(self._page - 1))
@@ -61,7 +116,7 @@ class Pager(QWidget):
     # ------------------------------------------------------------------ 状态
     @property
     def pages(self) -> int:
-        return max(1, -(-self._total // self._page_size))
+        return pages_of(self._total, self._page_size)
 
     @property
     def page(self) -> int:
@@ -87,6 +142,34 @@ class Pager(QWidget):
         self.page_label.setText(f"共 {self.pages} 页")
         self._updating = False
         self._update_buttons()
+        self._sync_summary()
+
+    def set_selection(self, selected: int, visible: int | None = None) -> None:
+        """同步选中数（visible 为本页可见条数，用于判断是否跨页多选）。"""
+        self._selected = max(0, int(selected))
+        if visible is not None:
+            self._visible = max(0, int(visible))
+        self._sync_summary()
+
+    # ------------------------------------------------------------------ 布局
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_height()
+
+    def _fit_height(self) -> None:
+        """按当前宽度计算流式布局所需高度，换行后自动增高。"""
+        needed = self.flow.heightForWidth(max(1, self.width()))
+        if needed <= 0:
+            needed = self.flow.sizeHint().height()
+        if needed > 0 and self.height() != needed:
+            self.setFixedHeight(needed)
+
+    def _sync_summary(self) -> None:
+        self.summary_label.setText(selection_summary(self._total, self._selected))
+        hint = selection_hint(self._selected, self._visible)
+        self.hint_label.setText(hint)
+        self.hint_label.setVisible(bool(hint))
+        self._fit_height()
 
     # ------------------------------------------------------------------ 交互
     def _go(self, page: int) -> None:
@@ -121,4 +204,12 @@ class Pager(QWidget):
         self.last_button.setEnabled(not last)
 
 
-__all__ = ["DEFAULT_PAGE_SIZE", "PAGE_SIZES", "Pager"]
+__all__ = [
+    "DEFAULT_PAGE_SIZE",
+    "PAGE_SIZES",
+    "Pager",
+    "page_size_options",
+    "pages_of",
+    "selection_hint",
+    "selection_summary",
+]

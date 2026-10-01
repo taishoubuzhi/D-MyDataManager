@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from tests.harness import TempDir  # noqa: E402
 from app.core.app_ui import APP_UI_EXTENSION, AppUiApi, PageSpec  # noqa: E402
 from app.core.extensions import extension_registry  # noqa: E402
+from app.core.plugin_kinds import plugin_kinds, register_builtin_kinds  # noqa: E402
 from app.core.viewers import viewer_registry  # noqa: E402
 from app.services.plugin_service import PluginService  # noqa: E402
 
@@ -26,7 +28,7 @@ PAGE_PLUGIN_MANIFEST = {
     "author": "tests",
     "manager_version": "0.1.0",
     "entry": "plugin.py",
-    "depends": [],
+    "depends": ["builtin.kind.page"],
     "provides": ["demo"],
 }
 
@@ -111,6 +113,9 @@ class BootstrapCase(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.plugin_dir = self.root / "plugins"
         self.plugin_dir.mkdir(parents=True, exist_ok=True)
+        # 每次载入插件都会重建类型表，所以 page 类型必须来自插件目录里的内置类型插件
+        for plugin_id in ("builtin.kind", "builtin.kind.page"):
+            shutil.copytree(REPO_PLUGIN_DIR / plugin_id, self.plugin_dir / plugin_id)
         self.service = PluginService(plugin_dir=self.plugin_dir, state_file=self.root / "plugins.json")
         self.app_ui = AppUiApi()
         self.service.bootstrap(APP_UI_EXTENSION, self.app_ui)
@@ -118,6 +123,8 @@ class BootstrapCase(unittest.TestCase):
     def tearDown(self) -> None:
         viewer_registry.clear()
         extension_registry.clear()
+        plugin_kinds.clear()
+        register_builtin_kinds()
         self._tmp.cleanup()
 
     def _install_page_plugin(self) -> None:

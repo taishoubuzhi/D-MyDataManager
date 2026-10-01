@@ -1,0 +1,26 @@
+{
+  "id": "builtin.kind.viewer",
+  "name": "打开方式插件类型",
+  "version": "1.0.0",
+  "kind": "kind",
+  "description": "声明「打开方式」（viewer）插件类型：按扩展名显示文件内容的查看器。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "depends": [
+    "builtin.kind"
+  ],
+  "kinds": [
+    {
+      "id": "viewer",
+      "label": "打开方式",
+      "description": "按扩展名显示文件内容的查看器",
+      "requires_extensions": true,
+      "contributor": "add_viewer",
+      "order": 10
+    }
+  ],
+  "capabilities": [
+    "声明打开方式插件类型"
+  ]
+}

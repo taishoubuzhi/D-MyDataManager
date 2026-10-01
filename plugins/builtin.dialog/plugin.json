@@ -8,7 +8,9 @@
   "manager_version": "0.1.0",
   "builtin": true,
   "entry": "plugin.py",
-  "depends": [],
+  "depends": [
+    "builtin.kind.page"
+  ],
   "provides": [
     "dialog"
   ],

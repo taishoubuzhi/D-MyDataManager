@@ -9,6 +9,7 @@
   "builtin": true,
   "entry": "plugin.py",
   "depends": [
+    "builtin.kind.viewer",
     "builtin.dialog"
   ],
   "provides": [

@@ -1,15 +1,14 @@
-"""插件类型表：类型不是枚举，而是由插件清单在载入时累积登记的一张表。
+"""插件类型表：类型不是枚举，而是由「插件类型插件」在载入时声明出来的一张表。
 
-插件清单里写 `"kind": "theme"` 即可自定义类型，可选字段 `kind_label`（显示名）、
-`kind_description`（说明）、`kind_requires_extensions`（是否必须声明扩展名）；
-`parse_manifest()` 校验通过后就把该类型登记进模块级 `plugin_kinds`。
+程序本体只登记一个引导类型 `kind`（插件类型本身），其余类型都由类型插件声明：
+类型插件的清单里写 `kinds: [{"id": "theme", "label": "主题", ...}, ...]`，
+载入时通过 `builtin.kind` 插件提供的 `plugin.kind` 扩展接口登记进模块级 `plugin_kinds`，
+其他插件只要 `depends: ["builtin.kind.theme"]` 就能把 `"kind": "theme"` 用起来。
 两个插件声明同一个类型不会报错，只会合并信息：已有的显示名 / 说明 / 注册方法优先，
 扩展名要求取并集，声明过该类型的插件 id 累积在 `plugins` 里。
-内置的 `viewer`（打开方式）与 `page`（弹窗页面）只是最先登记的两个类型。
 
 `contributor` 是 `PluginApi` 上负责登记该类条目的方法名（如 `add_viewer`），
-只有程序本体才能决定（清单不能设置）；没有 contributor 的类型，插件用
-`api.add(kind, ...)` 记条目、用 `api.provide()` 暴露扩展接口，程序本体不需要先认识它。
+只有程序本体才能决定（清单不能设置）。
 """
 
 from __future__ import annotations
@@ -17,8 +16,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
+KIND_KIND = "kind"
 KIND_VIEWER = "viewer"
 KIND_PAGE = "page"
+
+#: 「插件类型插件」的插件 id 与它提供的扩展接口名。
+KIND_PLUGIN_ID = "builtin.kind"
+KIND_EXTENSION = "plugin.kind"
 
 KIND_PATTERN = r"^[a-z][a-z0-9_.\-]{1,63}$"
 
@@ -50,6 +54,12 @@ class PluginKindSpec:
     @property
     def text(self) -> str:
         return f"{self.name}（{self.id}）"
+
+    def declared_by(self, plugin_id: str) -> PluginKindSpec:
+        """记下这是哪个插件声明的类型（重复声明只累积插件 id）。"""
+        if not plugin_id or plugin_id in self.plugins:
+            return self
+        return replace(self, plugins=self.plugins + (plugin_id,))
 
 
 def _merge(current: PluginKindSpec, incoming: PluginKindSpec) -> PluginKindSpec:
@@ -86,6 +96,23 @@ class PluginKindRegistry:
     def unregister(self, kind: str) -> bool:
         return self._specs.pop(kind, None) is not None
 
+    def remove_by_plugin(self, plugin_id: str) -> tuple[str, ...]:
+        """撤掉某个插件声明的类型，返回被完全移除的类型 id。
+
+        还有别的插件声明同一类型时只把它从 `plugins` 里去掉。
+        """
+        dropped: list[str] = []
+        for kind, spec in list(self._specs.items()):
+            if plugin_id not in spec.plugins:
+                continue
+            rest = tuple(item for item in spec.plugins if item != plugin_id)
+            if rest:
+                self._specs[kind] = replace(spec, plugins=rest)
+            else:
+                del self._specs[kind]
+                dropped.append(kind)
+        return tuple(dropped)
+
     def get(self, kind: str) -> PluginKindSpec | None:
         return self._specs.get(kind)
 
@@ -114,27 +141,31 @@ class PluginKindRegistry:
 
 plugin_kinds = PluginKindRegistry()
 
-#: 内置类型：viewer 登记查看器控件，page 只提供扩展接口（内置弹窗页面插件提供 dialog）
-plugin_kinds.register(
-    PluginKindSpec(
-        KIND_VIEWER,
-        "打开方式",
-        "按扩展名显示文件内容的查看器",
-        requires_extensions=True,
-        contributor="add_viewer",
-        order=10,
+
+def register_builtin_kinds() -> None:
+    """登记程序本体自带的引导类型（只有「插件类型」本身，其余由类型插件声明）。"""
+    plugin_kinds.register(
+        PluginKindSpec(
+            KIND_KIND,
+            "插件类型",
+            "由类型插件声明其他插件类型（依赖 plugin.kind 扩展接口）",
+            order=1,
+        )
     )
-)
-plugin_kinds.register(
-    PluginKindSpec(KIND_PAGE, "弹窗页面", "在程序本体之外弹出窗口，供其他插件依赖", order=20)
-)
+
+
+register_builtin_kinds()
 
 __all__ = [
+    "KIND_EXTENSION",
+    "KIND_KIND",
     "KIND_PAGE",
     "KIND_PATTERN",
+    "KIND_PLUGIN_ID",
     "KIND_VIEWER",
     "PluginKindRegistry",
     "PluginKindSpec",
     "plugin_kinds",
+    "register_builtin_kinds",
     "valid_kind_name",
 ]

@@ -153,7 +153,7 @@ class StatsCase(IsolatedCase):
         self.assertEqual(stats["duplicate_extra"], 1)
         self.assertIn("IMAGE", stats["by_type"])
         self.assertIn("VIDEO", stats["by_type"])
-        self.assertEqual(stats["categories"], 4)
+        self.assertEqual(stats["categories"], 5)
         self.assertEqual(stats["tags"], 3)
         self.assertGreater(stats["total_size"], 0)
 

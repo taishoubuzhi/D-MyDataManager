@@ -42,7 +42,11 @@ class TagRepository(Repository[Tag]):
         return list(self.session.scalars(self._scope(stmt, user_id)))
 
     def names(self, user_id: int | None = None) -> list[str]:
-        return [tag.name for tag in self.all(user_id)]
+        """可见标签名（按名称排序并去重：同名个人标签不得重复出现在选择列表里）。"""
+        seen: dict[str, None] = {}
+        for tag in self.all(user_id):
+            seen.setdefault(tag.name, None)
+        return list(seen)
 
     def global_names(self) -> list[str]:
         stmt = select(Tag).where(Tag.is_global.is_(True)).order_by(Tag.name)

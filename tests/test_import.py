@@ -135,14 +135,14 @@ class TextImportCase(IsolatedCase):
         self.assertEqual(item.checksum, sha256_of_bytes(content.encode("utf-8")))
         self.assertEqual(item.keywords, ["算法"])
         self.assertEqual(item.tag_names, ["重要"])
-        self.assertEqual(item.file_path, f"{self.current_user().name}/学习笔记.txt")
+        self.assertEqual(item.file_path, f"{self.current_user().name}/未分类/学习笔记.txt")
         self.assertEqual((Path(library.path) / item.file_path).read_text(encoding="utf-8"), content)
 
     def test_import_text_uses_timestamp_name_when_blank(self):
         item = self.importer().import_text("", "内容")
         self.session.commit()
         self.assertRegex(item.name, r"^\d{8}-\d{6}(\.txt)?$")
-        self.assertEqual(item.file_path, f"{self.current_user().name}/{item.name}.txt")
+        self.assertEqual(item.file_path, f"{self.current_user().name}/未分类/{item.name}.txt")
 
     def test_import_text_hidden_flag(self):
         item = self.importer().import_text("私密笔记", "只给自己看", is_hidden=True)

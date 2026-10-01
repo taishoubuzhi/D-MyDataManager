@@ -226,7 +226,7 @@ class ServiceOptionCase(unittest.TestCase):
     def test_author_kind_and_query_filters(self) -> None:
         self.assertEqual(self.service.authors(), ("D-MyDataManager",))
         self.assertEqual([info.id for info in self.service.all(kind="page")], ["builtin.dialog"])
-        self.assertEqual(len(self.service.all(author="D-MyDataManager")), 8)
+        self.assertEqual(len(self.service.all(author="D-MyDataManager")), 11)
         self.assertEqual(self.service.all(author="不存在"), [])
         self.assertEqual([info.id for info in self.service.all(query="图片")], ["builtin.image"])
 
@@ -237,8 +237,11 @@ class ServiceOptionCase(unittest.TestCase):
             [info.name for info in self.service.all(order="name", reverse=True)],
             sorted(names, reverse=True),
         )
-        # 类型排序把内置弹窗插件（page）排在最前
-        self.assertEqual(self.service.all(order="kind")[0].kind, "page")
+        # 类型排序按类型显示名（kind_label）分组：同类型插件排在一起
+        kinds = [info.kind_label for info in self.service.all(order="kind")]
+        self.assertEqual(kinds, sorted(kinds))
+        self.assertEqual(len(kinds), 11)
+        self.assertGreaterEqual(len(set(kinds)), 2)
         default_order = [info.id for info in self.service.all()]
         self.assertEqual([info.id for info in self.service.all(reverse=True)], list(reversed(default_order)))
         self.assertEqual(sorted(info.id for info in self.service.all(order="source")), sorted(default_order))
