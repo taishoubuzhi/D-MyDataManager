@@ -1,0 +1,36 @@
+{
+  "id": "builtin.audio",
+  "name": "内置音频播放器",
+  "version": "1.0.0",
+  "kind": "viewer",
+  "description": "播放 mp3 / wav / flac 等音频，支持播放暂停、进度与音量。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    "builtin.dialog"
+  ],
+  "provides": [
+    "viewer"
+  ],
+  "capabilities": [
+    "播放暂停",
+    "进度拖动",
+    "音量"
+  ],
+  "extensions": [
+    "mp3",
+    "wav",
+    "flac",
+    "aac",
+    "ogg",
+    "oga",
+    "m4a",
+    "wma",
+    "opus",
+    "aiff",
+    "ape",
+    "mid"
+  ]
+}

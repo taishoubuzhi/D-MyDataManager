@@ -1,8 +1,8 @@
-"""查看器窗口：程序内查看文件的统一外壳。
+"""查看器页面：标题栏 + 内容区，实际显示交给「弹窗页面」插件。
 
-界面层拿到 `OpenDecision` 后调用 `open_viewer()`：把查看器插件的控件放进带工具栏的
-窗口，并提供「用系统程序打开 / 定位文件」两个出口。查看器创建失败时窗口里显示原因，
-而不是抛异常打断调用方。
+界面层拿到 `OpenDecision` 后调用 `open_viewer()`：按 `viewer.host`（内置查看器都是
+"dialog"）向插件服务要弹窗扩展接口，再把 `ViewerWindow` 作为内容放进那个独立弹窗 ——
+弹窗没有父控件，因此不会与程序主界面重叠。
 """
 
 from __future__ import annotations
@@ -10,18 +10,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from loguru import logger
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PushButton, StrongBodyLabel
 
 from ...core import shell
+from ...core.extensions import extension_registry
 from ...core.viewers import Viewer
 
-_WINDOWS: "list[ViewerWindow]" = []
+#: 默认的弹窗扩展接口名（内置弹窗页面插件 builtin.dialog 提供）
+DEFAULT_HOST = "dialog"
 
 
 class ViewerWindow(QWidget):
-    """查看器外壳：标题栏 + 内容区。"""
+    """查看器内容页：工具栏 + 查看器控件；窗口装饰由弹窗插件负责。"""
 
     def __init__(self, viewer: Viewer, path: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -29,8 +30,6 @@ class ViewerWindow(QWidget):
         self.path = Path(path)
         self.content_widget: QWidget | None = None
         self.setObjectName("viewerWindow")
-        self.setWindowTitle(f"{self.path.name} · {viewer.name}")
-        self.resize(980, 700)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -85,27 +84,34 @@ class ViewerWindow(QWidget):
         shell.reveal(self.path)
 
 
-def _forget(window: ViewerWindow) -> None:
-    if window in _WINDOWS:
-        _WINDOWS.remove(window)
+def host_api(viewer: Viewer) -> object | None:
+    """取负责显示该查看器的扩展接口提供者（内置查看器即弹窗页面插件）。"""
+    if viewer is None:
+        return None
+    return extension_registry.provider(viewer.host or DEFAULT_HOST)
 
 
 def open_viewer(viewer: Viewer, path: Path, parent: QWidget | None = None) -> tuple[bool, str]:
-    """在程序内打开文件，返回 (是否成功, 说明)。"""
+    """在独立弹窗里打开文件，返回 (是否成功, 说明)。"""
     target = Path(path)
     if not target.exists():
         return False, f"文件不存在：{target.name}"
     if viewer is None or viewer.factory is None:
         return False, "没有可用的内置查看器"
+    host_name = viewer.host or DEFAULT_HOST
+    host = extension_registry.provider(host_name)
+    if host is None:
+        return False, f"缺少弹窗页面插件（{host_name}），请到「插件」页启用后重试"
     try:
-        window = ViewerWindow(viewer, target, parent)
+        host.open_page(  # type: ignore[attr-defined]
+            title=target.name,
+            content_factory=lambda container: ViewerWindow(viewer, target, container),
+            meta=viewer.name,
+        )
     except Exception as exc:
         logger.exception("打开查看器失败：{}", target)
         return False, f"打开查看器失败：{exc}"
-    window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-    window.destroyed.connect(lambda *_: _forget(window))
-    _WINDOWS.append(window)
-    window.show()
-    window.raise_()
-    window.activateWindow()
     return True, viewer.name
+
+
+__all__ = ["ViewerWindow", "host_api", "open_viewer"]

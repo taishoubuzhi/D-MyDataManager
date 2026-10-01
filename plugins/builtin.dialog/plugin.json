@@ -1,0 +1,21 @@
+{
+  "id": "builtin.dialog",
+  "name": "内置弹窗页面",
+  "version": "1.0.0",
+  "kind": "page",
+  "description": "在程序本体之外弹出独立窗口，其他插件（如七个查看器）依赖它来显示自己的页面。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [],
+  "provides": [
+    "dialog"
+  ],
+  "capabilities": [
+    "独立弹窗",
+    "标题与说明栏",
+    "关闭按钮与 Esc 退出",
+    "附加按钮插槽"
+  ]
+}

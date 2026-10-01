@@ -1,0 +1,25 @@
+{
+  "id": "builtin.markdown",
+  "name": "内置 Markdown 查看器",
+  "version": "1.0.0",
+  "kind": "viewer",
+  "description": "渲染 Markdown 文档，超长文档只显示前 512 KiB。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    "builtin.dialog"
+  ],
+  "provides": [
+    "viewer"
+  ],
+  "capabilities": [
+    "Markdown 渲染",
+    "大文件截断"
+  ],
+  "extensions": [
+    "md",
+    "markdown"
+  ]
+}

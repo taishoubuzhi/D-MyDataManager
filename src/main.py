@@ -18,11 +18,13 @@ from loguru import logger  # noqa: E402
 from qfluentwidgets import FluentTranslator, Theme, setTheme  # noqa: E402
 
 from app.core import paths  # noqa: E402
+from app.core.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
 from app.core.config import Language, config  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.services.layout_migration import migrate_layout  # noqa: E402
+from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
@@ -67,6 +69,10 @@ def main() -> int:
     _setup_translator(app)
     _apply_theme()
 
+    # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
+    plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
+    # 打开方式接口：插件可以用它查 / 改某个扩展名该由哪个查看器打开
+    plugin_service.bootstrap(OPEN_WITH_EXTENSION, open_with_api)
     logger.info("已载入 {} 个查看器插件", plugin_service.load_viewers())
 
     window = MainWindow()

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from loguru import logger
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
+    CaptionLabel,
     FluentIcon,
     FluentWindow,
     InfoBar,
@@ -14,7 +16,9 @@ from qfluentwidgets import (
 )
 
 from ..core import paths
+from ..core.app_ui import APP_UI_EXTENSION, PageSpec
 from ..core.config import config
+from ..core.extensions import extension_registry
 from ..core.signals import signalBus
 from ..db.database import new_session
 from .pages.archive_page import ArchivePage
@@ -33,6 +37,7 @@ from .widgets.library_watcher import LibraryWatcher
 class MainWindow(FluentWindow):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._plugin_pages: dict[str, QWidget] = {}
         self.home_page = HomePage(self)
         self.import_page = ImportPage(self)
         self.manage_page = ManagePage(self)
@@ -63,6 +68,55 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.open_with_page, FluentIcon.APPLICATION, "打开方式")
         self.addSubInterface(self.plugin_page, FluentIcon.TILES, "插件")
         self.addSubInterface(self.settings_page, FluentIcon.SETTING, "设置", NavigationItemPosition.BOTTOM)
+        self._sync_plugin_pages()
+
+    # ------------------------------------------------------ 插件界面
+    def _app_ui(self):
+        """程序本体提供的界面扩展接口（`app.ui`），未注册时返回 None。"""
+        return extension_registry.provider(APP_UI_EXTENSION)
+
+    def plugin_pages(self) -> tuple[str, ...]:
+        """当前已装配的插件页面 key。"""
+        return tuple(self._plugin_pages)
+
+    def _sync_plugin_pages(self) -> None:
+        """按 `app.ui` 里登记的页面增删导航项：插件启停或重载后保持同步。"""
+        api = self._app_ui()
+        specs: dict[str, PageSpec] = {}
+        if api is not None and hasattr(api, "pages"):
+            for spec in api.pages():
+                specs[spec.key] = spec
+        for key in [key for key in self._plugin_pages if key not in specs]:
+            widget = self._plugin_pages.pop(key)
+            self.removeInterface(widget, True)
+        for key, spec in specs.items():
+            if key in self._plugin_pages:
+                continue
+            widget = self._build_plugin_page(spec)
+            if widget is None:
+                continue
+            widget.setObjectName(spec.route)
+            self._plugin_pages[key] = widget
+            position = NavigationItemPosition.BOTTOM if spec.bottom else NavigationItemPosition.TOP
+            self.addSubInterface(widget, self._plugin_icon(spec.icon), spec.title, position)
+
+    def _build_plugin_page(self, spec: PageSpec) -> QWidget | None:
+        """调用插件提供的工厂创建页面控件；插件出错时退化成提示页。"""
+        try:
+            widget = spec.factory()
+        except Exception as exc:  # 插件页面出错不应该影响主界面
+            logger.exception("创建插件页面失败：{}", spec.key)
+            return CaptionLabel(f"插件页面无法显示：{exc}", self)
+        if not isinstance(widget, QWidget):
+            logger.warning("插件页面工厂没有返回控件：{}", spec.key)
+            return CaptionLabel(f"插件页面无法显示：{spec.title}", self)
+        widget.setParent(self)
+        return widget
+
+    def _plugin_icon(self, name: str):
+        """把清单里的图标名解析成 FluentIcon，未知名字回退成通用图标。"""
+        icon = getattr(FluentIcon, str(name or "").upper(), None)
+        return icon if icon is not None else FluentIcon.APPLICATION
 
     def _init_window(self) -> None:
         self._centered = False
@@ -94,6 +148,7 @@ class MainWindow(FluentWindow):
         signalBus.requestManage.connect(lambda: self.switchTo(self.manage_page))
         signalBus.requestArchive.connect(lambda: self.switchTo(self.archive_page))
         signalBus.requestPlugins.connect(self._on_request_plugins)
+        signalBus.pluginsChanged.connect(self._sync_plugin_pages)
         signalBus.focusItem.connect(self._on_focus_item)
         signalBus.micaEnableChanged.connect(self.setMicaEffectEnabled)
 
@@ -134,6 +189,7 @@ class MainWindow(FluentWindow):
             self.open_with_page,
             self.plugin_page,
             self.settings_page,
+            *self._plugin_pages.values(),
         ):
             session = getattr(page, "session", None)
             if session is not None:

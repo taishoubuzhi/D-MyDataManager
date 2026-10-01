@@ -1,0 +1,37 @@
+{
+  "id": "builtin.video",
+  "name": "内置视频播放器",
+  "version": "1.0.0",
+  "kind": "viewer",
+  "description": "播放 mp4 / mkv / avi 等视频，支持播放暂停、进度与音量。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    "builtin.dialog"
+  ],
+  "provides": [
+    "viewer"
+  ],
+  "capabilities": [
+    "播放暂停",
+    "进度拖动",
+    "音量",
+    "全屏"
+  ],
+  "extensions": [
+    "mp4",
+    "m4v",
+    "avi",
+    "mkv",
+    "mov",
+    "wmv",
+    "flv",
+    "webm",
+    "mpg",
+    "mpeg",
+    "rmvb",
+    "3gp"
+  ]
+}

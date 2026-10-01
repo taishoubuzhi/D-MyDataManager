@@ -51,6 +51,8 @@ class Viewer:
     kind: str = "text"
     plugin_id: str = ""
     factory: ViewerFactory | None = None
+    #: 负责显示该查看器的扩展接口名（例如 "dialog"）；空值表示由界面自带窗口显示
+    host: str = ""
     description: str = ""
     capabilities: tuple[str, ...] = field(default_factory=tuple)
 
@@ -93,6 +95,17 @@ class ViewerRegistry:
             if name in viewer.extensions:
                 return viewer
         return None
+
+    def all_for_suffix(self, suffix: str | Path) -> tuple[Viewer, ...]:
+        """按扩展名找出所有匹配的查看器（按 id 排序），供「打开方式」页选择具体插件。"""
+        name = normalize_suffix(suffix)
+        if not name:
+            return ()
+        return tuple(viewer for viewer in self.all() if name in viewer.extensions)
+
+    def by_plugin(self, plugin_id: str) -> tuple[Viewer, ...]:
+        """某个插件注册的全部查看器。"""
+        return tuple(viewer for viewer in self.all() if viewer.plugin_id == plugin_id)
 
     def extensions(self) -> list[str]:
         """所有已注册的扩展名（去重排序）。"""

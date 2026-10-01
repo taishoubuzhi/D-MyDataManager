@@ -1,0 +1,28 @@
+{
+  "id": "builtin.spreadsheet",
+  "name": "内置表格查看器",
+  "version": "1.0.0",
+  "kind": "viewer",
+  "description": "查看 xlsx / csv 表格，支持工作表切换与前若干行预览。",
+  "author": "D-MyDataManager",
+  "manager_version": "0.1.0",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    "builtin.dialog"
+  ],
+  "provides": [
+    "viewer"
+  ],
+  "capabilities": [
+    "工作表切换",
+    "前 300 行预览",
+    "分隔符识别"
+  ],
+  "extensions": [
+    "xlsx",
+    "xlsm",
+    "csv",
+    "tsv"
+  ]
+}

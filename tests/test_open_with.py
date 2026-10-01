@@ -15,6 +15,7 @@ from app.services.open_with_service import (  # noqa: E402
     MODE_BUILTIN,
     MODE_CUSTOM,
     MODE_INHERIT,
+    OpenWithApi,
     OpenWithService,
 )
 
@@ -110,6 +111,67 @@ class OpenWithCase(unittest.TestCase):
         self.service.remove_rule("md")
         self.service.remove_rule("md")
         self.assertEqual(self.service.rule_for("md").mode, "")
+
+
+class OpenWithApiCase(unittest.TestCase):
+    """插件侧的打开方式接口（app.open_with）。"""
+
+    def setUp(self) -> None:
+        self._tmp = TempDir("openwith_api")
+        self.root = Path(self._tmp.name)
+        self.registry = ViewerRegistry()
+        for index, name in ((1, "Markdown 查看器"), (2, "纯文本查看器")):
+            self.registry.register(
+                Viewer(
+                    id=f"demo.md.{index}",
+                    name=name,
+                    extensions=("md", "txt"),
+                    kind="markdown",
+                    plugin_id="demo.md",
+                    factory=_factory,
+                )
+            )
+        self.service = OpenWithService(config_file=self.root / "open_with.json", registry=self.registry)
+        self.api = OpenWithApi(service=self.service, registry=self.registry)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_viewers_and_suffixes(self) -> None:
+        self.assertEqual([viewer.id for viewer in self.api.viewers_for("md")], ["demo.md.1", "demo.md.2"])
+        self.assertEqual(self.api.viewer_ids_for("MD"), ("demo.md.1", "demo.md.2"))
+        self.assertEqual(self.api.suffixes_of("demo.md.1"), ("md", "txt"))
+        self.assertEqual(self.api.suffixes_of_plugin("demo.md"), ("md", "txt"))
+        self.assertEqual(self.api.suffix_of(self.root / "a.MD"), "md")
+
+    def test_set_viewer_pins_the_rule(self) -> None:
+        self.api.set_viewer("md", "demo.md.2")
+        self.assertEqual(self.api.current_viewer_id("md"), "demo.md.2")
+        decision = self.service.resolve(self.root / "笔记.md")
+        self.assertEqual(decision.mode, MODE_BUILTIN)
+        self.assertEqual(decision.viewer.id, "demo.md.2")
+        self.assertIn("指定插件 demo.md", decision.reason)
+
+    def test_use_viewer_for_all_and_reset(self) -> None:
+        self.assertEqual(self.api.use_viewer_for_all("demo.md.1"), ("md", "txt"))
+        self.assertEqual(self.api.current_viewer_id("md"), "demo.md.1")
+        self.assertEqual(self.api.current_viewer_id("txt"), "demo.md.1")
+        self.assertEqual(self.api.reset_viewer("demo.md.1"), ("md", "txt"))
+        self.assertEqual(self.api.current_viewer_id("md"), "")
+        self.assertEqual(self.api.current_viewer_id("txt"), "")
+
+    def test_set_viewer_rejects_unknown_viewer(self) -> None:
+        with self.assertRaises(ValueError):
+            self.api.set_viewer("md", "gone.viewer")
+
+    def test_pinned_viewer_missing_falls_back_to_another_plugin(self) -> None:
+        # 插件被删掉后规则里可能留着已经不存在的查看器 id，解析时要能回退
+        self.service.set_rule("md", MODE_BUILTIN, viewer_id="gone.viewer")
+        decision = self.service.resolve(self.root / "笔记.md")
+        self.assertEqual(decision.mode, MODE_BUILTIN)
+        # 回退到该扩展名的默认查看器（同扩展名以 id 靠后者为准）
+        self.assertEqual(decision.viewer.id, "demo.md.2")
+        self.assertIn("指定插件不可用", decision.reason)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from app.core import paths  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
@@ -478,6 +479,7 @@ def _check_open_with(window) -> list[str]:
     """打开方式页：列出格式、选中后能显示模式，并默认使用内置查看器。"""
     from pathlib import Path
 
+    from app.core.extensions import extension_registry
     from app.core.viewers import viewer_registry
     from app.services.open_with_service import open_with_service
     from app.services.plugin_service import plugin_service
@@ -487,6 +489,10 @@ def _check_open_with(window) -> list[str]:
     plugin_service.load_viewers()
     if "md" not in viewer_registry.extensions():
         problems.append("载入内置插件后注册表里没有 md 查看器")
+    if extension_registry.provider("dialog") is None:
+        problems.append("载入内置插件后没有注册 dialog 弹窗页面扩展")
+    if not all(viewer.host == "dialog" for viewer in viewer_registry.all()):
+        problems.append("内置查看器没有声明依赖 dialog 弹窗页面插件")
     decision = open_with_service.resolve(Path("示例.md"))
     if not decision.is_builtin:
         problems.append(f"md 文件默认应使用内置查看器，实际为 {decision.mode}")
@@ -503,6 +509,40 @@ def _check_open_with(window) -> list[str]:
     elif window.plugin_page.kind_box.currentData() != "viewer":
         problems.append("跳到插件页后没有按「打开方式」类型筛选")
     window.switchTo(window.open_with_page)
+
+    # 每个格式都能挑一个具体插件打开
+    for row in range(page.suffix_list.count()):
+        suffix = page.suffix_list.item(row).data(Qt.ItemDataRole.UserRole)
+        if suffix == "md":
+            page.suffix_list.setCurrentRow(row)
+            break
+    if page.viewer_box.count() < 2:
+        problems.append("格式有插件可用时，「使用插件」下拉框应列出「自动」与各插件")
+    elif page.viewer_box.itemData(0) != "":
+        problems.append("「使用插件」下拉框的第一项应是「自动」")
+    if "可用插件" not in page.detail_viewers.text():
+        problems.append("选中格式后没有列出可用插件")
+    from app.services.open_with_service import MODE_BUILTIN, MODE_CUSTOM, open_with_service
+
+    custom = page.mode_box.findData(MODE_CUSTOM)
+    if custom < 0:
+        problems.append("「打开方式」下拉框里没有「自定义程序」")
+    else:
+        page.mode_box.setCurrentIndex(custom)
+        if not page.program_edit.isEnabled():
+            problems.append("切到「自定义程序」后程序输入框应可用")
+        page.mode_box.setCurrentIndex(max(0, page.mode_box.findData(MODE_BUILTIN)))
+        if page.program_edit.isEnabled():
+            problems.append("「使用插件打开」时程序输入框应禁用")
+    viewer_index = page.viewer_box.findData("builtin.markdown.1")
+    if viewer_index >= 0:
+        page.viewer_box.setCurrentIndex(viewer_index)
+        page._on_save()
+        if open_with_service.rule_for("md").viewer_id != "builtin.markdown.1":
+            problems.append("保存后没有记下指定的查看器插件")
+        page._on_reset()
+        if open_with_service.rule_for("md").viewer_id:
+            problems.append("「恢复默认」后应清掉指定查看器")
     return problems
 
 
@@ -511,10 +551,16 @@ def _check_plugins(window) -> list[str]:
     page = window.plugin_page
     problems: list[str] = []
     page.apply_kind("viewer")
-    if page.plugin_list.count() < 7:
-        problems.append(f"查看器插件不足 7 个，实际 {page.plugin_list.count()} 个")
+    if page.plugin_list.count() != 7:
+        problems.append(f"查看器插件应为 7 个，实际 {page.plugin_list.count()} 个")
     if page.kind_box.currentData() != "viewer":
         problems.append(f"按查看器类型筛选后下拉框应为 viewer，实际为 {page.kind_box.currentData()!r}")
+    page.apply_kind("page")
+    if page.plugin_list.count() != 1:
+        problems.append(f"弹窗页面插件应为 1 个，实际 {page.plugin_list.count()} 个")
+    page.apply_kind("")
+    if page.plugin_list.count() != 8:
+        problems.append(f"内置插件应为 8 个，实际 {page.plugin_list.count()} 个")
     page.apply_kind("theme")
     if page.kind_box.currentData() not in ("", None):
         problems.append("未知类型筛选后下拉框应回到「全部类型」")
@@ -532,6 +578,158 @@ def _check_plugins(window) -> list[str]:
         problems.append("内置插件的「删除」按钮应禁用")
     if page.toggle_button.text() not in ("启用", "禁用"):
         problems.append(f"启用按钮文案异常：{page.toggle_button.text()}")
+    if not page.reveal_button.isEnabled():
+        problems.append("内置插件也应能打开插件目录")
+    protocol = page.detail_protocol.text()
+    for token in ("依赖插件", "扩展接口", "功能", "适用管理器版本", "入口文件"):
+        if token not in protocol:
+            problems.append(f"插件详情没有展示协议字段：{token}")
+
+    # 筛选与排序：类型 / 来源 / 创建者 / 状态 + 排序方向
+    page.apply_kind("")
+    if page.author_box.count() < 2:
+        problems.append("插件页没有列出创建者筛选项")
+    if page.order_box.count() < 5:
+        problems.append("插件页的排序方式太少")
+    if page.reverse_button.text() != "正序":
+        problems.append("排序方向按钮初始文案应为「正序」")
+    page.reverse_button.setChecked(True)
+    if page.reverse_button.text() != "逆序":
+        problems.append("勾选排序方向后按钮文案应变成「逆序」")
+    page.reverse_button.setChecked(False)
+    if "个插件" not in page.count_label.text():
+        problems.append("插件页没有显示插件总数")
+    # 默认（全部类型）下所有插件都要在列表里，弹窗插件排在最前
+    if page.plugin_list.count() != 8:
+        problems.append(f"「全部类型」下应列出 8 个插件，实际 {page.plugin_list.count()} 个")
+    first = page.plugin_list.item(0).text()
+    if "弹窗页面" not in first or "内置" not in first:
+        problems.append(f"插件列表项应显示类型与来源，实际为 {first!r}")
+    if page.plugin_list.item(0).data(Qt.ItemDataRole.UserRole) != "builtin.dialog":
+        problems.append("内置弹窗插件应排在插件列表最前面")
+
+    # 插件选项：详情里显示选项摘要与清单路径，并能打开选项对话框
+    page._select_plugin("builtin.image")
+    if "插件选项（3）" not in page.detail_options.text():
+        problems.append(f"图片插件详情没有列出 3 个选项：{page.detail_options.text()!r}")
+    if "plugin.json" not in page.detail_path.text():
+        problems.append("插件详情没有显示清单路径")
+    if page.options_button.text() != "插件选项":
+        problems.append("插件详情缺少「插件选项」按钮")
+    from app.ui.plugin_options_dialog import PluginOptionsDialog
+
+    from app.services.plugin_service import plugin_service
+
+    dialog = PluginOptionsDialog(plugin_service.get("builtin.image"), page.service, parent=window)
+    try:
+        if len(dialog._editors) != 3:
+            problems.append(f"插件选项对话框应生成 3 个编辑器，实际 {len(dialog._editors)} 个")
+        if not dialog._checks:
+            problems.append("插件选项对话框没有列出该插件支持的扩展名")
+    finally:
+        dialog.deleteLater()
+    return problems
+
+
+def _broken_page() -> QWidget:
+    raise RuntimeError("自检：页面工厂故意报错")
+
+
+def _check_plugin_pages(window) -> list[str]:
+    """插件界面扩展接口（app.ui）：插件登记的导航页面能被装配、切换、移除。"""
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.services.plugin_service import plugin_service
+
+    problems: list[str] = []
+    api = AppUiApi()
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
+    plugin_service.load_viewers()
+
+    api.add_page("selfcheck", "自检页面", lambda: QWidget(window), icon="HOME", plugin_id="selfcheck.plugin")
+    window._sync_plugin_pages()
+    if "selfcheck" not in window.plugin_pages():
+        problems.append("插件登记的页面没有装进导航")
+        return problems
+    widget = window._plugin_pages["selfcheck"]
+    if widget.objectName() != "plugin.selfcheck":
+        problems.append(f"插件页面路由应为 plugin.selfcheck，实际 {widget.objectName()!r}")
+    if window.stackedWidget.indexOf(widget) < 0:
+        problems.append("插件页面没有加入页面栈")
+    window.switchTo(widget)
+    if window.stackedWidget.currentWidget() is not widget:
+        problems.append("无法切换到插件页面")
+
+    api.add_page("broken", "坏页面", _broken_page, plugin_id="selfcheck.plugin")
+    window._sync_plugin_pages()
+    if "broken" not in window.plugin_pages():
+        problems.append("页面工厂报错时应退化成提示页，而不是整页缺失")
+
+    api.remove_page("selfcheck")
+    api.remove_page("broken")
+    window._sync_plugin_pages()
+    if window.plugin_pages():
+        problems.append(f"插件页面注销后仍留在导航：{window.plugin_pages()}")
+    return problems
+
+
+def _check_image_viewer(window) -> list[str]:
+    """图片查看器：小图要自适应放大，「原始大小」与插件选项都要生效。"""
+    import shutil
+
+    from PyQt6.QtGui import QPixmap
+
+    from app.core.viewers import viewer_registry
+    from app.services.plugin_service import plugin_service
+    from app.ui.viewers.image_view import ImageViewer
+
+    problems: list[str] = []
+    root = Path(__file__).resolve().parents[1] / "tests" / "_tmp" / "selfcheck_image"
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        small = root / "small.png"
+        pixmap = QPixmap(40, 20)
+        pixmap.fill()
+        pixmap.save(str(small))
+
+        viewer = ImageViewer(small, parent=window)
+        viewer.resize(400, 300)
+        viewer.show()
+        QApplication.processEvents()
+        viewer._apply()
+        if viewer._scale <= 1.0:
+            problems.append(f"小图在自适应模式下应放大显示，实际缩放 {viewer._scale:.3f}")
+        if viewer._label.width() <= 40:
+            problems.append("自适应放大后图片控件宽度没有跟着变大")
+        viewer._actual_size()
+        if abs(viewer._scale - 1.0) > 1e-6:
+            problems.append(f"「原始大小」应回到 100%，实际 {viewer._scale:.3f}")
+        viewer._zoom(1 / viewer._step_factor)
+        if viewer._scale >= 1.0:
+            problems.append("缩小按钮没有生效")
+        viewer._fit_window()
+        if viewer._scale <= 1.0:
+            problems.append("「适应窗口」没有重新放大")
+        viewer.close()
+
+        plain = ImageViewer(small, fit_on_open=False)
+        if abs(plain._scale - 1.0) > 1e-6:
+            problems.append("插件选项关闭「打开时适应窗口」后应按原始大小显示")
+
+        # 插件选项要真的传到查看器工厂里
+        plugin_service.load_viewers()
+        info = plugin_service.get("builtin.image")
+        if not info.has_options:
+            problems.append("内置图片插件没有声明插件选项")
+        factory_viewer = viewer_registry.by_id("builtin.image.1")
+        if factory_viewer is None or factory_viewer.factory is None:
+            problems.append("内置图片查看器没有注册工厂")
+        else:
+            built = factory_viewer.factory(small, None)
+            if abs(getattr(built, "_step_factor", 0) - 1.25) > 1e-6:
+                problems.append("查看器工厂没有用插件选项里的缩放步长")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
     return problems
 
 
@@ -783,6 +981,8 @@ def main() -> int:
         ("recent_focus", lambda: _check_recent_focus(app, window)),
         ("settings_extras", lambda: _check_settings_extras(window)),
         ("filter_sections", lambda: _check_filter_sections(app, window)),
+        ("plugin_pages", lambda: _check_plugin_pages(window)),
+        ("image_viewer", lambda: _check_image_viewer(window)),
     ):
         try:
             problems = check()

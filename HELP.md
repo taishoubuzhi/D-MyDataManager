@@ -117,23 +117,38 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 ## 打开方式与查看器插件
 
 打开文件走 `src/app/services/open_with_service.py`：`OpenWithService.resolve(path)` 按顺序决定用哪种方式 —— 自定义规则且填了程序 →
-`custom`；自定义规则没填程序 → `ask`（交给系统选择）；规则为内置且查看器已注册 → `builtin`；规则为内置但查看器不可用（插件被禁用）→
-回退 `inherit`；没有规则时，有内置查看器就用内置，否则用系统默认。规则按扩展名（不含点）存在 `config/open_with.json`，形如
-`{mode, program, args}`，`mode` 取 `builtin` / `inherit` / `custom`，参数里的 `{path}` 会替换成实际路径（没有占位符时自动补在末尾，
-见 `src/app/core/shell.py` 的 `build_command()`）。「打开方式」页列出库内数据用到的全部扩展名，可逐个设置、恢复默认并「测试打开」；
-执行外部程序、交给系统选择、在资源管理器中定位分别是 `shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
+`custom`；自定义规则没填程序 → `ask`（交给系统选择）；规则为内置且指定了 `viewer_id` 且该查看器还在 → 用指定查看器（查看器已不存在时
+回退到该扩展名的默认查看器，reason 记为「指定插件不可用」）；规则为内置但没指定 → 该扩展名的默认查看器；没有可用查看器 → 回退 `inherit`；
+没有规则时，有内置查看器就用内置，否则用系统默认。规则按扩展名（不含点）存在 `config/open_with.json`，形如 `{mode, program, args, viewer_id}`，
+`mode` 取 `builtin` / `inherit` / `custom`，参数里的 `{path}` 会替换成实际路径（没有占位符时自动补在末尾，见 `src/app/core/shell.py` 的 `build_command()`）。
 
-内置查看器本身也是插件（`src/app/plugins/builtin_viewers.py` 的 `builtin_plugins()`，共七个：图片 / 视频 / 音频 / 文本 / Markdown /
-压缩包 / 表格），只声明扩展名与控件工厂，控件模块在真正打开文件时才导入 Qt。查看器控件是普通 `QWidget`，构造签名 `(path, parent=None)`，
-可提供 `caption` 属性作为窗口标题栏的补充说明，由 `src/app/ui/viewers/window.py` 的 `open_viewer()` 套上统一外壳（标题、说明、
-「用系统程序打开」与「在资源管理器中显示」按钮）。数据管理页的条目在激活或「打开」时（`ManagePage._on_item_activated()` /
-`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开。
+「打开方式」页（`src/app/ui/pages/open_with_page.py`）以「库里出现过的所有文件格式」为列表（`viewer_registry.extensions()` ∪ 已配置规则 ∪
+`ItemService.extensions_in_use()`，可按扩展名 / 插件名搜索），选中后在右侧配置：打开方式下拉（「使用插件打开」/「继承系统默认」/「自定义程序」/
+「每次询问」，可用项由 `OpenWithService.available_modes()` 决定）、具体插件下拉（仅「使用插件打开」且该格式有多个查看器时可选，「自动」表示按注册顺序）、
+自定义程序与参数，另有「保存」「恢复默认」「测试打开」。当前状态直接写在列表项上（如 `.png — 使用插件（图片查看器）· 库中 12 项`）。
+
+主程序在 `src/main.py` 里用 `plugin_service.bootstrap("app.open_with", open_with_api)` 把 `OpenWithApi` 登记为扩展接口，插件可以据此查询 /
+修改打开方式（`set_viewer` / `use_viewer_for_all` / `reset_viewer` 等），详见 [PLUGIN.md](PLUGIN.md)；执行外部程序、交给系统选择、
+在资源管理器中定位分别是 `shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
+
+内置插件也放在 `plugins/` 下（`builtin.dialog` 弹窗页面插件，以及七个查看器插件：图片 / 视频 / 音频 / 文本 / Markdown /
+压缩包 / 表格），与外部插件走同一条载入路径：`PluginService.load_viewers()` 扫描 `plugins/<id>/plugin.json`，用
+`importlib.util.spec_from_file_location()` 加载入口脚本并调用其中的 `register(api)`。查看器控件是普通 `QWidget`，构造签名
+`(path, parent=None)`，可提供 `caption` 属性作为补充说明；控件模块在真正打开文件时才导入 Qt。
+
+查看器不自己建窗口，而是在注册时声明 `host="dialog"` 并依赖内置弹窗页面插件（`api.require("dialog")`）：`src/app/ui/viewers/window.py`
+的 `open_viewer()` 从 `src/app/core/extensions.py` 的 `extension_registry` 取出 `dialog` 扩展，调 `DialogApi.open_page()` 在程序本体
+之外弹出独立顶层窗口（Esc 或标题栏关闭按钮退出），查看器内容作为内容页嵌在其中；缺少该插件时返回「缺少弹窗页面插件（dialog），请到
+「插件」页启用后重试」。数据管理页的条目在激活或「打开」时（`ManagePage._on_item_activated()` / `ManagePage._on_open()`）取出
+`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开。
 
 查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），`PluginService.load_viewers()` 在启动时
-（`src/main.py`）清空注册表并按已启用插件重建，单个插件出错只记录该插件的异常信息。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
+（`src/main.py`）清空 `ViewerRegistry` 与 `ExtensionRegistry`，按依赖顺序载入所有已启用插件（非查看器插件也要载入，它们负责
+`api.provide()` 扩展接口），单个插件出错只把错误记在该插件上。插件之间的依赖由 `src/app/core/plugins.py` 的 `sort_by_dependency()`
+拓扑排序，缺依赖、依赖未启用或循环依赖都会让插件标为「异常」并强制禁用。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
 文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
 
-外部插件放在 `plugins/<id>/` 目录，清单 `plugin.json` 至少要有 `id` 与 `entry`（查看器插件还要有 `extensions`）：
+插件协议（`plugins/<id>/plugin.json`）：
 
 ```json
 {
@@ -141,17 +156,62 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
   "name": "示例查看器",
   "version": "1.0.0",
   "kind": "viewer",
+  "kind_label": "示例类型",
+  "kind_description": "该类型的说明",
   "description": "说明文字",
   "author": "作者",
+  "manager_version": "0.1.0",
   "entry": "sample_plugin.py",
-  "extensions": ["dmx"]
+  "depends": ["builtin.dialog"],
+  "provides": ["viewer"],
+  "capabilities": ["图片查看"],
+  "extensions": ["dmx"],
+  "builtin": false
 }
 ```
 
-入口文件必须定义 `register(api)`，通过 `api.add_viewer(name, extensions, factory, kind, description, capabilities)` 注册控件工厂
-（`factory(path, parent)` 返回 `QWidget`；`PluginApi.default_extensions` 是清单里声明的扩展名，`api.plugin_id` / `api.plugin_name` 是插件信息）。
-「插件」页可导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名与备注、打开插件目录、删除外部插件；
-启用状态与备注存 `config/plugins.json`。内置插件不能删除；载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。
+- `id` 必须匹配 `^[A-Za-z0-9][A-Za-z0-9_.\-]{1,63}$`。
+- `kind` 是插件类型，**不使用枚举**：清单里写什么就是什么，类型表（`src/app/core/plugin_kinds.py`）随已发现的插件不断累积。
+  内置类型是 `viewer`（打开方式，必须声明 `extensions`）与 `page`（弹窗页面，只提供扩展接口）；插件可以自定义类型，
+  并用可选的 `kind_label`（显示名）、`kind_description`（说明）、`kind_requires_extensions`（该类型是否必须声明扩展名）
+  声明自己的类型信息 —— 第一个声明某个类型的插件决定它的显示名，之后的插件只做去重累积：重复声明同一个类型不会报错，
+  已有的非空字段优先，`plugins` 记录声明过它的插件。类型名要匹配 `^[a-z][a-z0-9_.\-]{1,63}$`，
+  只有校验通过的清单才会登记类型，非法类型的插件不会污染类型表。插件页的类型下拉读的就是这张表，无需改动。
+- `manager_version` 是插件要求的管理器版本，由 `src/app/core/version.py` 的 `is_compatible()` 比较，要求过高直接报错。
+- `entry` 是入口脚本（外部插件必填且文件必须存在，内置插件可省略），载入时用 `importlib.util.spec_from_file_location()` 加载并调用其中的 `register(api)`。
+- `depends` / `provides` 分别是依赖的插件 id 与对外提供的扩展接口名（扩展接口名匹配 `^[a-z][a-z0-9_.\-]{1,63}$`）；
+  `capabilities` 是功能说明文字。
+- `extensions` 只有查看器插件需要；`builtin` 只由内置插件声明，导入的插件会被强制改回 `false`。
+
+入口脚本的 `register(api)` 收到 `src/app/services/plugin_service.py` 的 `PluginApi`：`api.plugin_id` / `api.plugin_name` /
+`api.default_extensions` 是插件信息；`api.add_viewer(name, extensions, factory, kind, description, capabilities, host)` 注册控件工厂
+（`factory(path, parent)` 返回 `QWidget`，`host` 指定负责显示它的扩展接口）；`api.add(kind, name, *args, **fields)` 是按类型注册的通用入口：
+内置类型会路由到对应的注册方法（如 `viewer` → `add_viewer`），类型表里声明了 `contributor` 的自定义类型同样按名字路由到该方法；
+没有注册方法的类型**不会报错**，这次调用会被记成一条 `PluginContribution`（用 `api.entries(kind)` 读自己的条目，
+`PluginService.contributions(kind)` 可汇总所有已载入插件的条目）；`api.provide(name, provider)` 对外暴露扩展接口，
+`api.require(name)` / `api.has(name)` 使用别的插件提供的接口（缺失时 `require` 直接报错）。
+插件可以用清单里的 `options` 声明用户可配置项（`src/app/core/plugin_options.py` 的 `parse_options()`：`bool` / `text` / `choice` 三种，
+`key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，`choice` 必须有 `choices` 且默认值必须在其中）。插件页的「插件选项」按钮弹出
+`src/app/ui/plugin_options_dialog.py` 的 `PluginOptionsDialog`，按声明生成控件并把改动写进 `config/plugins.json` 的 `options` 字段
+（`PluginService.set_option()` / `reset_options()` / `options_of()`）；插件在 `register(api)` 里用 `api.option("键")` 读回（取值经
+`coerce_option()` 规范化，无法识别时回退默认值），选项改动后插件会整体重新载入，因此工厂闭包里的参数立即生效。若插件注册了查看器，
+该对话框还会列出其扩展名的勾选框，勾选即调用 `app.open_with` 的 `set_viewer()`，用户不必去「打开方式」页逐个设置。
+「插件」页按类型 / 来源（内置 / 外部）/ 创建者 / 状态与关键词筛选，支持按默认顺序 / 名称 / 类型 / 来源 / 创建者 / 状态 / 版本排序并切换正序、逆序
+（`PluginService.all(kind, query, state, source, author, order, reverse)` 与 `PLUGIN_ORDERS`）。列表项显示启用标记与「类型 · 来源」徽标，
+全部类型下**所有插件都会出现**（内置弹窗插件排在最前）；详情区显示版本 / 创建者 / 类型 / 来源 / 状态、扩展名、协议字段、插件选项摘要与清单路径。
+操作包括导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名 / 说明 / 备注、打开插件目录（内置插件同样可以打开）、
+「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`。内置插件不能删除；载入失败的插件在列表里标为「异常」
+并强制禁用，不影响程序启动。
+
+插件不仅可以提供查看器与扩展接口，还能直接往主界面加页面：程序本体在 `src/main.py` 里用
+`plugin_service.bootstrap("app.ui", AppUiApi())`（`src/app/core/app_ui.py`）把 `app.ui` 接口登记进 `extension_registry`，
+插件在 `register(api)` 里写 `api.require("app.ui").add_page("hello", "演示页", _build, icon="HOME", plugin_id=api.plugin_id)`
+即可登记一个导航页 —— 主窗口（`src/app/ui/main_window.py` 的 `_sync_plugin_pages()`）会按 `PageSpec.route`（`plugin.<key>`）
+装配 / 移除导航项与堆叠页，页面工厂抛异常时退化成一条提示页而不影响其它页面；`load_viewers()` 每次重载都会重新提供 `app.ui`
+并调用它的 `sync_plugins(已载入插件 id)`，因此**插件的页面会随启用 / 禁用自动出现与消失**。`app.ui` 之外，插件还可以
+`api.provide(name, provider)` 暴露自己的扩展接口供其它插件 `api.require(name)` 使用，用 `api.add(kind, ...)` 往自定义类型里
+登记条目（`PluginService.contributions(kind)` 汇总）。**写插件的完整说明（清单字段、`PluginApi` 全部接口、查看器约定、
+大型插件示例、排错）见仓库根目录的 [PLUGIN.md](PLUGIN.md)。**
 
 ## 日志与保留策略
 
@@ -159,6 +219,11 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 `daily`（`YYYY-MM-DD.log`，每天 0 点切换）、`size`（同样按启动命名，按 `Log/Max-File-Size-MB` 切分）。
 保留策略由 `_select_outdated()` 在启动时与该次切分后执行：最新一个文件永不删除，`daily` 模式先按 `Log/Keep-Days` 删除过期文件，
 再按 `Log/Keep-Files` 限制数量，最后按 `Log/Max-Total-Size-MB` 限制总量（从最早的文件删起）。
+
+控制台输出按级别着色：TRACE 青、DEBUG 蓝、INFO 绿、SUCCESS 绿（加粗）、WARNING 黄、ERROR 红、CRITICAL 红（加粗），
+时间字段绿、模块与函数名青、消息与等级同色。配色由 `logging_setup.py` 的 `LEVEL_COLORS` 显式写死并覆盖 loguru 默认值
+（loguru 默认的 INFO 不带颜色，若终端用 IDE 的配色规则就会看成红色）；控制台 sink 写 `sys.stdout` 而不是 `sys.stderr`，
+避免 PyCharm 等 IDE 把整行 `stderr` 标红；写日志文件时 `colorize=False`，不会写入 ANSI 转义序列。
 
 ## 打包与发布
 
