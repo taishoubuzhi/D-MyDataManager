@@ -189,7 +189,7 @@ icons/                        打包用图标（icon.ico / icon.png）
 
 ## 开发与自检
 
-界面与数据层的约定、开发过程中的设计记录见 [`TODO.md`](TODO.md)。
+界面与数据层的约定、开发过程中的设计记录见 [`tests/TODO.md`](tests/TODO.md)。
 
 ### 自检脚本
 
