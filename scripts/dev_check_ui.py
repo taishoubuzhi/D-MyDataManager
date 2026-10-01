@@ -143,6 +143,106 @@ def _check_uncategorized_fixed(app, window) -> list[str]:
     return problems
 
 
+def _visible_rows(page) -> list:
+    """当前页列表视图里的行控件（末尾是伸缩哨兵，跳过）。"""
+    rows = []
+    for index in range(page.list_layout.count()):
+        widget = page.list_layout.itemAt(index).widget()
+        if widget is not None and getattr(widget, "item", None) is not None:
+            rows.append(widget)
+    return rows
+
+
+def _check_manage_selection(app, window) -> list[str]:
+    """数据管理页：双击才打开、行复选框 + Ctrl/Shift 多选、三态全选框、批量移动入口。"""
+    from PyQt6.QtCore import Qt
+
+    from app.ui.pages.manage_page import menu_items, open_with_items, tri_state
+
+    page = window.manage_page
+    _show_page(window, page)
+    page.refresh()
+    app.processEvents()
+    problems: list[str] = []
+    items = list(page._items)
+    if len(items) < 3:
+        return ["数据管理页当前页不足 3 项，无法验证多选"]
+
+    rows = _visible_rows(page)
+    if not rows:
+        return ["列表视图没有行控件"]
+
+    # 单击只选中、不打开；双击才打开（用替身记录打开调用，行控件重新渲染后接上替身）。
+    opened: list = []
+    original_open = page._on_open
+    page._on_open = opened.append
+    try:
+        page._render()
+        rows = _visible_rows(page)
+        page._selected.clear()
+        page._on_item_activated(items[0], Qt.KeyboardModifier.NoModifier)
+        if page._selected != {items[0].id}:
+            problems.append(f"单击未单选：{page._selected}")
+        if opened:
+            problems.append(f"单击不应直接打开：{opened}")
+        page._on_item_activated(items[2], Qt.KeyboardModifier.ShiftModifier)
+        if page._selected != {item.id for item in items[:3]}:
+            problems.append(f"Shift 连选不对：{page._selected}")
+        page._on_item_activated(items[2], Qt.KeyboardModifier.ControlModifier)
+        if page._selected != {items[0].id, items[1].id}:
+            problems.append(f"Ctrl 取消选中不对：{page._selected}")
+        rows[0].opened.emit(rows[0].item)
+        if opened != [rows[0].item]:
+            problems.append(f"双击未触发打开：{opened}")
+    finally:
+        page._on_open = original_open
+        page._render()
+    rows = _visible_rows(page)
+
+    # 行复选框与三态全选框保持同步。
+    page.clear_selection()
+    rows[0].check_box.setChecked(True)
+    app.processEvents()
+    if page._selected != {rows[0].item.id}:
+        problems.append(f"勾选框未生效：{page._selected}")
+    if page.select_all_box.checkState() != Qt.CheckState.PartiallyChecked:
+        problems.append(f"部分选中时全选框不是横杠：{page.select_all_box.checkState()}")
+    page.select_all_box.setChecked(True)
+    app.processEvents()
+    if page._selected != {item.id for item in items}:
+        problems.append(f"全选未覆盖本页：{page._selected}")
+    if page.select_all_box.checkState() != Qt.CheckState.Checked:
+        problems.append("全选后全选框不是勾")
+    if not page.move_button.isEnabled():
+        problems.append("有选中项时「移动到分类」应为可用")
+    page.clear_selection()
+    app.processEvents()
+    if page._selected:
+        problems.append(f"清空选择后仍有选中项：{page._selected}")
+    if page.select_all_box.checkState() != Qt.CheckState.Unchecked:
+        problems.append("清空选择后全选框不是空")
+    if page.move_button.isEnabled():
+        problems.append("没有选中项时「移动到分类」应为禁用")
+
+    # 右键菜单与「打开方式」子菜单的条目。
+    labels = dict(menu_items(1))
+    for key in ("open", "open_with", "move", "details"):
+        if key not in labels:
+            problems.append(f"右键菜单缺少 {key}")
+    if "移动到分类…（2 项）" not in dict(menu_items(2)).get("move", ""):
+        problems.append("多选时「移动到分类」没有数量提示")
+    entries = open_with_items(".txt")
+    if entries[0][0] != "system" or entries[-1][0] != "ask":
+        problems.append(f"「打开方式」条目顺序不对：{[entry[0] for entry in entries]}")
+    if tri_state(1, 3) != Qt.CheckState.PartiallyChecked:
+        problems.append("三态判定不对")
+    page._selected = {items[0].id}
+    if page._build_menu(items[0]) is None:
+        problems.append("无法构造右键菜单")
+    page.clear_selection()
+    return problems
+
+
 def _show_page(window, page) -> None:
     """把堆叠页切到目标页面，确保页面内的控件真正参与布局。"""
     try:
@@ -181,6 +281,62 @@ def _check_import_categories(window) -> list[str]:
         problems.append("导入页分类下拉缺少「未分类」")
     if page.category_box.currentData() is None:
         problems.append("导入页分类下拉没有选中项")
+    return problems
+
+
+def _check_import_user_scope(window) -> list[str]:
+    """导入页的用户下拉：只有默认用户能替别人导入，其他用户只能导入到自己名下。"""
+    from app.core.signals import signalBus
+    from app.services import UserService
+
+    page = window.import_page
+    _show_page(window, page)
+    service = UserService(page.session)
+    default_user = service.default()
+    if default_user is None:
+        return ["缺少默认用户"]
+    problems: list[str] = []
+    backup = service.current()
+    extra = next(
+        (info.user for info in service.list_users() if info.user.id != default_user.id),
+        None,
+    )
+    if extra is None:
+        extra = service.create("导入范围探针")
+        page.session.commit()
+    if extra is None:
+        return ["无法准备第二个用户"]
+    try:
+        service.set_current(extra)
+        page.session.commit()
+        page.refresh()
+        ids = [page.user_box.itemData(index) for index in range(page.user_box.count())]
+        if ids != [extra.id]:
+            problems.append(f"非默认用户的导入页用户下拉为 {ids}，应只有自己 {extra.id}")
+        if page.user_box.isEnabled():
+            problems.append("非默认用户的导入页用户下拉应禁用")
+        if page.target_user_id() != extra.id:
+            problems.append(f"非默认用户的导入目标为 {page.target_user_id()}，应为 {extra.id}")
+
+        service.set_current(default_user)
+        page.session.commit()
+        page.refresh()
+        default_ids = [page.user_box.itemData(index) for index in range(page.user_box.count())]
+        if extra.id not in default_ids or default_user.id not in default_ids:
+            problems.append(f"默认用户的导入页用户下拉为 {default_ids}，应列出全部用户")
+        if not page.user_box.isEnabled():
+            problems.append("默认用户的导入页用户下拉应可用")
+        page.user_box.setCurrentIndex(default_ids.index(extra.id))
+        if page.target_user_id() != extra.id:
+            problems.append(f"默认用户选择其他用户后导入目标为 {page.target_user_id()}，应为 {extra.id}")
+    finally:
+        service.set_current(backup)
+        page.session.commit()
+        page.refresh()
+        index = page.user_box.findData(backup.id)
+        if index >= 0:
+            page.user_box.setCurrentIndex(index)
+        signalBus.userChanged.emit()
     return problems
 
 
@@ -1348,7 +1504,9 @@ def main() -> int:
         ("home_stats", lambda: _check_home_stats(window)),
         ("category_filter", lambda: _check_category_filter(app, window)),
         ("uncategorized_fixed", lambda: _check_uncategorized_fixed(app, window)),
+        ("manage_selection", lambda: _check_manage_selection(app, window)),
         ("import_categories", lambda: _check_import_categories(window)),
+        ("import_user_scope", lambda: _check_import_user_scope(window)),
         ("tag_picker", lambda: _check_tag_picker(app, window)),
         ("keyword_filter", lambda: _check_keyword_filter(app, window)),
         ("keyword_display", lambda: _check_keyword_display(window)),

@@ -128,6 +128,18 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 （空 = 全不选、横杠 = 部分选中、勾 = 全选，点击空框即全选、点击勾框即全不选），`_syncing` 守卫避免信号回环。
 `FilterPanel` 保留 `_type_boxes` / `_tag_boxes` / `_keyword_boxes` / `_category_boxes` 别名指向各分组的同一份 `boxes` 字典。
 
+列表 / 卡片项（`src/app/ui/widgets/item_card.py` 的 `ItemListRow` / `ItemCard`）左侧是复选框：左键单击只选中这一项（不再直接打开），
+双击左键才打开（`opened` → `ManagePage._on_open()`）；复选框用于多选，Ctrl + 左键逐个切换、Shift + 左键从锚点选到点击项（Windows 规则，
+区间由纯函数 `ManagePage.range_ids(order, anchor, target)` 计算，`_anchor` 记录最近一次点击项）。`ItemCard` 是 qfluentwidgets 的
+`CardWidget`，它的 `mouseReleaseEvent` 无条件发出 `clicked`，所以页面用 `_press_button` 只认左键，右键不会破坏多选。
+工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
+勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」与「清空选择」，没有选中项时批量按钮禁用。
+右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**打开方式**（系统默认程序 /
+点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
+从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
+`ManagePage.move_selected(category_id)` 把选中项批量移到目标分类（`None` 表示「未分类」），走 `ItemService.set_category()`，文件跟随到
+`<库>/<用户名>/<分类链>/`；工具栏的「移动到分类」按钮与右键菜单共用它。
+
 ## 数据存档
 
 存档是「快照 + 引用」：`Archive` 记录快照本身，`ArchiveEntry` 记录每个数据项当时的校验和、分类与路径，
@@ -147,7 +159,9 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 ## 导入页与批量导入
 
 导入页（`src/app/ui/pages/import_page.py`）有三部分：数据来源（文本 / 批量导入）、导入目标与数据信息、待导入文件信息与导入进度。
-「导入用户」下拉用 `UserService.list_users()` 列出全部用户（默认选中当前用户，文案带「（当前用户）」），`target_user_id()` 决定分类 / 标签候选与最终归属；
+「导入用户」下拉用 `UserService.list_users()` 列出全部用户；只有默认用户（`UserService.is_admin()`）能替其他用户导入，其他用户的下拉被禁用且只列出自己，
+文案带「（当前用户）」，提示语为「只有默认用户可以替其他用户导入数据，其他用户只能导入到自己的文件夹」；`target_user_id()` 决定分类 / 标签候选与最终归属
+（非管理员直接返回 `UserService.current_id()`）；
 切换用户会重建分类与标签候选（`_reload_categories()` / `_reload_tags()`）。
 「未分类」是每个用户的固定根分类（新建用户自动获得）：分类下拉直接列出 `TaxonomyService.tree(user_id=...)` 的真实分类（没有占位项），
 默认选中「未分类」，所以没单独选分类的文本 / 文件都会落在 `<用户名>/未分类/` 目录（服务层 `ImportService._category_for()` 兜底）。
@@ -183,6 +197,10 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 - `fit_columns(table, *, min_width=72, max_width=260, weights=None)`：先按内容量宽再夹紧，权重列吃剩余宽度；
 - `match_filters(values, filters)`：判断一行是否命中全部筛选条件（忽略大小写的子串匹配，空条件跳过）。
 
+动态重建列表时，摘掉旧控件必须走 `src/app/ui/common.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
+PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘掉的条目都会变成一闪而过的小顶层窗口（`ManagePage._clear_layout()`、
+`HomePage._clear()`、`FilterSection.set_items()` 均已改用）。
+
 ## 默认标签
 
 `src/app/db/seed.py` 的 `DEFAULT_TAGS`（重要 / 待整理 / 收藏）在 `seed_user_defaults()` 里只写入一次，且写成**全局标签**
@@ -213,8 +231,9 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 查看器不自己建窗口，而是在注册时声明 `host="dialog"` 并依赖内置弹窗页面插件（`api.require("dialog")`）：`src/app/ui/viewers/window.py`
 的 `open_viewer()` 从 `src/app/core/extensions.py` 的 `extension_registry` 取出 `dialog` 扩展，调 `DialogApi.open_page()` 在程序本体
 之外弹出独立顶层窗口（Esc 或标题栏关闭按钮退出），查看器内容作为内容页嵌在其中；缺少该插件时返回「缺少弹窗页面插件（dialog），请到
-「插件」页启用后重试」。数据管理页的条目在激活或「打开」时（`ManagePage._on_item_activated()` / `ManagePage._on_open()`）取出
-`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开。
+「插件」页启用后重试」。数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出
+`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开；右键「打开方式」里的
+点名查看器与「系统默认程序 / 交给系统选择…」分别走同模块的 `open_viewer_with()` 与 `open_system()`。
 
 查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），`PluginService.load_viewers()` 在启动时
 （`src/main.py`）清空 `ViewerRegistry` 与 `ExtensionRegistry`，按依赖顺序载入所有已启用插件（非查看器插件也要载入，它们负责

@@ -104,6 +104,32 @@ class CategoryConflictDialog(MessageBoxBase):
         return [edit.text().strip() for edit in self._edits]
 
 
+class CategoryPickerDialog(MessageBoxBase):
+    """选择目标分类：把选中的数据（一项或多项）移动到别处。"""
+
+    def __init__(
+        self,
+        categories: list[tuple[int, str]],
+        parent: QWidget | None = None,
+        count: int = 1,
+    ) -> None:
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel("移动到分类", self)
+        self.viewLayout.addWidget(self.titleLabel)
+        self.viewLayout.addWidget(BodyLabel(f"把选中的 {count} 项数据移动到：", self))
+        self.category_box = ComboBox(self)
+        for category_id, label in categories:
+            self.category_box.addItem(label, userData=category_id)
+        self.category_box.setMinimumWidth(320)
+        self.viewLayout.addWidget(self.category_box)
+        self.yesButton.setText("移动")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(420)
+
+    def category_id(self) -> int | None:
+        return self.category_box.currentData()
+
+
 class ItemEditDialog(MessageBoxBase):
     """编辑单个数据项的名称、分类、标签、关键词与隐藏状态。"""
 
@@ -260,4 +286,10 @@ class DuplicateDialog(MessageBoxBase):
         return ids
 
 
-__all__ = ["DuplicateDialog", "ItemEditDialog", "TextInputDialog"]
+__all__ = [
+    "CategoryConflictDialog",
+    "CategoryPickerDialog",
+    "DuplicateDialog",
+    "ItemEditDialog",
+    "TextInputDialog",
+]

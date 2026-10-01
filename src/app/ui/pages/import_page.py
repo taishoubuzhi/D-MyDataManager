@@ -355,25 +355,40 @@ class ImportPage(ScrollArea):
         self._reload_tags()
 
     def _reload_users(self) -> None:
+        service = UserService(self.session)
+        actor = service.current()
+        admin = service.is_admin(actor)
         current = self.user_box.currentData()
-        users = UserService(self.session).list_users()
-        default_id = UserService(self.session).current_id()
+        users = service.list_users()
+        # 只有默认用户（管理员）能替别人导入，其他用户的下拉框里只有自己。
+        if not admin:
+            users = [info for info in users if info.user.id == actor.id]
         self.user_box.blockSignals(True)
         self.user_box.clear()
         for info in users:
-            label = info.name + ("（当前用户）" if info.user.id == default_id else "")
+            label = info.name + ("（当前用户）" if info.user.id == actor.id else "")
             self.user_box.addItem(label, userData=info.user.id)
-        picked = current if current is not None else default_id
+        picked = current if current is not None else actor.id
         for index in range(self.user_box.count()):
             if self.user_box.itemData(index) == picked:
                 self.user_box.setCurrentIndex(index)
                 break
         self.user_box.blockSignals(False)
+        self.user_box.setEnabled(admin)
+        self.user_hint.setText(
+            "数据会复制到该用户的用户名文件夹下"
+            if admin
+            else "只有默认用户可以替其他用户导入数据，其他用户只能导入到自己的文件夹"
+        )
         self._reload_categories()
 
     def target_user_id(self) -> int | None:
+        """导入目标用户：非默认用户始终导入到自己名下，忽略下拉框里的其它值。"""
+        service = UserService(self.session)
         data = self.user_box.currentData()
-        return int(data) if data is not None else UserService(self.session).current_id()
+        if data is None or not service.is_admin():
+            return service.current_id()
+        return int(data)
 
     def _reload_categories(self) -> None:
         """按目标用户重建分类下拉：「未分类」是真实分类，未指定分类的数据也归入其中。"""

@@ -31,6 +31,7 @@ from ..common import (
     confirm,
     format_datetime,
     format_size,
+    release_widget,
     toast_error,
     toast_success,
     type_icon,
@@ -319,8 +320,7 @@ class HomePage(ScrollArea):
             entry = layout.takeAt(0)
             widget = entry.widget() if hasattr(entry, "widget") else entry
             if widget is not None:
-                widget.setParent(None)
-                widget.deleteLater()
+                release_widget(widget)
 
 
 __all__ = ["HomePage", "StatCard", "format_summary", "type_distribution"]

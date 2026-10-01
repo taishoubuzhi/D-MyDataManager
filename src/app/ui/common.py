@@ -101,6 +101,17 @@ def confirm(parent, title: str, content: str) -> bool:
     return bool(box.exec())
 
 
+def release_widget(widget) -> None:
+    """把控件从界面上摘下来并排队销毁。
+
+    必须先 hide()：直接 `setParent(None)` 之后控件在 Windows 上仍是「可见的顶层窗口」，
+    列表每次重渲染都会让每个旧条目以一闪而过的小窗口冒出来，所以先隐藏再断开父级。
+    """
+    widget.hide()
+    widget.setParent(None)
+    widget.deleteLater()
+
+
 class BusyTip:
     """长耗时操作的进行中提示，完成时转为完成状态并自动淡出。"""
 

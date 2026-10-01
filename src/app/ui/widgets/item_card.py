@@ -5,13 +5,14 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, CheckBox
 
 from ...db.models import DataItem
 from ..common import elide, format_datetime, format_size, type_icon, type_name
 from .cover_loader import cover_loader
 
 COVER_SIZE = 48
+CHECK_TIP = "勾选以多选（Ctrl / Shift + 左键也可以多选）"
 
 
 class CoverLabel(QLabel):
@@ -80,10 +81,16 @@ class ItemCard(CardWidget):
     activated = pyqtSignal(object)
     opened = pyqtSignal(object)
     menuRequested = pyqtSignal(object, object)
+    checkedChanged = pyqtSignal(object, bool)
 
     def __init__(self, item: DataItem, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._item = item
+        self._press_button = Qt.MouseButton.LeftButton
+
+        self.check_box = CheckBox(self)
+        self.check_box.setToolTip(CHECK_TIP)
+        self.check_box.stateChanged.connect(self._on_check_state)
 
         self._indicator = QFrame(self)
         self._indicator.setFixedWidth(3)
@@ -127,11 +134,12 @@ class ItemCard(CardWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 8, 10, 8)
         layout.setSpacing(10)
+        layout.addWidget(self.check_box)
         layout.addWidget(self._indicator)
         layout.addWidget(self._cover)
         layout.addLayout(info, 1)
 
-        self.clicked.connect(lambda: self.activated.emit(self._item))
+        self.clicked.connect(self._on_clicked)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(
             lambda pos: self.menuRequested.emit(self._item, self.mapToGlobal(pos))
@@ -141,8 +149,32 @@ class ItemCard(CardWidget):
     def item(self) -> DataItem:
         return self._item
 
+    def is_checked(self) -> bool:
+        return self.check_box.isChecked()
+
+    def set_checked(self, checked: bool) -> None:
+        """由页面回写勾选状态（不发 checkedChanged，避免回环）。"""
+        if self.check_box.isChecked() == bool(checked):
+            return
+        self.check_box.blockSignals(True)
+        self.check_box.setChecked(bool(checked))
+        self.check_box.blockSignals(False)
+
+    def _on_check_state(self, _state: int) -> None:
+        self.checkedChanged.emit(self._item, self.check_box.isChecked())
+
+    def _on_clicked(self) -> None:
+        """只有左键单击算「选中」，右键交给上下文菜单（不改变多选状态）。"""
+        if self._press_button == Qt.MouseButton.LeftButton:
+            self.activated.emit(self._item)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        self._press_button = event.button()
+        super().mousePressEvent(event)
+
     def set_selected(self, selected: bool) -> None:
         self._indicator.setVisible(selected)
+        self.set_checked(selected)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         self.opened.emit(self._item)
@@ -155,6 +187,7 @@ class ItemListRow(QWidget):
     activated = pyqtSignal(object)
     opened = pyqtSignal(object)
     menuRequested = pyqtSignal(object, object)
+    checkedChanged = pyqtSignal(object, bool)
 
     def __init__(self, item: DataItem, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -163,6 +196,10 @@ class ItemListRow(QWidget):
         self.setMinimumHeight(44)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self.check_box = CheckBox(self)
+        self.check_box.setToolTip(CHECK_TIP)
+        self.check_box.stateChanged.connect(self._on_check_state)
 
         self._cover = CoverLabel(self, 32)
         self._cover.set_item(item)
@@ -181,6 +218,7 @@ class ItemListRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(10)
+        layout.addWidget(self.check_box)
         layout.addWidget(self._cover)
         layout.addWidget(self._title, 2)
         layout.addWidget(self._meta, 2)
@@ -191,6 +229,20 @@ class ItemListRow(QWidget):
     def item(self) -> DataItem:
         return self._item
 
+    def is_checked(self) -> bool:
+        return self.check_box.isChecked()
+
+    def set_checked(self, checked: bool) -> None:
+        """由页面回写勾选状态（不发 checkedChanged，避免回环）。"""
+        if self.check_box.isChecked() == bool(checked):
+            return
+        self.check_box.blockSignals(True)
+        self.check_box.setChecked(bool(checked))
+        self.check_box.blockSignals(False)
+
+    def _on_check_state(self, _state: int) -> None:
+        self.checkedChanged.emit(self._item, self.check_box.isChecked())
+
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self.setStyleSheet(
@@ -198,10 +250,13 @@ class ItemListRow(QWidget):
             if selected
             else "background: transparent;"
         )
+        self.set_checked(selected)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        """左键单击选中；右键只留给上下文菜单，不破坏已有的多选。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self._item)
         event.accept()
-        self.activated.emit(self._item)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         self.opened.emit(self._item)
@@ -210,4 +265,4 @@ class ItemListRow(QWidget):
         self.menuRequested.emit(self._item, event.globalPos())
 
 
-__all__ = ["CoverLabel", "ItemCard", "ItemListRow"]
+__all__ = ["CHECK_TIP", "CoverLabel", "ItemCard", "ItemListRow"]

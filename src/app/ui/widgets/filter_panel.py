@@ -29,6 +29,7 @@ from qfluentwidgets import (
 )
 
 from ...db.models import DATA_TYPE_NAMES, DataType
+from ..common import release_widget
 
 SORT_OPTIONS: list[tuple[str, str, bool]] = [
     ("最新导入", "created_at", True),
@@ -115,8 +116,7 @@ class FilterSection(CardWidget):
         keys = {key for key, _label in wanted}
         for key in [key for key in self._boxes if key not in keys]:
             box = self._boxes.pop(key)
-            box.setParent(None)
-            box.deleteLater()
+            release_widget(box)
         for key, label in wanted:
             box = self._boxes.get(key)
             if box is None:

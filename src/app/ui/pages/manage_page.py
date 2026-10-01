@@ -18,6 +18,7 @@ from qfluentwidgets import (
     AdaptiveFlowLayout,
     CaptionLabel,
     CardWidget,
+    CheckBox,
     ComboBox,
     FluentIcon,
     FlowLayout,
@@ -30,6 +31,7 @@ from qfluentwidgets import (
 )
 
 from ...core.signals import signalBus
+from ...core.viewers import Viewer
 from ...db import database
 from ...db.models import DataType
 from ...db.seed import UNCATEGORIZED_NAME
@@ -40,9 +42,24 @@ from ...repositories import (
     TagRepository,
 )
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
-from ..common import confirm, format_size, toast_error, toast_success, toast_warning, type_name
-from ..viewers.open_flow import open_path
-from ..dialogs import CategoryConflictDialog, DuplicateDialog, ItemEditDialog, TextInputDialog
+from ...services.open_with_service import MODE_ASK, open_with_service
+from ..common import (
+    confirm,
+    format_size,
+    release_widget,
+    toast_error,
+    toast_success,
+    toast_warning,
+    type_name,
+)
+from ..viewers.open_flow import open_path, open_system, open_viewer_with
+from ..dialogs import (
+    CategoryConflictDialog,
+    CategoryPickerDialog,
+    DuplicateDialog,
+    ItemEditDialog,
+    TextInputDialog,
+)
 from ..widgets.category_tree import CategoryTree
 from ..widgets.filter_panel import FilterPanel
 from ..widgets.item_card import ItemCard, ItemListRow
@@ -52,6 +69,77 @@ TOOLBAR_BUTTON_HEIGHT = 32
 TOOLBAR_MAX_ROWS = 2
 TOOLBAR_ROW_SPACING = 4
 TOOLBAR_SCROLLBAR_HEIGHT = 16
+
+
+def range_ids(order: list[int], anchor: int, target: int) -> set[int]:
+    """Shift 多选：返回 anchor 到 target 之间的全部 id（按当前页顺序，含两端）。"""
+    if anchor not in order or target not in order:
+        return {target}
+    start, end = sorted((order.index(anchor), order.index(target)))
+    return set(order[start : end + 1])
+
+
+def tri_state(checked: int, total: int) -> Qt.CheckState:
+    """全选框的三态：空 = 全不选，横杠 = 部分选中，勾 = 全选（与筛选面板一致）。"""
+    if total <= 0 or checked <= 0:
+        return Qt.CheckState.Unchecked
+    if checked >= total:
+        return Qt.CheckState.Checked
+    return Qt.CheckState.PartiallyChecked
+
+
+#: 右键菜单条目：标识 → (单选文本, 多选文本)；多选文本里的 {count} 会替换成选中数量。
+MENU_LABELS: dict[str, tuple[str, str]] = {
+    "open": ("直接打开", "直接打开"),
+    "open_with": ("打开方式", "打开方式"),
+    "reveal": ("在文件夹中显示", "在文件夹中显示"),
+    "copy": ("复制路径", "复制路径"),
+    "move": ("移动到分类…", "移动到分类…（{count} 项）"),
+    "edit": ("编辑信息", "编辑信息"),
+    "tag": ("添加标签", "添加标签"),
+    "hidden": ("隐藏 / 取消隐藏", "隐藏 / 取消隐藏"),
+    "export": ("导出选中项", "导出选中项（{count}）"),
+    "delete": ("移入回收站", "移入回收站（{count}）"),
+    "restore": ("从回收站还原", "从回收站还原"),
+    "purge": ("彻底删除", "彻底删除（{count}）"),
+    "details": ("详情", "详情"),
+}
+MENU_ICONS: dict[str, FluentIcon] = {
+    "open": FluentIcon.VIEW,
+    "reveal": FluentIcon.FOLDER,
+    "copy": FluentIcon.COPY,
+    "move": FluentIcon.MOVE,
+    "edit": FluentIcon.EDIT,
+    "tag": FluentIcon.TAG,
+    "hidden": FluentIcon.VIEW,
+    "export": FluentIcon.SAVE,
+    "delete": FluentIcon.DELETE,
+    "restore": FluentIcon.SYNC,
+    "purge": FluentIcon.CLOSE,
+    "details": FluentIcon.INFO,
+}
+MENU_SEPARATORS_AFTER = frozenset({"open_with", "copy", "hidden", "purge"})
+MENU_SINGLE_ONLY = frozenset({"edit", "details"})
+
+
+def menu_items(count: int = 1) -> tuple[tuple[str, str], ...]:
+    """右键菜单条目 (标识, 文本)：多选时带上数量提示，单项操作由页面禁用。"""
+    many = count > 1
+    return tuple(
+        (key, more.format(count=count) if many else one)
+        for key, (one, more) in MENU_LABELS.items()
+    )
+
+
+def open_with_items(suffix: str) -> tuple[tuple[str, str, Viewer | None], ...]:
+    """「打开方式」子菜单：(标识, 文本, 查看器)，标识为 system / viewer:<id> / ask。"""
+    entries: list[tuple[str, str, Viewer | None]] = [("system", "系统默认程序", None)]
+    entries += [
+        (f"viewer:{viewer.id}", f"{viewer.name}（{viewer.plugin_id}）", viewer)
+        for viewer in open_with_service.viewers_for(suffix)
+    ]
+    entries.append(("ask", "交给系统选择…", None))
+    return tuple(entries)
 
 
 class _ToolbarView(QScrollArea):
@@ -82,6 +170,8 @@ class ManagePage(QWidget):
 
         self._items = []
         self._selected: set[int] = set()
+        self._anchor: int | None = None
+        self._syncing = False
         self._category_id: int | None = None
         self._mode = "list"
         self._unlocked = False
@@ -148,6 +238,7 @@ class ManagePage(QWidget):
         header.addWidget(self.count_label)
         layout.addLayout(header)
         layout.addWidget(self._build_toolbar(host))
+        layout.addWidget(self._build_selection_bar(host))
 
         self.stack = QStackedWidget(host)
         self.list_view, self.list_layout = _make_scroll(host)
@@ -176,6 +267,7 @@ class ManagePage(QWidget):
         flow.setVerticalSpacing(TOOLBAR_ROW_SPACING)
         flow.setContentsMargins(0, 0, 0, 0)
         buttons = [
+            ("move", FluentIcon.MOVE, "移动到分类", self._on_move),
             ("edit", FluentIcon.EDIT, "编辑", self._on_edit),
             ("tag", FluentIcon.TAG, "加标签", self._on_add_tags),
             ("hidden", FluentIcon.VIEW, "隐藏/显示", self._on_toggle_hidden),
@@ -199,6 +291,34 @@ class ManagePage(QWidget):
         self.toolbar_layout = flow
         scroll.setFixedHeight(TOOLBAR_BUTTON_HEIGHT + TOOLBAR_ROW_SPACING)
         return scroll
+
+    def _build_selection_bar(self, parent: QWidget) -> QWidget:
+        """选择条：三态全选框 + 已选数量 + 批量操作，与列表里的勾选状态双向同步。"""
+        bar = QWidget(parent)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.select_all_box = CheckBox("全选本页", bar)
+        self.select_all_box.setTristate(True)
+        self.select_all_box.setToolTip("空 = 全不选，横杠 = 部分选中，勾 = 全选本页")
+        self.select_all_box.stateChanged.connect(self._on_select_all)
+        layout.addWidget(self.select_all_box)
+
+        self.selection_label = CaptionLabel("未选择数据", bar)
+        layout.addWidget(self.selection_label)
+        layout.addStretch(1)
+
+        self.move_button = PushButton(FluentIcon.MOVE, "移动到分类…", bar)
+        self.move_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+        self.move_button.clicked.connect(self._on_move)
+        layout.addWidget(self.move_button)
+
+        self.clear_selection_button = PushButton(FluentIcon.RETURN, "清空选择", bar)
+        self.clear_selection_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+        self.clear_selection_button.clicked.connect(self.clear_selection)
+        layout.addWidget(self.clear_selection_button)
+        return bar
 
     def _build_filter_panel(self) -> QWidget:
         scroll = QScrollArea(self)
@@ -323,10 +443,17 @@ class ManagePage(QWidget):
 
     def _update_count_label(self) -> None:
         self.count_label.setText(selection_summary(self._total, len(self._selected)))
-        # 翻页区底部的总数/选中数/跨页提示与选择状态保持同步。
+        # 选择条与翻页区的计数、批量按钮可用状态都与选择集合保持同步。
+        count = len(self._selected)
+        label = getattr(self, "selection_label", None)
+        if label is not None:
+            label.setText(f"已选 {count} 项" if count else "未选择数据")
+        for button in (getattr(self, "move_button", None), getattr(self, "clear_selection_button", None)):
+            if button is not None:
+                button.setEnabled(bool(count))
         pager = getattr(self, "pager", None)
         if pager is not None:
-            pager.set_selection(len(self._selected), visible=len(getattr(self, "_items", ())))
+            pager.set_selection(count, visible=len(getattr(self, "_items", ())))
         # 还原只对回收站中已删除的数据有意义。
         if self.restore_button is not None:
             self.restore_button.setEnabled(
@@ -350,11 +477,13 @@ class ManagePage(QWidget):
             widget.activated.connect(self._on_item_activated)
             widget.opened.connect(self._on_open)
             widget.menuRequested.connect(self._show_menu)
+            widget.checkedChanged.connect(self._on_item_checked)
             widget.set_selected(item.id in self._selected)
             if isinstance(layout, AdaptiveFlowLayout):
                 layout.addWidget(widget)
             else:
                 layout.insertWidget(layout.count() - 1, widget)
+        self._sync_select_all()
 
     # ------------------------------------------------------------------ 用户
     def _reload_users(self) -> None:
@@ -398,22 +527,73 @@ class ManagePage(QWidget):
             widget = layout.itemAt(index).widget()
             if hasattr(widget, "set_selected") and hasattr(widget, "item"):
                 widget.set_selected(widget.item.id in self._selected)
+        self._sync_select_all()
         self._update_count_label()
 
+    def _visible_ids(self) -> list[int]:
+        return [item.id for item in self._items]
+
+    def _sync_select_all(self) -> None:
+        """三态全选框反映本页勾选情况（空 / 横杠 / 勾）。"""
+        box = getattr(self, "select_all_box", None)
+        if box is None:
+            return
+        ids = self._visible_ids()
+        state = tri_state(sum(1 for item_id in ids if item_id in self._selected), len(ids))
+        if box.checkState() == state:
+            return
+        self._syncing = True
+        box.setCheckState(state)
+        self._syncing = False
+
+    def _on_select_all(self, state: int) -> None:
+        if self._syncing:
+            return
+        ids = self._visible_ids()
+        if Qt.CheckState(state) == Qt.CheckState.Unchecked:
+            self._selected.difference_update(ids)
+        else:
+            self._selected.update(ids)
+        self._sync_selection()
+
+    def clear_selection(self) -> None:
+        if not self._selected:
+            return
+        self._selected.clear()
+        self._anchor = None
+        self._sync_selection()
+
     # ------------------------------------------------------------------ 选择
-    def _on_item_activated(self, item) -> None:
-        """单击：默认直接在程序内查看；按住 Ctrl 改为多选（不打开）。"""
-        modifiers = QApplication.keyboardModifiers()
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
+    def _on_item_activated(self, item, modifiers=None) -> None:
+        """单击只改选择：Ctrl 切换单项，Shift 从锚点到点击项连选（Windows 规则）。"""
+        keys = QApplication.keyboardModifiers() if modifiers is None else modifiers
+        order = self._visible_ids()
+        shift = bool(keys & Qt.KeyboardModifier.ShiftModifier)
+        control = bool(keys & Qt.KeyboardModifier.ControlModifier)
+        if shift:
+            anchor = self._anchor if self._anchor in order else item.id
+            selected = range_ids(order, anchor, item.id)
+            self._selected = (self._selected | selected) if control else selected
+            self._anchor = anchor
+        elif control:
             if item.id in self._selected:
                 self._selected.discard(item.id)
             else:
                 self._selected.add(item.id)
-            self._sync_selection()
-            return
-        self._selected = {item.id}
+            self._anchor = item.id
+        else:
+            self._selected = {item.id}
+            self._anchor = item.id
         self._sync_selection()
-        self._on_open(item)
+
+    def _on_item_checked(self, item, checked: bool) -> None:
+        """勾选框：只加减这一项，不影响其它已勾选的数据。"""
+        if checked:
+            self._selected.add(item.id)
+        else:
+            self._selected.discard(item.id)
+        self._anchor = item.id
+        self._sync_selection()
 
     def selected_items(self) -> list:
         """选中的项按 id 从库中取回，跨页选择同样有效。"""
@@ -426,7 +606,9 @@ class ManagePage(QWidget):
     def _require_selection(self) -> list:
         items = self.selected_items()
         if not items:
-            toast_warning(self, "未选择数据", "请先在列表中选择一项或多项（按住 Ctrl 可多选）")
+            toast_warning(
+                self, "未选择数据", "请先勾选数据左侧的复选框，或按住 Ctrl / Shift 点击选择多项"
+            )
         return items
 
     def focus_item(self, item_id: int) -> None:
@@ -440,6 +622,7 @@ class ManagePage(QWidget):
             self.filter_panel.hidden_box.setChecked(True)
         self._category_id = item.category_id
         self._selected = {item.id}
+        self._anchor = item.id
         self._page = 0
         self.refresh()
         self._locate_item(item.id)
@@ -462,13 +645,49 @@ class ManagePage(QWidget):
                 break
 
     # ------------------------------------------------------------------ 操作
-    def _on_open(self, item) -> None:
-        """打开数据：优先用内置查看器，没有内置方式时交给系统默认程序。"""
+    def _path_of(self, item):
         path = self.item_service.file_path_of(item)
         if path is None:
             toast_error(self, "无法打开", f"文件不存在或无法打开：{item.name}")
+        return path
+
+    def _suffix(self, item) -> str:
+        path = self.item_service.file_path_of(item)
+        return path.suffix if path is not None else ""
+
+    def _on_open(self, item) -> None:
+        """打开数据：优先用内置查看器，没有内置方式时交给系统默认程序。"""
+        path = self._path_of(item)
+        if path is None:
             return
         ok, message = open_path(path, self.window())
+        if not ok:
+            toast_error(self, "无法打开", message)
+
+    def _on_open_system(self, item) -> None:
+        """右键「打开方式 → 系统默认程序」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = open_system(path)
+        if not ok:
+            toast_error(self, "无法打开", message)
+
+    def _on_open_ask(self, item) -> None:
+        """右键「打开方式 → 交给系统选择」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = open_system(path, MODE_ASK)
+        if not ok:
+            toast_error(self, "无法打开", message)
+
+    def _on_open_with(self, item, viewer) -> None:
+        """右键「打开方式 → 点名某个插件」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = open_viewer_with(path, viewer, self.window())
         if not ok:
             toast_error(self, "无法打开", message)
 
@@ -497,26 +716,101 @@ class ManagePage(QWidget):
         ]
         MessageBox("数据详情", "\n".join(lines), self.window()).exec()
 
+    def _build_open_with_menu(self, item) -> RoundMenu:
+        """「打开方式」子菜单：系统默认程序 / 各内置查看器 / 交给系统选择。"""
+        menu = RoundMenu("打开方式", self)
+        for key, text, viewer in open_with_items(self._suffix(item)):
+            if key == "system":
+                menu.addAction(
+                    Action(FluentIcon.VIEW, text, triggered=lambda: self._on_open_system(item))
+                )
+            elif key == "ask":
+                menu.addSeparator()
+                menu.addAction(
+                    Action(FluentIcon.FOLDER, text, triggered=lambda: self._on_open_ask(item))
+                )
+            else:
+                menu.addAction(
+                    Action(
+                        FluentIcon.CHECKBOX,
+                        text,
+                        triggered=lambda _checked=False, chosen=viewer: self._on_open_with(item, chosen),
+                    )
+                )
+        return menu
+
+    def _build_menu(self, item) -> RoundMenu:
+        """右键菜单：打开 / 打开方式（点名插件或系统）/ 批量操作（按选中数量调整）。"""
+        count = len(self._selected)
+        callbacks = {
+            "open": lambda: self._on_open(item),
+            "reveal": lambda: self._on_reveal(item),
+            "copy": lambda: self._on_copy_path(item),
+            "move": self._on_move,
+            "edit": self._on_edit,
+            "tag": self._on_add_tags,
+            "hidden": self._on_toggle_hidden,
+            "export": self._on_export,
+            "delete": self._on_delete,
+            "restore": self._on_restore,
+            "purge": self._on_purge,
+            "details": lambda: self._on_details(item),
+        }
+        menu = RoundMenu(parent=self)
+        for key, text in menu_items(count):
+            if key == "open_with":
+                menu.addMenu(self._build_open_with_menu(item))
+            else:
+                action = Action(MENU_ICONS[key], text, triggered=callbacks[key])
+                if key in MENU_SINGLE_ONLY and count != 1:
+                    action.setEnabled(False)
+                menu.addAction(action)
+            if key in MENU_SEPARATORS_AFTER:
+                menu.addSeparator()
+        return menu
+
     def _show_menu(self, item, pos) -> None:
+        """右键：先保证该项在选中集合里（不破坏已有的多选），再弹出菜单。"""
         if item.id not in self._selected:
             self._selected = {item.id}
+            self._anchor = item.id
             self._sync_selection()
-        menu = RoundMenu(parent=self)
-        menu.addAction(Action(FluentIcon.VIEW, "打开", triggered=lambda: self._on_open(item)))
-        menu.addAction(Action(FluentIcon.FOLDER, "在文件夹中显示", triggered=lambda: self._on_reveal(item)))
-        menu.addAction(Action(FluentIcon.COPY, "复制路径", triggered=lambda: self._on_copy_path(item)))
-        menu.addSeparator()
-        menu.addAction(Action(FluentIcon.EDIT, "编辑信息", triggered=self._on_edit))
-        menu.addAction(Action(FluentIcon.TAG, "添加标签", triggered=self._on_add_tags))
-        menu.addAction(Action(FluentIcon.VIEW, "隐藏 / 取消隐藏", triggered=self._on_toggle_hidden))
-        menu.addSeparator()
-        menu.addAction(Action(FluentIcon.SAVE, "导出选中项", triggered=self._on_export))
-        menu.addAction(Action(FluentIcon.DELETE, "移入回收站", triggered=self._on_delete))
-        menu.addAction(Action(FluentIcon.SYNC, "从回收站还原", triggered=self._on_restore))
-        menu.addAction(Action(FluentIcon.CLOSE, "彻底删除", triggered=self._on_purge))
-        menu.addSeparator()
-        menu.addAction(Action(FluentIcon.INFO, "详情", triggered=lambda: self._on_details(item)))
-        menu.exec(pos)
+        self._build_menu(item).exec(pos)
+
+    # ------------------------------------------------------------------ 批量
+    def _on_move(self) -> None:
+        """把选中的数据（单个或批量）移动到另一个分类。"""
+        items = self._require_selection()
+        if not items:
+            return
+        nodes = self.taxonomy.tree(user_id=self.user_service.current_id())
+        dialog = CategoryPickerDialog(
+            [(node.category.id, "　" * node.depth + node.category.name) for node in nodes],
+            parent=self.window(),
+            count=len(items),
+        )
+        if not dialog.exec():
+            return
+        self.move_selected(dialog.category_id())
+
+    def move_selected(self, category_id: int | None) -> int:
+        """把当前选中的项批量移动到指定分类，返回移动条数。"""
+        items = self.selected_items()
+        if not items:
+            toast_warning(self, "未选择数据", "请先勾选要移动的数据")
+            return 0
+        user_id = items[0].user_id
+        category = self.category_repo.get(category_id) if category_id else None
+        if category is None:
+            # 没有分类就归到「未分类」，文件同样落进 <用户>/未分类/ 目录。
+            category = self.taxonomy.uncategorized_category(user_id)
+            category_id = category.id if category is not None else None
+        count = self.item_service.set_category(items, category_id)
+        self.session.commit()
+        signalBus.itemsChanged.emit()
+        name = self.taxonomy.path_of(category) if category is not None else UNCATEGORIZED_NAME
+        toast_success(self, "已移动", f"{count} 项 → {name}")
+        return count
 
     def _on_edit(self) -> None:
         items = self._require_selection()
@@ -762,8 +1056,13 @@ def _clear_layout(layout) -> None:
         entry = layout.takeAt(0)
         widget = entry if adaptive else entry.widget()
         if widget is not None:
-            widget.setParent(None)
-            widget.deleteLater()
+            release_widget(widget)
 
 
-__all__ = ["ManagePage"]
+__all__ = [
+    "ManagePage",
+    "menu_items",
+    "open_with_items",
+    "range_ids",
+    "tri_state",
+]

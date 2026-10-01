@@ -59,6 +59,57 @@ class SelectionTextTest(unittest.TestCase):
         self.assertEqual(selection_hint(4, 3), "已跨页选择 4 项")
 
 
+class SelectionRulesTest(unittest.TestCase):
+    """多选的纯函数：Shift 区间与三态全选框。"""
+
+    def test_range_ids_covers_both_ends(self) -> None:
+        from app.ui.pages.manage_page import range_ids
+
+        self.assertEqual(range_ids([1, 2, 3, 4], 2, 4), {2, 3, 4})
+        self.assertEqual(range_ids([1, 2, 3, 4], 4, 2), {2, 3, 4})
+        self.assertEqual(range_ids([1, 2, 3, 4], 3, 3), {3})
+
+    def test_range_ids_falls_back_without_anchor(self) -> None:
+        from app.ui.pages.manage_page import range_ids
+
+        self.assertEqual(range_ids([1, 2, 3], 9, 2), {2})
+
+    def test_tri_state(self) -> None:
+        from PyQt6.QtCore import Qt
+
+        from app.ui.pages.manage_page import tri_state
+
+        self.assertEqual(tri_state(0, 5), Qt.CheckState.Unchecked)
+        self.assertEqual(tri_state(2, 5), Qt.CheckState.PartiallyChecked)
+        self.assertEqual(tri_state(5, 5), Qt.CheckState.Checked)
+        self.assertEqual(tri_state(0, 0), Qt.CheckState.Unchecked)
+
+
+class ReleaseWidgetTest(unittest.TestCase):
+    """摘控件的公用函数：必须先隐藏，否则会残留可见的顶层小窗口。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_hides_before_detaching(self) -> None:
+        from PyQt6.QtWidgets import QWidget
+
+        from app.ui.common import release_widget
+
+        host = QWidget()
+        self.addCleanup(host.deleteLater)
+        child = QWidget(host)
+        host.show()
+        child.show()
+        self.assertTrue(child.isVisible())
+        release_widget(child)
+        self.assertFalse(child.isVisible())
+        self.assertIsNone(child.parent())
+
+
 class ManagePageTest(IsolatedCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -101,6 +152,22 @@ class ManagePageTest(IsolatedCase):
         self.assertEqual(page.pager.summary_label.text(), selection_summary(page._total, 0))
         self.assertEqual(page.pager.page_size, DEFAULT_PAGE_SIZE)
 
+    def test_rerender_leaves_no_stray_top_level_widgets(self) -> None:
+        """回归：重渲染摘掉的旧条目不能残留成可见的顶层小窗口（切换用户时会乱闪）。"""
+        from app.ui.widgets.item_card import ItemCard, ItemListRow
+
+        page = self._page()
+        page.refresh()
+        page._set_mode("card")
+        page._set_mode("list")
+        self.app.processEvents()
+        strays = [
+            widget
+            for widget in self.app.topLevelWidgets()
+            if isinstance(widget, (ItemCard, ItemListRow)) and widget.isVisible()
+        ]
+        self.assertEqual(strays, [])
+
     def test_pager_visible_and_not_clipped_at_800px(self) -> None:
         page = self._page()
         page.pager._fit_height()
@@ -140,6 +207,176 @@ class ManagePageTest(IsolatedCase):
         page._update_count_label()
         self.assertEqual(page.count_label.text(), selection_summary(page._total, 1))
         self.assertEqual(page.pager.summary_label.text(), selection_summary(page._total, 1))
+
+    def _rows(self, page) -> list:
+        """当前页的行控件（列表视图按顺序排列，末尾是伸缩哨兵）。"""
+        rows = []
+        for index in range(page.list_layout.count()):
+            widget = page.list_layout.itemAt(index).widget()
+            if widget is not None and hasattr(widget, "item"):
+                rows.append(widget)
+        return rows
+
+    def test_single_click_selects_without_opening(self) -> None:
+        from PyQt6.QtCore import Qt
+
+        page = self._page()
+        opened: list = []
+        page._on_open = opened.append
+        first = page._items[0]
+        page._on_item_activated(first, Qt.KeyboardModifier.NoModifier)
+        self.assertEqual(page._selected, {first.id})
+        self.assertEqual(opened, [])
+
+    def test_double_click_opens(self) -> None:
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        page = self._page()
+        row = self._rows(page)[0]
+        opened: list = []
+        row.opened.connect(opened.append)
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonDblClick,
+            QPointF(5, 5),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        row.mouseDoubleClickEvent(event)
+        self.assertEqual(opened, [row.item])
+
+    def test_ctrl_and_shift_click_multi_select(self) -> None:
+        from PyQt6.QtCore import Qt
+
+        page = self._page()
+        ids = [item.id for item in page._items]
+        self.assertGreaterEqual(len(ids), 4)
+        page._on_item_activated(page._items[0], Qt.KeyboardModifier.NoModifier)
+        page._on_item_activated(page._items[2], Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(page._selected, {ids[0], ids[2]})
+        # Ctrl 再点一次取消该项。
+        page._on_item_activated(page._items[2], Qt.KeyboardModifier.ControlModifier)
+        self.assertEqual(page._selected, {ids[0]})
+        # Shift：从锚点选到点击项（含两端）。
+        page._on_item_activated(page._items[0], Qt.KeyboardModifier.NoModifier)
+        page._on_item_activated(page._items[3], Qt.KeyboardModifier.ShiftModifier)
+        self.assertEqual(page._selected, set(ids[0:4]))
+        # Ctrl + Shift：把区间并入已有选择。
+        page._on_item_activated(page._items[0], Qt.KeyboardModifier.NoModifier)
+        page._on_item_activated(
+            page._items[2], Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        )
+        self.assertEqual(page._selected, {ids[0], ids[1], ids[2]})
+
+    def test_checkbox_and_select_all_stay_in_sync(self) -> None:
+        from PyQt6.QtCore import Qt
+
+        page = self._page()
+        rows = self._rows(page)
+        rows[0].check_box.setChecked(True)
+        self.assertEqual(page._selected, {rows[0].item.id})
+        self.assertEqual(page.select_all_box.checkState(), Qt.CheckState.PartiallyChecked)
+        page.select_all_box.setChecked(True)
+        self.assertEqual(page._selected, {item.id for item in page._items})
+        self.assertEqual(page.select_all_box.checkState(), Qt.CheckState.Checked)
+        page.select_all_box.setChecked(False)
+        self.assertEqual(page._selected, set())
+        self.assertEqual(page.select_all_box.checkState(), Qt.CheckState.Unchecked)
+
+    def test_menu_offers_open_open_with_and_move(self) -> None:
+        from app.ui.pages.manage_page import menu_items, open_with_items
+
+        page = self._page()
+        single = dict(menu_items(1))
+        self.assertEqual(single["open"], "直接打开")
+        self.assertEqual(single["open_with"], "打开方式")
+        self.assertEqual(single["move"], "移动到分类…")
+        many = dict(menu_items(3))
+        self.assertEqual(many["move"], "移动到分类…（3 项）")
+        self.assertIn("3", many["delete"])
+        self.assertIn("3", many["purge"])
+
+        entries = open_with_items(".txt")
+        self.assertEqual(entries[0][0], "system")
+        self.assertEqual(entries[-1][0], "ask")
+        self.assertIsNotNone(page._build_menu(page._items[0]))
+
+    def test_right_click_keeps_selection_in_list_mode(self) -> None:
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        page = self._page()
+        rows = self._rows(page)
+        rows[0].check_box.setChecked(True)
+        activated: list = []
+        for row in rows:
+            row.activated.connect(activated.append)
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(5, 5),
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.RightButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        rows[1].mousePressEvent(event)
+        self.assertEqual(activated, [])
+        self.assertEqual(page._selected, {rows[0].item.id})
+
+    def test_right_release_keeps_selection_in_card_mode(self) -> None:
+        # CardWidget 的 mouseReleaseEvent 无条件发 clicked，页面用按键过滤掉右键。
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        page = self._page()
+        page._set_mode("card")
+        card = next(
+            page.card_layout.itemAt(index).widget()
+            for index in range(page.card_layout.count())
+            if getattr(page.card_layout.itemAt(index).widget(), "item", None) is not None
+        )
+        activated: list = []
+        card.activated.connect(activated.append)
+        for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+            event = QMouseEvent(
+                kind,
+                QPointF(5, 5),
+                Qt.MouseButton.RightButton,
+                Qt.MouseButton.RightButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+            if kind == QEvent.Type.MouseButtonPress:
+                card.mousePressEvent(event)
+            else:
+                card.mouseReleaseEvent(event)
+        self.assertEqual(activated, [])
+
+    def test_move_selected_moves_single_and_batch(self) -> None:
+        from app.services import TaxonomyService
+
+        page = self._page()
+        target = TaxonomyService(self.session).create_category(
+            "移动目标", user_id=self.current_user().id
+        )
+        self.session.commit()
+        page._selected = {page._items[0].id}
+        self.assertEqual(page.move_selected(target.id), 1)
+        self.assertEqual(page.item_repo.get(page._items[0].id).category_id, target.id)
+
+        page._selected = {item.id for item in page._items[1:3]}
+        self.assertEqual(page.move_selected(target.id), 2)
+        for item in page._items[1:3]:
+            self.assertEqual(page.item_repo.get(item.id).category_id, target.id)
+
+    def test_move_selected_to_uncategorized(self) -> None:
+        from app.db.seed import UNCATEGORIZED_NAME
+
+        page = self._page()
+        page._selected = {page._items[0].id}
+        self.assertEqual(page.move_selected(None), 1)
+        item = page.item_repo.get(page._items[0].id)
+        self.assertIsNotNone(item.category_id)
+        self.assertIn(UNCATEGORIZED_NAME, Path(item.file_path).parts)
 
 
 class ItemEditDialogTest(IsolatedCase):
