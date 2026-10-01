@@ -3,7 +3,6 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/D-MyDataManager.iml" filepath="$PROJECT_DIR$/.idea/D-MyDataManager.iml" />
-      <module fileurl="file://$PROJECT_DIR$/../../../Clones/PyQt-Fluent-Widgets/.idea/PyQt-Fluent-Widgets.iml" filepath="$PROJECT_DIR$/../../../Clones/PyQt-Fluent-Widgets/.idea/PyQt-Fluent-Widgets.iml" />
     </modules>
   </component>
 </project>
