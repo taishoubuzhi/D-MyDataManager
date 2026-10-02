@@ -19,9 +19,9 @@ from qfluentwidgets import (
 
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
-from .common import format_size
-from .widgets.keyword_input import KeywordInput
-from .widgets.tag_picker import TagPicker
+from .framework import format_size
+from .components.keyword_input import KeywordInput
+from .components.tag_picker import TagPicker
 
 
 class TextInputDialog(MessageBoxBase):

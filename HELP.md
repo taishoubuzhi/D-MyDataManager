@@ -8,7 +8,7 @@
 
 - `images/logo.png`：窗口与打包用图标（`src/app/ui/main_window.py`）
 - `images/header1.png`：首页横幅
-- `icons/`：10 个 SVG 图标（`src/app/ui/common.py` 的类型图标来源）+ 打包用 `icon.ico` / `icon.png`
+- `icons/`：10 个 SVG 图标（`src/app/ui/framework/tokens.py` 的类型图标来源）+ 打包用 `icon.ico` / `icon.png`
 - `i18n/`：4 个翻译文件
 
 界面样式全部使用控件自带样式或内联 QSS，**不再使用 `.qrc` / `resource.py` 编译产物**，因此无需执行 `pyside6-rcc`；
@@ -66,7 +66,7 @@
   会话标记 `config/session.json`（`paths.SESSION_FILE`）在启动时写入、退出时删除，残留即说明上次异常退出并记入日志。
   退出路径是 `aboutToQuit` + `atexit` 双保险：`_lock_on_exit()` 先 `dispose_engine()`（让 WAL 收尾写回 `data.db`）再 `privacy.end_session()`，
   幂等（`main._locked`）。非 Windows 平台 `is_supported()` 为假，一律跳过并只打日志。
-- `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转、ACL 命令构造、会话标记与启动自愈；`dev_check_ui.py` 的 `privacy_group` 检查设置页分组与「打开不立刻锁定、关闭立刻放行」。
+- `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转、ACL 命令构造、会话标记与启动自愈；自检套件的 `settings_privacy_group`（沿用旧界面门禁 `privacy_group` 的判据）检查设置页分组与「打开不立刻锁定、关闭立刻放行」。
 
 ## 翻译文件
 
@@ -80,16 +80,27 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 ## 开发者自检
 
 ```cmd
-.venv\Scripts\python.exe -m compileall -q src
-.venv\Scripts\python.exe scripts\dev_check.py
-.venv\Scripts\python.exe scripts\dev_check_services.py
-.venv\Scripts\python.exe scripts\dev_check_ui.py
-.venv\Scripts\python.exe scripts\dev_check_flow.py
+.venv\Scripts\python.exe -m compileall -q src scripts
+.venv\Scripts\python.exe scripts\selfcheck.py
+.venv\Scripts\python.exe scripts\selfcheck.py --list
+.venv\Scripts\python.exe scripts\selfcheck.py --layer services
+.venv\Scripts\python.exe scripts\selfcheck.py --only manage_selection,user_journey --verbose
+.venv\Scripts\python.exe scripts\selfcheck.py --json
+.venv\Scripts\python.exe scripts\selfcheck.py --keep-db
+.venv\Scripts\python.exe src\main.py --self-check
 .venv\Scripts\python.exe scripts\seed_demo.py
 ```
 
-前三个脚本内部会 `init_db(force=True)` 重建数据库：运行前由 `scripts/dev_check_guard.py` 备份真实数据库
-（`logs/_selfcheck-data.db.bak`），结束后自动还原，因此可以随时重跑而不会弄丢已导入的数据。
+`scripts/selfcheck.py` 是自检套件：按 `data`（纯函数与库结构）、`services`（服务层）、`pages`
+（页面结构与交互）、`flows`（端到端流程）四层组织，每项检查在自己的临时目录与全新数据库上运行，
+只调用公开契约，**不碰真实的 `.resources/` 与 `config/`**，因此不需要备份还原，随时可重跑；末行固定输出
+`RESULT failures=N`，N>0 时退出码为 1。无图形界面的环境先设 `$env:QT_QPA_PLATFORM='offscreen'`。
+`src\main.py --self-check` 在源码仓库里等价于全量自检；打包后没有 `scripts/` 目录，会退化为
+「能建好界面就退出」的冒烟测试。
+
+旧套件（`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`）在功能对等后已删除：
+它内部 `init_db(force=True)` 重建数据库、运行前备份真实库、结束后自动还原；需要对照旧实现时看只读快照
+`logs/_rewrite/legacy_snapshot/scripts/` 或 git 历史，旧 34 项检查到新检查名的逐项对应见 `REWRITE.md` §7.1。
 
 单元测试按主题拆分：改哪块代码就只跑对应的模块（`.venv\Scripts\python.exe -m unittest tests.test_manage -v`），
 不再全量 `unittest discover`；文件名、基类与模板等范式见 `tests/README.md`，隔离目录与语料由 `tests/harness.py`
@@ -158,11 +169,11 @@ SettingCard（设置页）或说明文字（插件页）标注原因；处理器
 ## 数据概览页
 
 首页（`src/app/ui/pages/home_page.py`）是仪表盘：7 张 KPI 卡（数据总量 / 占用空间 / 今日导入 / 用户数 / 分类 / 标签数 / 存档数）由模块级
-`format_summary(overview(), users=, archives=)` 生成。整页由四张分区卡片组织（`common.section_card()`：概览 / 快捷操作 / 最近导入 / 类型分布），
+`format_summary(overview(), users=, archives=)` 生成。整页由四张分区卡片组织（`framework` 的 `section_card()`：概览 / 快捷操作 / 最近导入 / 类型分布），
 每张卡片都带标题与一句话说明：概览卡装 KPI 卡、快捷操作卡装「导入数据 / 数据管理 / 打开资源文件夹 / 新建存档」四个按钮、
 最近导入卡装最近条目（点击发 `focusItem`）、类型分布卡装 `type_distribution()` 生成的 `ProgressBar` 条。
 标题行右侧是「当前用户」下拉：切换即 `UserService.set_current()` + `signalBus.userChanged`，设了口令的用户会先弹口令框，口令错误则回退到原用户。
-KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowArea`（`adaptive=True`，KPI 卡最小宽 180 px、按钮 120 px）：
+KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `FlowArea`（`adaptive=True`，KPI 卡最小宽 180 px、按钮 120 px）：
 它按当前宽度自算高度（`heightForWidth`）、增删控件后立刻重排，所以切换用户 / 刷新后新卡片不会再停在默认位置盖住第一张卡；
 页面不可见时经历 resize（例如最大化）也不会被压成 0 高，重新显示时会再量一次高度，KPI 卡不会集体消失。
 页面订阅 `itemsChanged` / `categoriesChanged` / `tagsChanged` / `userChanged` / `archivesChanged` 自动刷新。
@@ -173,21 +184,21 @@ KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowA
 宽度不足时自动换行；容器是 `_ToolbarView`（`QScrollArea`），高度由 `_fit_toolbar()` 按 `flow.heightForWidth(viewport 宽度)` 计算并在
 `resizeEvent` 中重算，最多占 `TOOLBAR_MAX_ROWS`（2）行，再多则出现纵向滚动条。
 
-右侧筛选面板（`src/app/ui/widgets/filter_panel.py`）的每个分组都是 `FilterSection`：标题栏是「箭头 + 加粗标题 + 搜索框 + 三态全选框」，
+右侧筛选面板（`src/app/ui/components/filter_panel.py`）的每个分组都是 `FilterSection`：标题栏是「箭头 + 加粗标题 + 搜索框 + 三态全选框」，
 箭头或标题行控制折叠（`_toggle_body()`），选项区固定 `SECTION_BODY_HEIGHT`（116 px）高度、超出时自己滚动；
 搜索框按显示名过滤选项（无匹配时显示「没有匹配的选项」），三态全选框由 `_sync_all()` / `_on_all_state()` 与分组内的勾选状态双向同步
 （空 = 全不选、横杠 = 部分选中、勾 = 全选，点击空框即全选、点击勾框即全不选），`_syncing` 守卫避免信号回环。
 `FilterPanel` 只有类型 / 标签 / 关键词三个分组——原来的「分类」分组已移除，分类过滤改由左侧分类树的复选框承担；
 `_type_boxes` / `_tag_boxes` / `_keyword_boxes` 别名指向各分组的同一份 `boxes` 字典。
 
-列表 / 卡片项（`src/app/ui/widgets/item_card.py` 的 `ItemListRow` / `ItemCard`）左侧是复选框：左键单击只选中这一项（不再直接打开），
+列表 / 卡片项（`src/app/ui/components/item_card.py` 的 `ItemListRow` / `ItemCard`）左侧是复选框：左键单击只选中这一项（不再直接打开），
 双击左键才打开（`opened` → `ManagePage._on_open()`）；复选框用于多选，Ctrl + 左键逐个切换、Shift + 左键从锚点选到点击项（Windows 规则，
 区间由纯函数 `ManagePage.range_ids(order, anchor, target)` 计算，`_anchor` 记录最近一次点击项）。`ItemCard` 是 qfluentwidgets 的
 `CardWidget`，它的 `mouseReleaseEvent` 无条件发出 `clicked`，所以页面用 `_press_button` 只认左键，右键不会破坏多选。
 工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
 勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」与「清空选择」，没有选中项时批量按钮禁用。
 
-左栏分类树（`src/app/ui/widgets/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
+左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
 三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
 勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）；勾上「全部数据」时整棵树都处于勾选状态（此时按钮一并禁用：顶层没有可移动的去处、顶层分类也不能整体删除，提示会改成「已全选「全部数据」…」，处理器同样会拒绝这次操作）；批量移动时若所选分类本来就都在目标分类下，会提示「无需移动」而不再走一次无意义的提交。
 中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏。
@@ -234,7 +245,7 @@ KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowA
 或逐个填写新名字，保证同一级下不会出现两个同名分类。
 
 「未分类」是固定的系统分类（`TaxonomyService.is_uncategorized()`：名称为 `UNCATEGORIZED_NAME` 且为根分类）：分类树里它固定排在所有根分类之后、
-标签追加「（固定）」并带说明提示，右键菜单为空（`src/app/ui/widgets/category_tree.py` 的 `menu_entries(fixed=True)` 不返回任何操作）。
+标签追加「（固定）」并带说明提示，右键菜单为空（`src/app/ui/components/category_tree.py` 的 `menu_entries(fixed=True)` 不返回任何操作）。
 服务层同样兜底：`rename_category()` / `delete_category()` 对它直接返回 `False` / `0`，`create_category()`（父级为它时）与 `move_category()` 也会拒绝并打日志，
 所以它既不会被改名、删除，也不会长出子分类。把文件夹导入到它下面时，`ImportService.ensure_category()` 会把新分类改为建在根级，不违反这条规则。
 数据管理页的「编辑数据项」对话框同样列出当前用户的真实分类树（没有额外占位项）：没有分类的数据默认选中「未分类」，保存后
@@ -254,14 +265,14 @@ KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowA
 
 ## 表格与列表通用件
 
-`src/app/ui/widgets/data_table.py` 提供列表页共用的小工具（标签页 / 存档页 / 导入页都在用）：
+`src/app/ui/components/data_table.py` 提供列表页共用的小工具（标签页 / 存档页 / 导入页都在用）：
 
 - `TableFilterBar`（`configure([(键, 显示名, "text"|"choice"), ...])` + `set_options()` / `set_filter()` / `filters()` / `reset()`，`changed` 信号）：贴在表格上方的 Excel 式逐列筛选栏，文本列子串匹配、选项列精确匹配；`reset()` 只在确有变化时发信号；
 - `prepare_table(table, *, movable=True)`：隐藏行号、整行多选、只读、表头可拖动（`setSectionsMovable`）、列宽 Interactive；
 - `fit_columns(table, *, min_width=72, max_width=260, weights=None)`：先按内容量宽再夹紧，权重列吃剩余宽度；
 - `match_filters(values, filters)`：判断一行是否命中全部筛选条件（忽略大小写的子串匹配，空条件跳过）。
 
-动态重建列表时，摘掉旧控件必须走 `src/app/ui/common.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
+动态重建列表时，摘掉旧控件必须走 `src/app/ui/framework/feedback.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
 PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘掉的条目都会变成一闪而过的小顶层窗口（`ManagePage._clear_layout()`、
 `HomePage._clear()`（`FlowArea.take_widgets()`）、`FilterSection.set_items()`、`UserPage.refresh()` 的旧卡片、`SettingsPage._refresh_libraries()` 的旧行、
 `TableFilterBar.configure()` 的旧筛选控件、`ItemCard.set_tags()` 的旧标签块均已改用）。只 `deleteLater()` 的旧控件会作为子控件继续留在界面上
@@ -269,30 +280,32 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 
 ## 界面样式统一
 
-页面骨架尺寸统一取自「插件管理 / 打开方式管理 / 存档管理 / 标签管理」这一套风格，常量与构件都在 `src/app/ui/common.py`：
+页面骨架尺寸统一取自「插件管理 / 打开方式管理 / 存档管理 / 标签管理」这一套风格，常量与构件都在 `src/app/ui/framework/`（间距与构件）与 `src/app/ui/components/`：
 
-- `PAGE_MARGINS = (24, 20, 24, 20)`、`PAGE_SPACING = 12`：所有页面的外层边距与间距（`page_layout(page)` 直接建好这个 `QVBoxLayout`）；
-- `PANEL_MARGINS = (12, 12, 12, 12)`：列表面板卡片；`DETAIL_MARGINS = (16, 14, 16, 14)`：详情 / 表单卡片；
+- `PAGE_MARGINS = (24, 20, 24, 20)`、`PAGE_SPACING = 12`：所有页面的外层边距与间距（`ScrollPage` / `Page` 基类建好正文布局，内容用 `add_header()` / `add_section()` / `add_widget()` / `add_row()` 加进去）；
+- `PANEL_MARGINS = (12, 12, 12, 12)`：列表面板卡片；`DETAIL_MARGINS = (16, 14, 16, 14)`：详情 / 表单卡片；`COMPACT_MARGINS = (10, 8, 10, 8)`：紧凑正文（查看器正文、筛选面板内层）；`KPI_MARGINS = (14, 8, 14, 8)`：KPI / 统计卡片内边距；`SCROLL_GUTTER = 6`：滚动区右侧留白（避免内容贴住滚动条）；
   `panel_card(parent, margins=..., spacing=...)` 返回 `(CardWidget, 卡内竖直布局)`；
   `section_card(parent, 标题, 说明, ...)` 在它上面再叠一层标题（`StrongBodyLabel`）与说明（`CaptionLabel`），概览 / 导入 / 用户 / 设置四页的面板都改用它；
-- `page_header(root, page, 标题, 说明)`：统一的标题行（`TitleLabel` + 弹簧，右侧留给主操作按钮）与下方说明文字；
+- `PageBase.add_header(标题, 说明)`（工厂函数 `page_header(parent, 标题, 说明)`）：统一的标题行（`TitleLabel` + 弹簧）与下方说明文字，主操作按钮用 `header.add_action(控件)` 挂到右侧；
 - `accent_color()` / `accent_name()`：主题强调色（包 `qfluentwidgets.themeColor()`，默认 `#009faa`），
-  禁止在 QSS 里写死强调色——自定义控件（用户卡片头像与徽标、选中指示条、拖放框、关键词块）都改成按主题取色。
+  禁止在 QSS 里写死强调色——自定义控件（用户卡片头像与徽标、选中指示条、拖放框、关键词块）都改成按主题取色；
+  用户卡片的头像 `avatar_style(accent)`、徽标 `badge_style(accent)`、卡片高亮 `highlight_fill()` / `highlight_hover()` 也已下沉到 `src/app/ui/framework/theme.py`，页面里不再有样式字符串；
+- 空态统一用 `empty_state(parent, 文案, icon=...)`（图标 + 居中说明），不要再用裸 `CaptionLabel` 当占位。
 
 按钮一律用 qfluentwidgets 的 `PrimaryPushButton`（主操作）与 `PushButton`（次操作），不要用原生 `QPushButton`：
 设置页的 `PushSettingCard` 自带原生按钮，已用 `SettingsPage` 里的 `ActionCard`（继承它并换成 `PushButton`）替换。
-`scripts/dev_check_ui.py` 的 `style_uniformity` 检查会逐页断言边距 / 间距、面板卡片边距、没有原生 `QPushButton`、QSS 里没有写死的强调色。
+`scripts/selfcheck.py` 的 `style_uniformity` 检查（沿用旧界面门禁同名判据）会逐页断言边距 / 间距、面板卡片边距、没有原生 `QPushButton`、QSS 里没有写死的强调色。
 数据管理页的左（分类）/ 中（列表与卡片）/ 右（筛选）三个面板现在都是 `CardWidget` + `PANEL_MARGINS`，标题用 `StrongBodyLabel`，
 面板内的滚动区用 `clear_scroll_background()` 透明化。
 概览 / 导入 / 用户 / 设置四页也统一成同一套分区卡片（`section_card()`，标题 + 一句话说明），不再用裸 `SubtitleLabel` 或光板 `CardWidget`。
-页面底色统一由 `install_app_theme()` 装到 `QApplication` 的调色板提供，**页面自己不再铺底色**（`common.page_background()` 已删除）：
+页面底色统一由 `install_app_theme()` 装到 `QApplication` 的调色板提供，**页面自己不再铺底色**（旧 `common.page_background()` 已随 `common.py` 一起删除）：
 概览 / 导入 / 设置 / 用户四页此前各自调 `page_background(...)` 写死一对浅 / 深 QSS，又用 `clear_scroll_background(self, inner=False)` 只清了滚动区、没清视口，
 所以切到浅色后这些页仍按旧调色板实绘深色块、看起来像混进了原生 Qt 控件；现在它们与其余页面一致：
 只留 `setObjectName(...)` 供样式定位、滚动区一律 `clear_scroll_background(self)`。
 
 ### 自适应高度的流式容器（FlowArea）
 
-`src/app/ui/widgets/flow_area.py` 的 `FlowArea(QWidget)` 把「按宽度自算高度」的流式容器抽成一个控件（范式最早来自 `keyword_input.py` 的 `ChipArea`、`pager.py` 与数据管理页的工具栏）：
+`src/app/ui/components/flow_area.py` 的 `FlowArea(QWidget)` 把「按宽度自算高度」的流式容器抽成一个控件（范式最早来自 `keyword_input.py` 的 `ChipArea`、`pager.py` 与数据管理页的工具栏）：
 构造时建 `FlowLayout`（`adaptive=True` 时改用 `AdaptiveFlowLayout` + `setWidgetMinimumWidth(minimum_width)`），`setSizePolicy(Preferred, Fixed)` 并 `setFixedHeight(0)`；
 `add_widget()` 后立刻 `sync_height()`，并用 `QTimer.singleShot(0, …)` 再同步一次；`sync_height()` 前有两道守卫——不在显示状态或宽度 ≤ 0 时直接返回，
 否则 `height = flow.heightForWidth(width)`（为 0 时回落 `flow.sizeHint().height()`）→ `setFixedHeight()` + `flow.setGeometry(QRect(0, 0, width, max(height, 1)))` + `updateGeometry()`；
@@ -314,7 +327,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 - `setCustomStyleSheet(widget, light, dark)` 只设属性，没注册过的控件等于没做；必须走
   `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`clear_background` 内部就是这么写的）。
   页面底色不走 QSS：由 `install_app_theme()` 装的调色板（`theme_palette()`，浅色 `window` = `#f0f4f9`、深色 = `#202020`）提供，页面与滚动视口保持透明。
-`scripts/dev_check_ui.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」，`privacy_group` 会断言设置页的
+`scripts/selfcheck.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」，`settings_privacy_group` 会断言设置页的
 「资源文件夹 / 隐藏文件」两个开关、资源加密时隐藏开关置灰并自动收起，以及分组里不再出现多余的「立即锁定 / 立即放行」按钮。
 
 ## 默认标签

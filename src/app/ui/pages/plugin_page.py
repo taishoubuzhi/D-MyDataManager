@@ -11,7 +11,6 @@ from pathlib import Path
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import (
-    AdaptiveFlowLayout,
     CaptionLabel,
     CardWidget,
     CheckBox,
@@ -22,7 +21,6 @@ from qfluentwidgets import (
     PushButton,
     SearchLineEdit,
     SubtitleLabel,
-    TitleLabel,
 )
 
 from ...core import shell
@@ -31,17 +29,25 @@ from ...core.signals import signalBus
 from ...db import database
 from ...services import UserService
 from ...services.plugin_service import PLUGIN_ORDERS, SOURCE_FILTERS, STATE_FILTERS, PluginError, plugin_service
-from ..common import confirm, toast_error, toast_success, toast_warning, tri_state
+from ..components import FlowArea
 from ..dialogs import TextInputDialog
+from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page, confirm, tri_state
 from ..plugin_options_dialog import PluginOptionsDialog
 
 
-class PluginPage(QWidget):
+class PluginPage(Page):
     """插件管理页：列表 + 详情 + 选项 / 启停 / 编辑 / 删除。"""
+
+    page_name = "pluginPage"
+    page_title = "插件"
+    page_subtitle = (
+        "所有插件（含内置）都放在插件目录下：每个插件是一个含 plugin.json 的子目录。"
+        "类型（kind）写在清单里，随清单累积成类型表，两个插件声明同一个类型不会冲突；"
+        "插件声明了 options 就会在「插件选项」里出现可配置项。"
+    )
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("pluginPage")
         self.service = plugin_service
         self.session = database.new_session()
         self.users = UserService(self.session)
@@ -50,39 +56,23 @@ class PluginPage(QWidget):
         self._checked: set[str] = set()
         self._current = ""
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
-
-        header = QHBoxLayout()
-        header.addWidget(TitleLabel("插件", self))
-        header.addStretch(1)
         self._zip_button = PrimaryPushButton(FluentIcon.ADD, "导入插件包", self)
         self._zip_button.clicked.connect(self._on_import_zip)
-        header.addWidget(self._zip_button)
+        self.header.add_action(self._zip_button)
         self._folder_button = PushButton(FluentIcon.FOLDER, "导入插件目录", self)
         self._folder_button.clicked.connect(self._on_import_dir)
-        header.addWidget(self._folder_button)
+        self.header.add_action(self._folder_button)
         refresh_button = PushButton(FluentIcon.SYNC, "刷新", self)
         refresh_button.clicked.connect(self._reload)
-        header.addWidget(refresh_button)
-        root.addLayout(header)
+        self.header.add_action(refresh_button)
 
-        root.addWidget(
-            CaptionLabel(
-                "所有插件（含内置）都放在插件目录下：每个插件是一个含 plugin.json 的子目录。"
-                "类型（kind）写在清单里，随清单累积成类型表，两个插件声明同一个类型不会冲突；"
-                "插件声明了 options 就会在「插件选项」里出现可配置项。",
-                self,
-            )
-        )
-        root.addWidget(
+        self.add_widget(
             CaptionLabel("启用 / 禁用会立即重建查看器注册表：禁用「打开方式」插件后，对应格式会退回系统默认程序。", self)
         )
         self.permission_hint = CaptionLabel(
             "只有默认用户可以导入、启用、编辑或删除插件；其他用户可以查看、筛选与打开插件目录。", self
         )
-        root.addWidget(self.permission_hint)
+        self.add_widget(self.permission_hint)
 
         filters = QHBoxLayout()
         filters.setSpacing(8)
@@ -110,7 +100,7 @@ class PluginPage(QWidget):
         self.state_box.currentIndexChanged.connect(self._fill_list)
         filters.addWidget(self.state_box)
         filters.addStretch(1)
-        root.addLayout(filters)
+        self.add_row(filters)
 
         sort_row = QHBoxLayout()
         sort_row.setSpacing(8)
@@ -128,9 +118,9 @@ class PluginPage(QWidget):
         sort_row.addStretch(1)
         self.count_label = CaptionLabel("", self)
         sort_row.addWidget(self.count_label)
-        root.addLayout(sort_row)
+        self.add_row(sort_row)
 
-        root.addLayout(self._build_selection_bar(self))
+        self.add_row(self._build_selection_bar(self))
 
         body = QHBoxLayout()
         body.setSpacing(12)
@@ -138,7 +128,7 @@ class PluginPage(QWidget):
         left = CardWidget(self)
         left.setFixedWidth(360)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(12, 12, 12, 12)
+        left_layout.setContentsMargins(*PANEL_MARGINS)
         left_layout.setSpacing(8)
         left_layout.addWidget(SubtitleLabel("插件列表", left))
         self.plugin_list = ListWidget(left)
@@ -149,7 +139,7 @@ class PluginPage(QWidget):
 
         right = CardWidget(self)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(16, 14, 16, 14)
+        right_layout.setContentsMargins(*DETAIL_MARGINS)
         right_layout.setSpacing(8)
         self.detail_title = SubtitleLabel("未选择插件", right)
         self.detail_meta = CaptionLabel("", right)
@@ -177,35 +167,30 @@ class PluginPage(QWidget):
         right_layout.addStretch(1)
 
         # 功能按钮数量多，窄窗口下用流式布局换行，避免显示不全。
-        self.actions_host = QWidget(right)
-        actions = AdaptiveFlowLayout(self.actions_host, needAni=False, isTight=True)
-        actions.setWidgetMinimumWidth(96)
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setHorizontalSpacing(8)
-        actions.setVerticalSpacing(8)
+        self.actions_host = FlowArea(right, adaptive=True, minimum_width=96, horizontal_spacing=8, vertical_spacing=8)
         self.toggle_button = PrimaryPushButton(FluentIcon.ACCEPT, "启用", self.actions_host)
         self.toggle_button.clicked.connect(self._on_toggle)
-        actions.addWidget(self.toggle_button)
+        self.actions_host.add_widget(self.toggle_button)
         self.options_button = PushButton(FluentIcon.SETTING, "插件选项", self.actions_host)
         self.options_button.clicked.connect(self._on_options)
-        actions.addWidget(self.options_button)
+        self.actions_host.add_widget(self.options_button)
         for field, label in (("name", "重命名"), ("description", "编辑说明"), ("note", "编辑备注")):
             button = PushButton(FluentIcon.EDIT, label, self.actions_host)
             button.clicked.connect(lambda _checked=False, key=field: self._on_edit(key))
-            actions.addWidget(button)
+            self.actions_host.add_widget(button)
             setattr(self, f"_{field}_button", button)
         self.reveal_button = PushButton(FluentIcon.FOLDER, "打开插件目录", self.actions_host)
         self.reveal_button.clicked.connect(self._on_reveal)
-        actions.addWidget(self.reveal_button)
+        self.actions_host.add_widget(self.reveal_button)
         self.delete_button = PushButton(FluentIcon.DELETE, "删除", self.actions_host)
         self.delete_button.clicked.connect(self._on_remove)
-        actions.addWidget(self.delete_button)
+        self.actions_host.add_widget(self.delete_button)
         right_layout.addWidget(self.actions_host)
         body.addWidget(right, 1)
 
-        root.addLayout(body, 1)
+        self.body.addLayout(body, 1)
 
-        signalBus.pluginsChanged.connect(self._reload)
+        self.auto_refresh(signalBus.pluginsChanged)
         signalBus.userChanged.connect(self._sync_admin)
         self._reload()
         self._apply_permissions()
@@ -267,6 +252,9 @@ class PluginPage(QWidget):
         self._reload_filters()
         self._fill_list()
 
+    def refresh(self) -> None:
+        self._reload()
+
     # ------------------------------------------------------------------ 权限
     def _sync_admin(self) -> None:
         """切换用户后重新判定权限：插件属于系统级资源，只有默认用户可以改动。"""
@@ -286,12 +274,18 @@ class PluginPage(QWidget):
         row = self.plugin_list.currentRow()
         if row >= 0:
             self._on_select(row)
+        else:
+            # 列表为空（或还没选中）时详情按钮没有作用对象：统一禁用，
+            # 否则非管理员会看到可点的「启用 / 停用插件」「插件更多选项」「删除插件」。
+            self._current = ""
+            for button in (self.toggle_button, self.delete_button, self.options_button, self.reveal_button):
+                button.setEnabled(False)
         self._sync_selection()
 
     def _require_admin(self, action: str) -> bool:
         if self._is_admin:
             return True
-        toast_warning(self, "无权操作", f"只有默认用户可以{action}")
+        self.toast_warning("无权操作", f"只有默认用户可以{action}")
         return False
 
     # ------------------------------------------------------------------ 列表
@@ -500,7 +494,7 @@ class PluginPage(QWidget):
             return
         self.service.set_enabled(info.id, not info.enabled)
         self._refresh_viewers()
-        toast_success(self, "已启用插件" if not info.enabled else "已禁用插件", info.name)
+        self.toast_success("已启用插件" if not info.enabled else "已禁用插件", info.name)
 
     def _on_batch_toggle(self, enabled: bool) -> None:
         """批量启用 / 批量禁用勾选的插件。"""
@@ -508,21 +502,19 @@ class PluginPage(QWidget):
             return
         infos = self.checked_infos()
         if not infos:
-            toast_warning(self, "未选择插件", "请先勾选要批量操作的插件")
+            self.toast_warning("未选择插件", "请先勾选要批量操作的插件")
             return
         changed = [info for info in infos if bool(info.enabled) != enabled]
         for info in changed:
             self.service.set_enabled(info.id, enabled)
         if changed:
             self._refresh_viewers()
-            toast_success(
-                self,
+            self.toast_success(
                 "已批量启用插件" if enabled else "已批量禁用插件",
                 f"{len(changed)} 个插件已{'启用' if enabled else '禁用'}",
             )
         else:
-            toast_warning(
-                self,
+            self.toast_warning(
                 "状态未变化",
                 f"勾选的 {len(infos)} 个插件都已经是{'启用' if enabled else '禁用'}状态",
             )
@@ -533,13 +525,13 @@ class PluginPage(QWidget):
             return
         infos = self.checked_infos()
         if not infos:
-            toast_warning(self, "未选择插件", "请先勾选要批量删除的插件")
+            self.toast_warning("未选择插件", "请先勾选要批量删除的插件")
             return
         builtin = [info for info in infos if info.builtin]
         removable = [info for info in infos if not info.builtin]
         if not removable:
-            toast_warning(
-                self, "无法删除", f"勾选的 {len(builtin)} 个插件都是内置插件，可以改为批量禁用"
+            self.toast_warning(
+                "无法删除", f"勾选的 {len(builtin)} 个插件都是内置插件，可以改为批量禁用"
             )
             return
         note = f"其中 {len(builtin)} 个内置插件会被跳过。" if builtin else ""
@@ -554,7 +546,7 @@ class PluginPage(QWidget):
             self._checked.discard(info.id)
         self._current = ""
         self._refresh_viewers()
-        toast_success(self, "已删除插件", f"删除 {len(removable)} 个外部插件")
+        self.toast_success("已删除插件", f"删除 {len(removable)} 个外部插件")
 
     def _on_options(self) -> None:
         info = self._selected_info()
@@ -575,12 +567,12 @@ class PluginPage(QWidget):
             return
         value = dialog.value()
         if field == "name" and not value:
-            toast_warning(self, "名称不能为空", "插件名称不能留空")
+            self.toast_warning("名称不能为空", "插件名称不能留空")
             return
         self.service.update(info.id, **{field: value})
         self._reload()
         signalBus.pluginsChanged.emit()
-        toast_success(self, "已保存插件信息", info.id)
+        self.toast_success("已保存插件信息", info.id)
 
     def _on_reveal(self) -> None:
         info = self._selected_info()
@@ -595,16 +587,16 @@ class PluginPage(QWidget):
         if info is None:
             return
         if info.builtin:
-            toast_warning(self, "内置插件不能删除", "可以禁用内置插件来停用它")
+            self.toast_warning("内置插件不能删除", "可以禁用内置插件来停用它")
             return
         if not confirm(self, "删除插件", f"确定要删除「{info.name}」吗？插件目录会被一并删除。"):
             return
         if self.service.remove(info.id):
             self._current = ""
             self._refresh_viewers()
-            toast_success(self, "已删除插件", info.name)
+            self.toast_success("已删除插件", info.name)
         else:
-            toast_error(self, "删除失败", "只有外部插件可以删除")
+            self.toast_error("删除失败", "只有外部插件可以删除")
 
     def _install(self, source: str, label: str) -> None:
         if not self._require_admin("导入插件"):
@@ -619,14 +611,14 @@ class PluginPage(QWidget):
                 try:
                     info = self.service.import_plugin(source, overwrite=True)
                 except PluginError as inner:
-                    toast_error(self, "导入失败", str(inner))
+                    self.toast_error("导入失败", str(inner))
                     return
             else:
-                toast_error(self, "导入失败", message)
+                self.toast_error("导入失败", message)
                 return
         self._refresh_viewers()
         self._reload()
-        toast_success(self, "已导入插件", f"{info.name}（{label}）")
+        self.toast_success("已导入插件", f"{info.name}（{label}）")
 
     def _on_import_zip(self) -> None:
         path, _filter = QFileDialog.getOpenFileName(self, "选择插件压缩包", "", "插件包 (*.zip);;所有文件 (*)")

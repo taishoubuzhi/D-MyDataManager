@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import QAbstractItemView, QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, ComboBox, TableWidget
 
+from ..framework import COMPACT_MARGINS
 from ...core.viewer_data import SheetData, csv_rows, human_size, xlsx_sheets
 
 XLSX_SUFFIXES = ("xlsx", "xlsm")
@@ -51,7 +52,7 @@ class SheetViewer(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         bar = QHBoxLayout()

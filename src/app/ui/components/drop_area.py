@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PushButton
 
-from ..common import accent_color
+from ..framework import accent_color
 
 
 def _frame_qss() -> str:

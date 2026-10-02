@@ -30,8 +30,8 @@ from .pages.plugin_page import PluginPage
 from .pages.settings_page import SettingsPage
 from .pages.tag_page import TagPage
 from .pages.user_page import UserPage
-from .widgets.cover_loader import shutdown_cover_loader
-from .widgets.library_watcher import LibraryWatcher
+from .components.cover_loader import shutdown_cover_loader
+from .components.library_watcher import LibraryWatcher
 
 
 class MainWindow(FluentWindow):

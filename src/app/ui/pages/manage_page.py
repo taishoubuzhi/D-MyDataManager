@@ -27,7 +27,6 @@ from qfluentwidgets import (
     RoundMenu,
     SegmentedWidget,
     StrongBodyLabel,
-    TitleLabel,
 )
 
 from ...core.signals import signalBus
@@ -43,17 +42,15 @@ from ...repositories import (
 )
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
 from ...services.open_with_service import MODE_ASK, open_with_service
-from ..common import (
-    PAGE_MARGINS,
+from ..framework import (
     PAGE_SPACING,
     PANEL_MARGINS,
+    Page,
+    SCROLL_GUTTER,
     clear_scroll_background,
     confirm,
     format_size,
     release_widget,
-    toast_error,
-    toast_success,
-    toast_warning,
     tri_state,
     type_name,
 )
@@ -65,10 +62,10 @@ from ..dialogs import (
     ItemEditDialog,
     TextInputDialog,
 )
-from ..widgets.category_tree import CategoryTree
-from ..widgets.filter_panel import FilterPanel
-from ..widgets.item_card import ItemCard, ItemListRow
-from ..widgets.pager import DEFAULT_PAGE_SIZE, Pager, selection_summary
+from ..components.category_tree import CategoryTree
+from ..components.filter_panel import FilterPanel
+from ..components.item_card import ItemCard, ItemListRow
+from ..components.pager import DEFAULT_PAGE_SIZE, Pager, selection_summary
 
 TOOLBAR_BUTTON_HEIGHT = 32
 TOOLBAR_MAX_ROWS = 2
@@ -152,10 +149,12 @@ class _ToolbarView(QScrollArea):
             callback()
 
 
-class ManagePage(QWidget):
+class ManagePage(Page):
+    page_name = "managePage"
+    page_title = "数据管理"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("managePage")
         self.session = database.new_session()
         self._checked_categories: set[int] = set()
         self._syncing_tree = False
@@ -179,19 +178,21 @@ class ManagePage(QWidget):
         self.restore_button: PushButton | None = None
         self._buttons: dict[str, PushButton] = {}
 
-        root = QHBoxLayout(self)
-        root.setContentsMargins(*PAGE_MARGINS)
-        root.setSpacing(PAGE_SPACING)
+        columns = QHBoxLayout()
+        columns.setSpacing(PAGE_SPACING)
         self.tree_card = self._build_tree_panel()
         self.filter_card = self._build_filter_panel()
-        root.addWidget(self.tree_card, 0)
-        root.addWidget(self._build_center(), 1)
-        root.addWidget(self.filter_card, 0)
+        columns.addWidget(self.tree_card, 0)
+        columns.addWidget(self._build_center(), 1)
+        columns.addWidget(self.filter_card, 0)
+        self.body.addLayout(columns, 1)
 
-        signalBus.itemsChanged.connect(self.refresh)
-        signalBus.categoriesChanged.connect(self.refresh)
-        signalBus.tagsChanged.connect(self.refresh)
-        signalBus.userChanged.connect(self.refresh)
+        self.auto_refresh(
+            signalBus.itemsChanged,
+            signalBus.categoriesChanged,
+            signalBus.tagsChanged,
+            signalBus.userChanged,
+        )
         self.refresh()
 
     # ------------------------------------------------------------------ 构件
@@ -243,8 +244,6 @@ class ManagePage(QWidget):
         layout.setSpacing(10)
 
         header = QHBoxLayout()
-        header.addWidget(TitleLabel("数据管理", host))
-        header.addSpacing(16)
         self.view_switch = SegmentedWidget(host)
         self.view_switch.addItem("list", "列表", onClick=lambda: self._set_mode("list"))
         self.view_switch.addItem("card", "卡片", onClick=lambda: self._set_mode("card"))
@@ -418,12 +417,12 @@ class ManagePage(QWidget):
             )
             if dialog.exec() and self.user_service.verify(user, dialog.value()):
                 self._unlocked = True
-                toast_success(self, "已解锁隐藏数据", "隐藏项会显示在列表中")
+                self.toast_success("已解锁隐藏数据", "隐藏项会显示在列表中")
             else:
                 self.filter_panel.hidden_box.blockSignals(True)
                 self.filter_panel.hidden_box.setChecked(False)
                 self.filter_panel.hidden_box.blockSignals(False)
-                toast_warning(self, "口令不正确", "隐藏数据保持锁定")
+                self.toast_warning("口令不正确", "隐藏数据保持锁定")
                 return
         self._page = 0
         self._load_items()
@@ -555,13 +554,13 @@ class ManagePage(QWidget):
                 "切换用户", f"请输入 {user.name} 的口令", parent=self.window(), hint="留空以取消"
             )
             if not dialog.exec() or not self.user_service.verify(user, dialog.value()):
-                toast_warning(self, "口令错误", f"无法切换到 {user.name}")
+                self.toast_warning("口令错误", f"无法切换到 {user.name}")
                 self._reload_users()
                 return
         self.user_service.set_current(user)
         self.session.commit()
         signalBus.userChanged.emit()
-        toast_success(self, "已切换用户", user.name)
+        self.toast_success("已切换用户", user.name)
 
     def _set_mode(self, mode: str) -> None:
         self._mode = mode
@@ -698,7 +697,7 @@ class ManagePage(QWidget):
     def _path_of(self, item):
         path = self.item_service.file_path_of(item)
         if path is None:
-            toast_error(self, "无法打开", f"文件不存在或无法打开：{item.name}")
+            self.toast_error("无法打开", f"文件不存在或无法打开：{item.name}")
         return path
 
     def _suffix(self, item) -> str:
@@ -712,7 +711,7 @@ class ManagePage(QWidget):
             return
         ok, message = open_path(path, self.window())
         if not ok:
-            toast_error(self, "无法打开", message)
+            self.toast_error("无法打开", message)
 
     def _on_open_system(self, item) -> None:
         """右键「打开方式 → 系统默认程序」。"""
@@ -721,7 +720,7 @@ class ManagePage(QWidget):
             return
         ok, message = open_system(path)
         if not ok:
-            toast_error(self, "无法打开", message)
+            self.toast_error("无法打开", message)
 
     def _on_open_ask(self, item) -> None:
         """右键「打开方式 → 交给系统选择」。"""
@@ -730,7 +729,7 @@ class ManagePage(QWidget):
             return
         ok, message = open_system(path, MODE_ASK)
         if not ok:
-            toast_error(self, "无法打开", message)
+            self.toast_error("无法打开", message)
 
     def _on_open_with(self, item, viewer) -> None:
         """右键「打开方式 → 点名某个插件」。"""
@@ -739,16 +738,16 @@ class ManagePage(QWidget):
             return
         ok, message = open_viewer_with(path, viewer, self.window())
         if not ok:
-            toast_error(self, "无法打开", message)
+            self.toast_error("无法打开", message)
 
     def _on_reveal(self, item) -> None:
         if not self.item_service.reveal_item(item):
-            toast_warning(self, "无法定位", "文件不存在")
+            self.toast_warning("无法定位", "文件不存在")
 
     def _on_copy_path(self, item) -> None:
         path = self.item_service.copy_path(item)
         QApplication.clipboard().setText(path)
-        toast_success(self, "已复制路径", path)
+        self.toast_success("已复制路径", path)
 
     def _on_details(self, item) -> None:
         lines = [
@@ -847,7 +846,7 @@ class ManagePage(QWidget):
         """把当前选中的项批量移动到指定分类，返回移动条数。"""
         items = self.selected_items()
         if not items:
-            toast_warning(self, "未选择数据", "请先勾选要移动的数据")
+            self.toast_warning("未选择数据", "请先勾选要移动的数据")
             return 0
         user_id = items[0].user_id
         category = self.category_repo.get(category_id) if category_id else None
@@ -859,7 +858,7 @@ class ManagePage(QWidget):
         self.session.commit()
         signalBus.itemsChanged.emit()
         name = self.taxonomy.path_of(category) if category is not None else UNCATEGORIZED_NAME
-        toast_success(self, "已移动", f"{count} 项 → {name}")
+        self.toast_success("已移动", f"{count} 项 → {name}")
         return count
 
     def _on_edit(self) -> None:
@@ -867,7 +866,7 @@ class ManagePage(QWidget):
         if not items:
             return
         if len(items) > 1:
-            toast_warning(self, "一次只能编辑一项", "请只选择一项后再编辑")
+            self.toast_warning("一次只能编辑一项", "请只选择一项后再编辑")
             return
         item = items[0]
         nodes = self.taxonomy.tree(user_id=self.user_service.current_id())
@@ -891,7 +890,7 @@ class ManagePage(QWidget):
         self.item_service.move_item(item, values["category_id"])
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已保存", item.name)
+        self.toast_success("已保存", item.name)
 
     def _on_add_tags(self) -> None:
         items = self._require_selection()
@@ -909,7 +908,7 @@ class ManagePage(QWidget):
         self.session.commit()
         signalBus.itemsChanged.emit()
         signalBus.tagsChanged.emit()
-        toast_success(self, "已添加标签", f"{'、'.join(names)}（影响 {count} 项）")
+        self.toast_success("已添加标签", f"{'、'.join(names)}（影响 {count} 项）")
 
     def _on_toggle_hidden(self) -> None:
         items = self._require_selection()
@@ -919,7 +918,7 @@ class ManagePage(QWidget):
         count = self.item_service.set_hidden(items, target)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已更新", f"{count} 项已{'隐藏' if target else '取消隐藏'}")
+        self.toast_success("已更新", f"{count} 项已{'隐藏' if target else '取消隐藏'}")
 
     def _on_delete(self) -> None:
         items = self._require_selection()
@@ -930,17 +929,17 @@ class ManagePage(QWidget):
         count = self.item_service.delete(items)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已移入回收站", f"{count} 项")
+        self.toast_success("已移入回收站", f"{count} 项")
 
     def _on_restore(self) -> None:
         items = [item for item in self._require_selection() if item.is_deleted]
         if not items:
-            toast_warning(self, "无法还原", "只有已删除（回收站中）的数据可以还原")
+            self.toast_warning("无法还原", "只有已删除（回收站中）的数据可以还原")
             return
         count = self.item_service.restore(items)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已还原", f"{count} 项")
+        self.toast_success("已还原", f"{count} 项")
 
     def _on_purge(self) -> None:
         items = self._require_selection()
@@ -955,7 +954,7 @@ class ManagePage(QWidget):
         count = self.item_service.purge(items)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已彻底删除", f"{count} 项")
+        self.toast_success("已彻底删除", f"{count} 项")
 
     def _on_export(self) -> None:
         items = self._require_selection()
@@ -967,24 +966,24 @@ class ManagePage(QWidget):
         try:
             result = ExportService(self.session).export_items(items, directory)
         except Exception as exc:  # noqa: BLE001
-            toast_error(self, "导出失败", str(exc))
+            self.toast_error("导出失败", str(exc))
             return
         if result.exported:
-            toast_success(self, "导出完成", f"{result.summary()}，目录：{result.directory}")
+            self.toast_success("导出完成", f"{result.summary()}，目录：{result.directory}")
         else:
-            toast_warning(self, "没有可导出的文件", result.summary())
+            self.toast_warning("没有可导出的文件", result.summary())
 
     def _on_duplicates(self) -> None:
         groups = self.item_service.duplicate_map(self._duplicate_scope())
         if not groups:
-            toast_success(self, "没有重复内容", "所有数据项的内容校验和互不相同")
+            self.toast_success("没有重复内容", "所有数据项的内容校验和互不相同")
             return
         dialog = DuplicateDialog(groups, parent=self.window())
         if not dialog.exec():
             return
         ids = dialog.checked_ids()
         if not ids:
-            toast_warning(self, "未勾选任何项", "请在列表中勾选要删除的重复项")
+            self.toast_warning("未勾选任何项", "请在列表中勾选要删除的重复项")
             return
         items = [item for item in (self.item_repo.get(item_id) for item_id in ids) if item is not None]
         if not items:
@@ -998,7 +997,7 @@ class ManagePage(QWidget):
         count = self.item_service.purge(items)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        toast_success(self, "已清理重复项", f"{count} 项")
+        self.toast_success("已清理重复项", f"{count} 项")
 
     # ------------------------------------------------------------------ 分类
     def _on_category_checked(self) -> None:
@@ -1050,20 +1049,20 @@ class ManagePage(QWidget):
     def _on_category_batch_move(self) -> None:
         """把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）。"""
         if self.tree.is_all_checked():
-            toast_warning(self, "无法移动", "已全选「全部数据」：顶层分类不能整体移动，请只勾选要移动的子分类")
+            self.toast_warning("无法移动", "已全选「全部数据」：顶层分类不能整体移动，请只勾选要移动的子分类")
             return
         ids = self._eligible_category_ids()
         if not ids:
-            toast_warning(self, "无法移动", "根分类与「未分类」不能移动，请先勾选普通分类")
+            self.toast_warning("无法移动", "根分类与「未分类」不能移动，请先勾选普通分类")
             return
         target_id = self.tree.current_category()
         if target_id in set(ids) | self._descendant_category_ids(set(ids)):
-            toast_warning(self, "无法移动", "目标分类是所选分类本身或它的子分类")
+            self.toast_warning("无法移动", "目标分类是所选分类本身或它的子分类")
             return
         target = self.category_repo.get(target_id) if target_id is not None else None
         target_name = target.name if target is not None else "顶层"
         if all(self.category_repo.get(category_id).parent_id == target_id for category_id in ids):
-            toast_warning(self, "无需移动", f"勾选的分类已经在「{target_name}」下")
+            self.toast_warning("无需移动", f"勾选的分类已经在「{target_name}」下")
             return
         names = "、".join(self._category_name(category_id) for category_id in ids)
         if not confirm(
@@ -1085,18 +1084,18 @@ class ManagePage(QWidget):
         self.session.commit()
         signalBus.categoriesChanged.emit()
         if failed:
-            toast_warning(self, "已移动分类", f"{moved} 个分类已移动；{failed} 个与目标下的分类重名")
+            self.toast_warning("已移动分类", f"{moved} 个分类已移动；{failed} 个与目标下的分类重名")
         else:
-            toast_success(self, "已移动分类", f"{moved} 个分类已移动到「{target_name}」")
+            self.toast_success("已移动分类", f"{moved} 个分类已移动到「{target_name}」")
 
     def _on_category_batch_delete(self) -> None:
         """批量删除勾选的分类；其中的数据变成未分类，根分类与固定分类受保护。"""
         if self.tree.is_all_checked():
-            toast_warning(self, "无法删除", "已全选「全部数据」：顶层分类不能整体删除，请只勾选要删除的子分类")
+            self.toast_warning("无法删除", "已全选「全部数据」：顶层分类不能整体删除，请只勾选要删除的子分类")
             return
         ids = self._eligible_category_ids()
         if not ids:
-            toast_warning(self, "无法删除", "根分类与「未分类」不能删除，请先勾选普通分类")
+            self.toast_warning("无法删除", "根分类与「未分类」不能删除，请先勾选普通分类")
             return
         names = "、".join(self._category_name(category_id) for category_id in ids)
         if not confirm(
@@ -1123,9 +1122,9 @@ class ManagePage(QWidget):
         message = f"已删除 {removed} 个分类，{affected} 项数据已变为未分类"
         if skipped:
             message += f"；{skipped} 个分类有重名子分类，请单独删除"
-            toast_warning(self, "已删除分类", message)
+            self.toast_warning("已删除分类", message)
         else:
-            toast_success(self, "已删除分类", message)
+            self.toast_success("已删除分类", message)
         self._checked_categories.clear()
         self.refresh()
 
@@ -1158,11 +1157,11 @@ class ManagePage(QWidget):
                 name, parent_id=category_id, user_id=self.user_service.current_id()
             )
             if node is None:
-                toast_warning(self, "无法创建", "同级已存在同名分类")
+                self.toast_warning("无法创建", "同级已存在同名分类")
                 return
             self.session.commit()
             signalBus.categoriesChanged.emit()
-            toast_success(self, "已创建分类", node.name)
+            self.toast_success("已创建分类", node.name)
         elif action == "rename":
             category = self.category_repo.get(category_id)
             if category is None:
@@ -1174,11 +1173,11 @@ class ManagePage(QWidget):
             if not name or name == category.name:
                 return
             if not self.taxonomy.rename_category(category, name):
-                toast_warning(self, "无法重命名", f"同级已存在分类「{name}」")
+                self.toast_warning("无法重命名", f"同级已存在分类「{name}」")
                 return
             self.session.commit()
             signalBus.categoriesChanged.emit()
-            toast_success(self, "已重命名", name)
+            self.toast_success("已重命名", name)
         elif action == "delete":
             category = self.category_repo.get(category_id)
             if category is None:
@@ -1206,7 +1205,7 @@ class ManagePage(QWidget):
             self.session.commit()
             signalBus.categoriesChanged.emit()
             signalBus.itemsChanged.emit()
-            toast_success(self, "已删除分类", f"{count} 项数据已变为未分类")
+            self.toast_success("已删除分类", f"{count} 项数据已变为未分类")
 
 
 CARD_MIN_WIDTH = 240
@@ -1227,7 +1226,7 @@ def _make_scroll(parent: QWidget, adaptive: bool = False):
         layout = QVBoxLayout(host)
         layout.setSpacing(6)
         layout.addStretch(1)
-    layout.setContentsMargins(0, 0, 6, 0)
+    layout.setContentsMargins(0, 0, SCROLL_GUTTER, 0)
     scroll.setWidget(host)
     # 内容区现在是卡片，滚动区保持透明露出卡片背景，避免多层底色叠加。
     clear_scroll_background(scroll)

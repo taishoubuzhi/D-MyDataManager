@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
 
 from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
@@ -32,21 +31,20 @@ from qfluentwidgets import (
 from ...core.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
-from ..common import (
+from ..dialogs import TextInputDialog
+from ..framework import (
     DETAIL_MARGINS,
+    Page,
     accent_color,
-    accent_name,
+    avatar_style,
+    badge_style,
+    clear_scroll_background,
     confirm,
     format_datetime,
-    clear_scroll_background,
-    page_layout,
+    highlight_fill,
+    highlight_hover,
     release_widget,
-    toast_success,
-    toast_warning,
-    page_header,
-    section_card,
 )
-from ..dialogs import TextInputDialog
 
 # 卡片网格参数：卡片固定宽度，窄窗口 1 列，宽窗口最多 4 列。
 CARD_WIDTH = 320
@@ -57,41 +55,6 @@ CARD_SPACING = 12
 # 卡片内部结构：首字头像 + 两列操作按钮网格。
 CARD_BUTTON_COLUMNS = 2
 AVATAR_SIZE = 40
-AVATAR_PLAIN_STYLE = (
-    "background-color: rgba(128, 128, 128, 0.25); color: palette(text);"
-    "border-radius: 8px; font-size: 18px; font-weight: 600;"
-)
-BADGE_PLAIN_STYLE = (
-    "color: palette(text); background-color: rgba(128, 128, 128, 0.18);"
-    "border-radius: 8px; padding: 1px 8px;"
-)
-
-
-def avatar_accent_style() -> str:
-    """首字头像的强调色样式（跟随主题色）。"""
-    return (
-        f"background-color: {accent_name()}; color: white; border-radius: 8px;"
-        "font-size: 18px; font-weight: 600;"
-    )
-
-
-def badge_accent_style() -> str:
-    """「当前用户」徽标的强调色样式（跟随主题色）。"""
-    return f"color: white; background-color: {accent_name()}; border-radius: 8px; padding: 1px 8px;"
-
-
-def highlight_fill() -> QColor:
-    """当前用户卡片的浅色填充（主题色 11% 不透明度）。"""
-    color = accent_color()
-    return QColor(color.red(), color.green(), color.blue(), 28)
-
-
-def highlight_hover() -> QColor:
-    """当前用户卡片悬停时的填充。"""
-    color = accent_color()
-    return QColor(color.red(), color.green(), color.blue(), 40)
-
-
 # ---------------------------------------------------------------------- 纯逻辑
 def grid_columns(
     available_width: int,
@@ -206,12 +169,15 @@ class UserCard(CardWidget):
 
 
 # ---------------------------------------------------------------------- 页面
-class UserPage(QWidget):
+class UserPage(Page):
     """用户管理：默认用户可以管理其他用户，其他用户只能修改自己。"""
+
+    page_name = "userPage"
+    page_title = "用户"
+    page_subtitle = "每位用户拥有独立的数据、标签与存档，切换用户即可查看各自内容"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("userPage")
         self.session = database.new_session()
         self.service = UserService(self.session)
         self._user_id = 0
@@ -219,22 +185,17 @@ class UserPage(QWidget):
         self._cards: list[UserCard] = []
         self._columns = 0
 
-        root = page_layout(self)
-
-        header = page_header(
-            root, self, "用户", "每位用户拥有独立的数据、标签与存档，切换用户即可查看各自内容"
-        )
         self.create_button = PrimaryPushButton(FluentIcon.ADD, "新建用户", self)
         self.create_button.setToolTip("新建一个独立用户，数据与其他用户互不影响")
         self.create_button.clicked.connect(self._create_user)
-        header.addWidget(self.create_button)
+        self.header.add_action(self.create_button)
 
         self.caption = CaptionLabel("", self)
         self.caption.setWordWrap(True)
-        root.addWidget(self.caption)
+        self.add_widget(self.caption)
 
-        card, card_layout = section_card(
-            self, "全部用户", "卡片上可直接切换用户、重命名、设置口令或删除；每人的数据互不影响", spacing=10
+        card, card_layout = self.add_section(
+            "全部用户", "卡片上可直接切换用户、重命名、设置口令或删除；每人的数据互不影响"
         )
         card.setMinimumHeight(420)
         self.scroll = ScrollArea(card)
@@ -251,9 +212,9 @@ class UserPage(QWidget):
         self.grid_host.setObjectName("userGridHost")
         self.scroll.viewport().installEventFilter(self)
         card_layout.addWidget(self.scroll, 1)
-        root.addWidget(card, 1)
+        self.add_widget(card, 1)
 
-        signalBus.userChanged.connect(self.refresh)
+        self.auto_refresh(signalBus.userChanged)
         self.refresh()
 
     # ------------------------------------------------------------------ 卡片网格
@@ -366,7 +327,7 @@ class UserPage(QWidget):
             is_current=mine, is_default=info.is_default, protected=info.protected
         ):
             label = CaptionLabel(badge, card)
-            label.setStyleSheet(badge_accent_style() if badge == "当前用户" else BADGE_PLAIN_STYLE)
+            label.setStyleSheet(badge_style(badge == "当前用户"))
             title_row.addWidget(label)
         title_row.addStretch(1)
         info_box.addLayout(title_row)
@@ -449,7 +410,7 @@ class UserPage(QWidget):
         avatar = QLabel((info.name or "?")[:1], self)
         avatar.setFixedSize(AVATAR_SIZE, AVATAR_SIZE)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet(avatar_accent_style() if highlighted else AVATAR_PLAIN_STYLE)
+        avatar.setStyleSheet(avatar_style(highlighted))
         return avatar
 
     def _equalize_card_heights(self) -> None:
@@ -471,55 +432,55 @@ class UserPage(QWidget):
         if name is None:
             return
         if not name:
-            toast_warning(self, "名称不能为空", "")
+            self.toast_warning("名称不能为空", "")
             return
         user = self.service.create(name)
         if user is None:
-            toast_warning(self, "无法创建", "已存在同名用户")
+            self.toast_warning("无法创建", "已存在同名用户")
             return
         self.session.commit()
         signalBus.userChanged.emit()
         signalBus.librariesChanged.emit()
-        toast_success(self, "已创建用户", name)
+        self.toast_success("已创建用户", name)
 
     def _switch_user(self, info) -> None:
         if info.protected:
             password = self._ask("切换用户", f"请输入 {info.name} 的口令", "留空以取消")
             if password is None or not self.service.verify(info.user, password):
-                toast_warning(self, "口令错误", f"无法切换到 {info.name}")
+                self.toast_warning("口令错误", f"无法切换到 {info.name}")
                 return
         self.service.set_current(info.user)
         self.session.commit()
         signalBus.userChanged.emit()
-        toast_success(self, "已切换用户", info.name)
+        self.toast_success("已切换用户", info.name)
 
     def _rename_user(self, info) -> None:
         mine = is_current_user(info.user.id, self._user_id)
         if not mine and not self._is_admin:
-            toast_warning(self, "没有权限", "只有默认用户可以重命名其他用户")
+            self.toast_warning("没有权限", "只有默认用户可以重命名其他用户")
             return
         name = self._ask("重命名用户", "新的用户名", text=info.name)
         if name is None:
             return
         old_name = info.name
         if not self.service.rename(info.user, name):
-            toast_warning(self, "无法重命名", "名称为空或已存在同名用户")
+            self.toast_warning("无法重命名", "名称为空或已存在同名用户")
             return
         LibraryService(self.session).rename_user_dir(info.user, old_name)
         self.session.commit()
         signalBus.userChanged.emit()
         signalBus.librariesChanged.emit()
-        toast_success(self, "已重命名用户", f"{old_name} -> {info.user.name}")
+        self.toast_success("已重命名用户", f"{old_name} -> {info.user.name}")
 
     def _set_password(self, info) -> None:
         mine = is_current_user(info.user.id, self._user_id)
         if not mine and not self._is_admin:
-            toast_warning(self, "没有权限", "只有默认用户可以修改其他用户的口令")
+            self.toast_warning("没有权限", "只有默认用户可以修改其他用户的口令")
             return
         if mine and info.protected:
             password = self._ask("验证当前口令", f"请输入 {info.name} 当前的口令", "留空以取消")
             if password is None or not self.service.verify(info.user, password):
-                toast_warning(self, "口令错误", "未能修改口令")
+                self.toast_warning("口令错误", "未能修改口令")
                 return
         value = self._ask("设置用户口令", f"{info.name} 的口令（留空以清除）", "切换用户时需要输入")
         if value is None:
@@ -527,16 +488,16 @@ class UserPage(QWidget):
         self.service.set_password(info.user, value)
         self.session.commit()
         signalBus.userChanged.emit()
-        toast_success(self, "已更新口令", info.name if value else f"已清除 {info.name} 的口令")
+        self.toast_success("已更新口令", info.name if value else f"已清除 {info.name} 的口令")
 
     def _clear_password(self, info) -> None:
         """清除口令：默认用户可以清除任何已设口令的用户，其他用户只能清除自己的。"""
         mine = is_current_user(info.user.id, self._user_id)
         if not (self._is_admin or mine):
-            toast_warning(self, "没有权限", "只有默认用户可以清除其他用户的口令")
+            self.toast_warning("没有权限", "只有默认用户可以清除其他用户的口令")
             return
         if not info.protected:
-            toast_warning(self, "无需清除", "该用户没有设置口令")
+            self.toast_warning("无需清除", "该用户没有设置口令")
             return
         if not confirm(
             self,
@@ -548,17 +509,17 @@ class UserPage(QWidget):
         self.service.set_password(info.user, "")
         self.session.commit()
         signalBus.userChanged.emit()
-        toast_success(self, "已清除口令", info.name)
+        self.toast_success("已清除口令", info.name)
 
     def _delete_user(self, info) -> None:
         if is_current_user(info.user.id, self._user_id):
-            toast_warning(self, "无法删除", "不能删除当前用户，请先切换到其他用户再删除自己的账号")
+            self.toast_warning("无法删除", "不能删除当前用户，请先切换到其他用户再删除自己的账号")
             return
         if not self._is_admin:
-            toast_warning(self, "没有权限", "只有默认用户可以删除其他用户")
+            self.toast_warning("没有权限", "只有默认用户可以删除其他用户")
             return
         if info.is_default:
-            toast_warning(self, "无法删除", "默认用户不可删除")
+            self.toast_warning("无法删除", "默认用户不可删除")
             return
         if not confirm(
             self,
@@ -569,7 +530,7 @@ class UserPage(QWidget):
         ):
             return
         if not self.service.delete(info.user):
-            toast_warning(self, "无法删除", "默认用户与当前用户不可删除，或找不到可接收数据的目标用户")
+            self.toast_warning("无法删除", "默认用户与当前用户不可删除，或找不到可接收数据的目标用户")
             return
         self.session.commit()
         for signal in (
@@ -580,7 +541,7 @@ class UserPage(QWidget):
             signalBus.archivesChanged,
         ):
             signal.emit()
-        toast_success(self, "已删除用户", f"{info.name} 的数据已并入默认用户")
+        self.toast_success("已删除用户", f"{info.name} 的数据已并入默认用户")
 
 
 __all__ = [

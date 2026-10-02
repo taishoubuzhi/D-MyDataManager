@@ -29,7 +29,7 @@ from qfluentwidgets import (
 )
 
 from ...db.models import DATA_TYPE_NAMES, DataType
-from ..common import clear_scroll_background, release_widget
+from ..framework import COMPACT_MARGINS, clear_scroll_background, release_widget
 
 SORT_OPTIONS: list[tuple[str, str, bool]] = [
     ("最新导入", "created_at", True),
@@ -101,7 +101,7 @@ class FilterSection(CardWidget):
         self._empty.hide()
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(6)
         root.addLayout(header)
         root.addWidget(self.scroll)

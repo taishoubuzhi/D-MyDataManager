@@ -32,7 +32,7 @@ from ..core.plugins import PluginInfo
 from ..core.signals import signalBus
 from ..services.open_with_service import OPEN_WITH_EXTENSION, open_with_api
 from ..services.plugin_service import plugin_service
-from .common import clear_scroll_background, toast_error, toast_success
+from .framework import clear_scroll_background, toast_error, toast_success
 
 
 class PluginOptionsDialog(MessageBoxBase):

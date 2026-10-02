@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -17,7 +17,6 @@ from qfluentwidgets import (
     PrimaryPushButton,
     ProgressBar,
     PushButton,
-    ScrollArea,
     SegmentedWidget,
     SwitchButton,
     TableWidget,
@@ -33,106 +32,45 @@ from ...db.models import guess_type
 from ...repositories import ItemRepository, TagRepository
 from ...services import ArchiveService, ImportService, LibraryService, TaxonomyService, UserService
 from ...services.blob_store import sha256_of
-from ..widgets.flow_area import FlowArea
-from ..common import (
-    BusyTip,
+from ..components import FlowArea
+from ..components.import_worker import ImportWorker
+from ..framework import (
+    ScrollPage,
     elide,
     format_datetime,
     format_size,
-    clear_scroll_background,
-    page_header,
-    page_layout,
-    toast_error,
-    toast_success,
-    toast_warning,
     type_name,
-    section_card,
 )
-from ..widgets.data_table import fit_columns, prepare_table
-from ..widgets.drop_area import DropArea
-from ..widgets.keyword_input import KeywordInput
-from ..widgets.tag_picker import TagPicker
+from ..components.data_table import fit_columns, prepare_table
+from ..components.drop_area import DropArea
+from ..components.keyword_input import KeywordInput
+from ..components.tag_picker import TagPicker
 
 _STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败"}
 _MAX_DETAIL_ROWS = 500
 _DEDUPE_SCAN_LIMIT = 200
 
 
-class _ImportWorker(QThread):
-    """后台执行批量导入：把服务层的进度回调转成 Qt 信号，避免界面卡死。"""
+class ImportPage(ScrollPage):
+    page_name = "importPage"
+    page_title = "导入数据"
+    page_subtitle = "文件会按内容去重后保存到本机仓库，可单个文件导入，也可整个文件夹批量导入"
 
-    progressed = pyqtSignal(int, int, str)
-    evented = pyqtSignal(str, str, str)
-    finished_job = pyqtSignal(dict)
-
-    def __init__(self, kind: str, sources: list[str], options: dict) -> None:
-        super().__init__()
-        self._kind = kind
-        self._sources = sources
-        self._options = options
-
-    def run(self) -> None:  # noqa: D102
-        session = database.new_session()
-        payload = {"ok": 0, "skipped": 0, "failed": [], "category": "", "total": 0, "error": ""}
-        try:
-            service = ImportService(session, library=LibraryService(session).ensure_default())
-
-            def hook(event) -> None:
-                self.evented.emit(event.source, event.status, event.detail)
-                self.progressed.emit(event.index, event.total, event.source)
-
-            if self._kind == "folder":
-                result = service.import_folder(self._sources[0], on_event=hook, **self._options)
-            else:
-                result = service.import_files(self._sources, on_event=hook, **self._options)
-            session.commit()
-            payload.update(
-                ok=result.added_count,
-                skipped=len(result.skipped),
-                failed=result.failed,
-                category=result.category_name,
-                total=result.total,
-            )
-        except Exception as exc:  # noqa: BLE001
-            session.rollback()
-            logger.exception("批量导入失败")
-            payload["error"] = str(exc)
-        finally:
-            session.close()
-        self.finished_job.emit(payload)
-
-
-class ImportPage(ScrollArea):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("importPage")
         self.session = database.new_session()
         self._files: list[str] = []
         self._directory: str | None = None
         self._tree_files: list[tuple[Path, str]] = []
-        self._worker: _ImportWorker | None = None
+        self._worker: ImportWorker | None = None
         self.selected_label_text = "尚未选择文件"
         self._started_at: dt.datetime | None = None
 
-        host = QWidget(self)
-        host.setObjectName("importHost")
-        layout = page_layout(host)
-
-        page_header(
-            layout,
-            host,
-            "导入数据",
-            "文件会按内容去重后保存到本机仓库，可单个文件导入，也可整个文件夹批量导入",
-        )
-
-        layout.addWidget(self._build_mode_card(host))
-        layout.addWidget(self._build_target_card(host))
-        layout.addWidget(self._build_details_card(host))
-        layout.addWidget(self._build_progress_card(host))
-        layout.addStretch(1)
-        self.setWidget(host)
-        clear_scroll_background(self)
-        self.setWidgetResizable(True)
+        self._build_mode_card()
+        self._build_target_card()
+        self._build_details_card()
+        self._build_progress_card()
+        self.add_stretch()
 
         self._reload_users()
         self._reload_categories()
@@ -144,8 +82,8 @@ class ImportPage(ScrollArea):
         signalBus.userChanged.connect(self._reload_categories)
 
     # ------------------------------------------------------------------ 界面
-    def _build_mode_card(self, parent: QWidget) -> CardWidget:
-        card, layout = section_card(parent, "数据来源", "文本内容或文件 / 文件夹，可随时切换", spacing=12)
+    def _build_mode_card(self) -> CardWidget:
+        card, layout = self.add_section("数据来源", "文本内容或文件 / 文件夹，可随时切换")
 
         # 已选摘要：先建好——构造期 setCurrentItem 就会触发 _set_mode。
         self.selected_label = CaptionLabel(self.selected_label_text, card)
@@ -191,9 +129,9 @@ class ImportPage(ScrollArea):
         layout.addWidget(self.selected_label)
         return card
 
-    def _build_target_card(self, parent: QWidget) -> CardWidget:
-        card, outer = section_card(
-            parent, "导入目标与数据信息", "选择导入到哪个用户与分类，并按需补充名称、标签与关键词", spacing=12
+    def _build_target_card(self) -> CardWidget:
+        card, outer = self.add_section(
+            "导入目标与数据信息", "选择导入到哪个用户与分类，并按需补充名称、标签与关键词"
         )
 
         grid = QGridLayout()
@@ -245,8 +183,8 @@ class ImportPage(ScrollArea):
         outer.addLayout(actions)
         return card
 
-    def _build_details_card(self, parent: QWidget) -> CardWidget:
-        card, layout = section_card(parent, "待导入文件信息", "先做重复检查，已在库中的文件会标记为跳过")
+    def _build_details_card(self) -> CardWidget:
+        card, layout = self.add_section("待导入文件信息", "先做重复检查，已在库中的文件会标记为跳过")
         self.details_summary = CaptionLabel("尚未选择文件", card)
         layout.addWidget(self.details_summary)
 
@@ -263,8 +201,8 @@ class ImportPage(ScrollArea):
         card.hide()
         return card
 
-    def _build_progress_card(self, parent: QWidget) -> CardWidget:
-        card, layout = section_card(parent, "导入进度", "逐个文件显示结果，失败的条目会给出原因")
+    def _build_progress_card(self) -> CardWidget:
+        card, layout = self.add_section("导入进度", "逐个文件显示结果，失败的条目会给出原因")
 
         self.progress_bar = ProgressBar(card)
         self.progress_bar.setRange(0, 100)
@@ -399,11 +337,13 @@ class ImportPage(ScrollArea):
         for node in taxonomy.tree(user_id=user_id):
             prefix = "　" * node.depth
             self.category_box.addItem(f"{prefix}{node.category.name}", userData=node.category.id)
-        wanted = current if current is not None else (uncategorized.id if uncategorized else None)
-        for index in range(self.category_box.count()):
-            if self.category_box.itemData(index) == wanted:
-                self.category_box.setCurrentIndex(index)
-                break
+        ids = {self.category_box.itemData(index) for index in range(self.category_box.count())}
+        # 目标用户切换后旧分类 id 已不属于新树：回落到该用户的「未分类」，否则会默默落到第一个根分类。
+        wanted = current if current in ids else (uncategorized.id if uncategorized else None)
+        if wanted in ids:
+            self.category_box.setCurrentIndex(
+                next(index for index in range(self.category_box.count()) if self.category_box.itemData(index) == wanted)
+            )
 
     def _reload_tags(self) -> None:
         repo = TagRepository(self.session)
@@ -492,7 +432,7 @@ class ImportPage(ScrollArea):
     # ------------------------------------------------------------------ 导入
     def import_now(self) -> None:
         if self._worker is not None and self._worker.isRunning():
-            toast_warning(self, "正在导入", "请等待当前批量导入结束")
+            self.toast_warning("正在导入", "请等待当前批量导入结束")
             return
         user_id = self.target_user_id()
         common = {
@@ -507,12 +447,12 @@ class ImportPage(ScrollArea):
 
         content = self.text_edit.toPlainText()
         if not content.strip():
-            toast_warning(self, "没有可导入的内容", "请输入文本，或切换到批量导入")
+            self.toast_warning("没有可导入的内容", "请输入文本，或切换到批量导入")
             return
         service = ImportService(self.session, library=LibraryService(self.session).ensure_default())
         busy = None
         try:
-            busy = BusyTip(self, "正在导入文本", elide(self.name_edit.text().strip() or "未命名", 40))
+            busy = self.busy("正在导入文本", elide(self.name_edit.text().strip() or "未命名", 40))
             item = service.import_text(
                 self.name_edit.text().strip(),
                 content,
@@ -521,7 +461,7 @@ class ImportPage(ScrollArea):
             )
             if item is None:
                 busy.finish("已跳过重复内容")
-                toast_warning(self, "已跳过", "相同内容的数据已存在")
+                self.toast_warning("已跳过", "相同内容的数据已存在")
                 return
             self.session.commit()
             busy.finish(f"已导入「{item.name}」")
@@ -529,12 +469,12 @@ class ImportPage(ScrollArea):
             signalBus.librariesChanged.emit()
             self._maybe_archive(f"导入文本「{item.name}」")
             self._reset_text()
-            toast_success(self, "导入成功", f"已导入文本「{item.name}」（{type_name(item.type)}）")
+            self.toast_success("导入成功", f"已导入文本「{item.name}」（{type_name(item.type)}）")
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             if busy is not None:
                 busy.finish("导入失败")
-            toast_error(self, "导入失败", str(exc))
+            self.toast_error("导入失败", str(exc))
 
     def _start_batch(self, user_id: int | None, common: dict) -> None:
         if self._directory:
@@ -552,7 +492,7 @@ class ImportPage(ScrollArea):
         self._started_at = dt.datetime.now()
         self.progress_label.setText(f"准备导入 {len(sources) if kind == 'files' else len(self._tree_files)} 个文件…")
 
-        worker = _ImportWorker(kind, sources, options)
+        worker = ImportWorker(kind, sources, options)
         worker.progressed.connect(self._on_progress)
         worker.evented.connect(self._on_event)
         worker.finished_job.connect(self._on_finished)
@@ -591,7 +531,7 @@ class ImportPage(ScrollArea):
             self._worker = None
 
         if payload.get("error"):
-            toast_error(self, "导入失败", str(payload["error"]))
+            self.toast_error("导入失败", str(payload["error"]))
             return
 
         self.session.expire_all()
@@ -605,14 +545,14 @@ class ImportPage(ScrollArea):
         self._clear_sources()
         fit_columns(self.result_table, max_width=320, weights={0: 0.4, 2: 0.3})
         if payload.get("ok"):
-            toast_success(self, "导入完成", summary)
+            self.toast_success("导入完成", summary)
         elif failed:
-            toast_error(self, "导入失败", f"{Path(failed[0][0]).name}：{failed[0][1]}")
+            self.toast_error("导入失败", f"{Path(failed[0][0]).name}：{failed[0][1]}")
         else:
-            toast_warning(self, "没有新数据", summary)
+            self.toast_warning("没有新数据", summary)
         if failed and payload.get("ok"):
             first = failed[0]
-            toast_error(self, "部分文件导入失败", f"{Path(first[0]).name}：{first[1]}")
+            self.toast_error("部分文件导入失败", f"{Path(first[0]).name}：{first[1]}")
 
     def _maybe_archive(self, note: str) -> None:
         """按设置决定导入后是否自动创建一次存档快照。"""

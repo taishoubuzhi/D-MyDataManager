@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QAbstractItemView, QGridLayout, QHeaderView, QTableWidgetItem, QWidget
 from qfluentwidgets import ComboBox, LineEdit, TableWidget
 
-from ..common import release_widget
+from ..framework import release_widget
 
 FILTER_ALL = "全部"
 

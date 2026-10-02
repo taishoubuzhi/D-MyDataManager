@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayou
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, CheckBox
 
 from ...db.models import DataItem
-from ..common import accent_color, accent_name, elide, format_datetime, format_size, release_widget, type_icon, type_name
+from ..framework import accent_color, accent_name, elide, format_datetime, format_size, release_widget, type_icon, type_name
 from .cover_loader import cover_loader
 
 COVER_SIZE = 48

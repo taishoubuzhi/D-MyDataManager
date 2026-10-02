@@ -8,6 +8,7 @@ from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton
 
+from ..framework import COMPACT_MARGINS
 from ...core.viewer_data import read_text
 
 RENDER_INDEX = 0
@@ -31,7 +32,7 @@ class MarkdownViewer(QWidget):
 
     def _build_ui(self, text: str) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         bar = QHBoxLayout()

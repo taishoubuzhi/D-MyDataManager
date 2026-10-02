@@ -17,6 +17,7 @@ from qfluentwidgets import (
     SearchLineEdit,
 )
 
+from ..framework import COMPACT_MARGINS
 from ...core import shell
 from ...core.viewer_data import ArchiveMember, archive_members, archive_read, decode_text, human_size, looks_binary
 
@@ -70,7 +71,7 @@ class ArchiveViewer(QWidget):
     # ------------------------------------------------------------------ 界面
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         bar = QHBoxLayout()

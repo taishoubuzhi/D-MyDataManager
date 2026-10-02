@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidg
 from qfluentwidgets import CaptionLabel, FluentIcon, ToolButton
 
 from ...core.viewer_data import IMAGE_EXTENSIONS, human_size, image_info
-from ..common import clear_scroll_background
+from ..framework import COMPACT_MARGINS, clear_scroll_background
 
 ZOOM_STEP = 1.25
 ZOOM_MIN = 0.05
@@ -68,7 +68,7 @@ class ImageViewer(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         bar = QHBoxLayout()

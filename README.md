@@ -52,7 +52,7 @@
 | 用户与口令 | 口令按用户独立保存（PBKDF2-HMAC-SHA256，20 万次迭代，散列工具见 `src/app/core/security.py`）：切换用户、勾选「显示隐藏项」时校验当前用户口令 |
 | 设置 | 主题（浅色 / 深色 / 跟随系统）、云母特效、导入策略、资源文件夹（更改位置 / 扫描并登记 / 重建目录结构 / 打开）、隐私保护（资源文件夹与隐藏文件两个开关：打开只是记下设置、程序退出后才锁定，关闭立刻放行；资源文件夹保护开启时隐藏开关置灰并自动收起）、存档自动清理、日志文件模式（单文件追加 / 每次启动一个文件 / 每天一个文件 / 按大小切分）与保留策略（文件数 / 单文件大小 / 保留天数 / 总量上限）、日志级别、控制台按级别着色（INFO 绿 / WARNING 黄 / ERROR 红，写 `stdout` 避免 IDE 把整行 `stderr` 标红）、恢复初始化（清空数据并重置全部设置，完成后自动重启） |；页面头部给出统一的标题与说明，「库内容」分组改用分区卡片
 | 交互反馈 | 长耗时操作（导入 / 扫描库文件夹 / 创建存档 / 重建索引）显示进行中提示并自动淡出；「重复项」按钮的工具提示显示当前范围的重复组数量；概览页「最近导入」条目可点击，跳转到数据管理页并选中该项、展开其分类；图标按钮带工具提示；窗口首次显示时自动居中 |
-| 界面样式 | 所有页面共用同一套骨架：外边距 24/20、间距 12、面板卡片 12/12/12/12 或 16/14/16/14、统一的标题行与说明文字；按钮只用 qfluentwidgets 的 `PrimaryPushButton` / `PushButton`（设置页的 `ActionCard` 原地替换了 `PushSettingCard` 自带的原生按钮）；强调色统一取主题色 `themeColor()`（默认 `#009faa`），不再有写死的蓝/青；页面自己不铺底色：概览 / 导入 / 设置 / 用户四页也已去掉各自写死的浅 / 深 QSS（`common.page_background()` 已删除），底色统一由 `install_app_theme()` 装的调色板提供、滚动区一律由 `clear_scroll_background()` 透明化，切浅色后不会再露出旧调色板的深色块；常量与构件集中在 `src/app/ui/common.py`，`dev_check_ui.py` 的 `style_uniformity` / `theme_background` 会逐页校验 |；分区卡片统一用 `common.section_card()`（`StrongBodyLabel` 标题 + `CaptionLabel` 说明 + 卡内布局），自适应高度的流式容器统一用 `widgets/flow_area.py` 的 `FlowArea`（增删控件后立即重排，隐藏期间 resize 不会把高度压成 0）
+| 界面样式 | 所有页面共用同一套骨架：外边距 24/20、间距 12、面板卡片 12/12/12/12 或 16/14/16/14、统一的标题行与说明文字；按钮只用 qfluentwidgets 的 `PrimaryPushButton` / `PushButton`（设置页的 `ActionCard` 原地替换了 `PushSettingCard` 自带的原生按钮）；强调色统一取主题色 `themeColor()`（默认 `#009faa`），不再有写死的蓝/青；页面自己不铺底色：概览 / 导入 / 设置 / 用户四页也已去掉各自写死的浅 / 深 QSS（`common.page_background()` 已随 `common.py` 一起删除），底色统一由 `install_app_theme()` 装的调色板提供、滚动区一律由 `clear_scroll_background()` 透明化，切浅色后不会再露出旧调色板的深色块；常量与构件集中在 `src/app/ui/framework/` 与 `src/app/ui/components/`，`scripts/selfcheck.py` 的 `style_uniformity` / `theme_background` 会逐页校验 |；分区卡片统一用 `framework` 的 `section_card()`（`StrongBodyLabel` 标题 + `CaptionLabel` 说明 + 卡内布局），自适应高度的流式容器统一用 `components/flow_area.py` 的 `FlowArea`（增删控件后立即重排，隐藏期间 resize 不会把高度压成 0）
 
 ## 界面预览
 
@@ -160,11 +160,11 @@ src/
     repositories/             数据访问层（查询与持久化）
     services/                 业务层（导入、条目、分类标签、导出、存档、用户与口令、隐私保护与 ACL 锁定、统计）
     ui/                       界面层
-      common.py               通用类型/格式化/提示
+      framework/              页面骨架（Page / ScrollPage、标题行、卡片、toast / confirm）、间距常量与主题色
       dialogs.py              文本输入与条目编辑对话框
       main_window.py          主窗口与导航
       pages/                  首页、导入、数据管理、标签、用户、存档、打开方式、插件、设置
-      widgets/                关键词输入与标签选择、拖放区、条目卡片、筛选面板、分类树、分页控件、封面加载器、库目录监听
+      components/             关键词输入与标签选择、拖放区、条目卡片、筛选面板、分类树、分页控件、封面加载器、库目录监听、数据表格、流式容器
       viewers/                内置查看器控件（图片、音视频、文本、Markdown、压缩包、表格）、打开流程与嵌入弹窗的内容页
     resource/                 图标与翻译资源
 config/                       用户配置（首次运行自动生成，不随代码分发）
@@ -215,22 +215,24 @@ icons/                        打包用图标（icon.ico / icon.png）
 ### 自检脚本
 
 ```powershell
-.venv\Scripts\python.exe scripts\dev_check_services.py   # 数据层：导入/编辑/导出/存档/口令/统计
-.venv\Scripts\python.exe scripts\dev_check_ui.py         # 界面构建：离屏创建主窗口并刷新各页
-.venv\Scripts\python.exe scripts\dev_check_flow.py       # 交互流程：导入→编辑→标签→删除→存档→解锁
-.venv\Scripts\python.exe scripts\dev_reset.py            # 清空数据库与运行期目录，恢复到首次运行状态
-.venv\Scripts\python.exe scripts\seed_demo.py            # 注入约 100 条示例数据，方便直接体验各功能
+.venv\Scripts\python.exe scripts\selfcheck.py                 # 全量自检：四层一次跑完，末行 RESULT failures=0
+.venv\Scripts\python.exe scripts\selfcheck.py --list          # 列出全部检查（名称 / 分层 / 一句话说明）
+.venv\Scripts\python.exe scripts\selfcheck.py --layer services  # 只跑某一层（data / services / pages / flows）
+.venv\Scripts\python.exe scripts\selfcheck.py --only manage_selection,user_journey --verbose  # 只跑指定检查，可逗号分隔
+.venv\Scripts\python.exe scripts\selfcheck.py --json          # 每项一条 JSON，便于脚本抓取
+.venv\Scripts\python.exe scripts\selfcheck.py --keep-db       # 保留临时库目录，便于排查
+.venv\Scripts\python.exe src\main.py --self-check             # 等价于全量自检；打包后没有 scripts/，退化为「建好界面就退出」的冒烟测试
+.venv\Scripts\python.exe scripts\dev_reset.py                 # 清空数据库与运行期目录，恢复到首次运行状态
+.venv\Scripts\python.exe scripts\seed_demo.py                 # 注入约 100 条示例数据，方便直接体验各功能
 ```
 
-`dev_check.py` / `dev_check_services.py` / `dev_check_flow.py` 内部会 `init_db(force=True)` 重建数据库，
-运行前由 `scripts/dev_check_guard.py` 把真实数据库备份到 `logs/_selfcheck-data.db.bak`，跑完（含异常退出）
-自动还原，所以随时可以重跑而不会弄丢已导入的数据。无图形界面的环境可先设
-`$env:QT_QPA_PLATFORM='offscreen'`。
+新套件自带隔离：在临时目录里新建数据库与配置，**不碰真实的 `.resources/`、`config/`**，所以无需备份还原、随时可重跑；
+无图形界面的环境可先设 `$env:QT_QPA_PLATFORM='offscreen'`。界面层检查的覆盖面与旧的 34 项界面检查一致，
+逐条对应关系见 [`REWRITE.md`](REWRITE.md) §7.1 的「旧门禁 → 新检查」映射表。
 
-`dev_check_ui.py` 当前包含 34 项界面回归检查（首页统计、筛选栏、固定「未分类」分类（排最后 / 带固定标识 / 无修改入口）、数据管理页单击选中与双击打开 / Ctrl 与 Shift 连选 / 三态全选框 / 批量移动入口 / 左侧分类树三态勾选过滤（含「全部数据」全选与父子级联）与分类批量移动删除（含根分类保护、右侧筛选栏无分类分组）/ 左右栏显隐切换、导入页分类、导入页用户范围（只有默认用户能替别人导入）、标签多选、关键词筛选与展示、
-标签页权限（默认用户或创建者才能改名 / 改归属 / 删除）、系统级权限（普通用户不能用恢复初始化 / 资源文件夹维护 / 插件安装启停）、用户删除迁移（当前用户不可删、只镜像有数据的分类并清掉空目录、无引用的标签直接删除、有引用的标签 / 它创建的全局标签 / 存档条目一并转默认用户）、同名个人标签并入全局（新建全局标签或启动时）、标签页逐列筛选与重置、批量导入（含真实文件夹导入与进度/结果）、单库布局、全局标签标识、用户卡片与当前用户高亮、
-最近导入跳转、清除口令权限、筛选分组折叠与三态全选、工具栏流式布局、存档标记（含已标记存档的删除保护）、存档表格筛选与分页、标签页 / 存档页 / 插件页的勾选列与批量操作、页面样式统一（每页边距/间距、面板边距、无原生 QPushButton、无写死强调色）与四页分区卡片（`section_card()`：概览 / 导入 / 用户 / 设置）、主题底色跟随（切浅色后没有任何控件仍按旧调色板实绘深色）、隐私保护分组（资源文件夹 / 隐藏文件两个开关只记设置、打开不会立刻改动 ACL、关闭立刻放行、资源文件夹保护开启时隐藏开关置灰并自动收起）、
-打开方式页、插件页、图片查看器自适应等）。
+旧套件（`scripts/dev_check.py` / `dev_check_services.py` / `dev_check_ui.py` / `dev_check_flow.py`，34 项界面检查）
+已在新套件达到功能对等后删除，逐项对应关系见 [`REWRITE.md`](REWRITE.md) §7.1；需要对照旧实现时看只读快照
+`logs/_rewrite/legacy_snapshot/scripts/` 或 git 历史。
 
 ### 单元测试
 
@@ -240,8 +242,8 @@ icons/                        打包用图标（icon.ico / icon.png）
 $env:DM_KEEP_TMP=1                                                                # 保留 tests/_tmp/ 便于排查
 ```
 
-- 用例按主题拆分，**改哪块代码只跑哪块的模块**，不再全量 `unittest discover`；整体回归交给上面的四个自检脚本
-  （数据层、服务层、交互流程与 31 项界面检查）。
+- 用例按主题拆分，**改哪块代码只跑哪块的模块**，不再全量 `unittest discover`；整体回归交给 `scripts/selfcheck.py`
+  （`data` / `services` / `pages` / `flows` 四层，末行 `RESULT failures=N`）。
 - 新增用例的范式（文件名、基类、用例命名、模板、隔离方式）见 [`tests/README.md`](tests/README.md)。
 - `tests/harness.py` 的 `IsolatedCase` 把数据库、库文件夹、内容仓库、封面与导出目录重定向到
   `tests/_tmp/<用例类名>/`，用例之间互不影响，也不会碰真实的 `.resources/`、`config/`、`logs/`。
@@ -280,7 +282,7 @@ git push origin v1.0.0
 - 发现 Bug 或有功能建议，欢迎开 [Issue](https://github.com/taishoubuzhi/D-MyDataManager/issues)；
   提 Issue 时请附上系统版本、Python 版本与 `logs/` 中对应的日志片段。
 - 提交代码前请确保：`.venv\Scripts\python.exe -m compileall -q src` 无输出、
-  相关主题的单元测试通过（只跑改动涉及的模块，范式见 [`tests/README.md`](tests/README.md)）、四个自检脚本 `RESULT failures=0`。
+  相关主题的单元测试通过（只跑改动涉及的模块，范式见 [`tests/README.md`](tests/README.md)）、`scripts/selfcheck.py` 全绿（末行 `RESULT failures=0`）。
 - 代码风格：界面文案与注释使用中文；分层保持 `ui → services → repositories → db` 单向依赖。
 
 ## 许可证

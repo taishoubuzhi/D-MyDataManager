@@ -8,6 +8,7 @@ from PyQt6.QtGui import QFontDatabase, QTextCursor
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QPlainTextEdit, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, CheckBox, ComboBox, FluentIcon, PlainTextEdit, PushButton
 
+from ..framework import COMPACT_MARGINS
 from ...core.viewer_data import ENCODINGS, read_text
 
 AUTO_ENCODING = "自动检测"
@@ -24,7 +25,7 @@ class TextViewer(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         bar = QHBoxLayout()

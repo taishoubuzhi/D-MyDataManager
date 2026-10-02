@@ -30,7 +30,7 @@ plugins/
 ```
 
 - 程序启动时扫描 `plugins/*/plugin.json`，校验清单，按依赖排序，然后 `import` 入口脚本并调用 `register(api)`。
-- 插件与主程序**同进程**、就是普通 Python 模块：`import app.services.xxx`、`import app.ui.widgets.xxx`
+- 插件与主程序**同进程**、就是普通 Python 模块：`import app.services.xxx`、`import app.ui.components.xxx`
   都可以用。你不需要注册任何东西，把目录放进去就会出现在「插件」页。
 - 内置插件和外部插件走**完全相同**的流程（同样的清单、同样的入口、同样的 `register(api)`）；
   区别只是内置插件随程序分发、清单里写了 `"builtin": true`、不能被删除，并且在依赖排序里优先载入。
@@ -370,7 +370,7 @@ def register(api) -> None:
 - **不要做重活**：`add_page` 本身只记一条登记；真正耗时的加载放在页面控件的 `showEvent` 或后台线程里。
 - **复用主程序能力**：插件是普通 Python 模块，可以直接使用主程序的模块，例如
   `from app.services.item_service import item_service`、`from app.core.signals import signalBus`、
-  `from app.ui.widgets.xxx import ...`、`from app.core.config import config`。注意这些内部接口**没有稳定
+  `from app.ui.components.xxx import ...`、`from app.core.config import config`。注意这些内部接口**没有稳定
   版本承诺**，跨版本升级可能变化；用清单的 `manager_version` 声明你需要的版本。
 - **弹出窗口**：需要独立窗口时优先依赖内置的 `dialog` 接口（`api.require("dialog").open_page(...)`），
   它已经处理好窗口装饰、Esc 退出与生命周期。

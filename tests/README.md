@@ -1,7 +1,7 @@
 # 单元测试范式
 
 本目录只保留两类东西：**共享的隔离基类**和**按主题新增的用例模块**。
-不维护「一次跑完整套」的用例集合：改动哪块代码，就只跑哪块的用例；整体回归交给 `scripts/dev_check_*.py`。
+不维护「一次跑完整套」的用例集合：改动哪块代码，就只跑哪块的用例；整体回归交给 `scripts/selfcheck.py`（自带隔离，不碰真实数据）。
 
 ## 目录
 
@@ -50,5 +50,7 @@ $env:DM_KEEP_TMP=1                                                            # 
 ```
 
 - 改完哪块代码，只跑对应主题的模块；**不再全量 `unittest discover`**。
-- 需要整体回归时跑自检脚本：`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`
-  （覆盖数据层、服务层、真实交互流程与 31 项界面检查，比单元测试更贴近真实装配）。
+- 需要整体回归时跑自检套件：`.venv\Scripts\python.exe scripts\selfcheck.py`
+  （`data` / `services` / `pages` / `flows` 四层，末行 `RESULT failures=N`），它在临时目录与全新数据库上跑，
+  不碰真实 `.resources/` 与 `config/`；只跑某一项用 `--only <检查名> --verbose`，列全部检查用 `--list`。
+  旧套件（`scripts/dev_check*.py`）已在功能对等后删除，旧实现见只读快照 `logs/_rewrite/legacy_snapshot/scripts/`。

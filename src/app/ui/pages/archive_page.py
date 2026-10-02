@@ -26,26 +26,24 @@ from qfluentwidgets import (
     SegmentedWidget,
     SubtitleLabel,
     TableWidget,
-    TitleLabel,
 )
 
 from ...core.signals import signalBus
 from ...db import database
 from ...services import ArchiveService, UserService
-from ..common import (
-    BusyTip,
+from ..dialogs import TextInputDialog
+from ..framework import (
+    DETAIL_MARGINS,
+    PANEL_MARGINS,
+    Page,
     confirm,
     format_datetime,
     format_size,
-    toast_error,
-    toast_success,
-    toast_warning,
     tri_state,
     type_name,
 )
-from ..dialogs import TextInputDialog
-from ..widgets.data_table import TableFilterBar, check_cell, fit_columns, prepare_table
-from ..widgets.pager import Pager
+from ..components.data_table import TableFilterBar, check_cell, fit_columns, prepare_table
+from ..components.pager import Pager
 
 ENTRY_STATE_LABELS = {
     "same": "一致（无需还原）",
@@ -147,10 +145,12 @@ class _ArchiveTable(TableWidget):
         return super().item(row, column)
 
 
-class ArchivePage(QWidget):
+class ArchivePage(Page):
+    page_name = "archivePage"
+    page_title = "存档"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("archivePage")
         self.session = database.new_session()
         self.service = ArchiveService(self.session)
         self.users = UserService(self.session)
@@ -165,47 +165,39 @@ class ArchivePage(QWidget):
         self._entries: list = []
         self._states: list = []
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
+        self.create_button = PrimaryPushButton(FluentIcon.SAVE, "创建存档", self)
+        self.create_button.clicked.connect(self._on_create)
+        self.header.add_action(self.create_button)
+        self.clean_button = PushButton(FluentIcon.DELETE, "清理无用文件", self)
+        self.clean_button.clicked.connect(self._on_cleanup)
+        self.header.add_action(self.clean_button)
+        self.prune_button = PushButton(FluentIcon.HISTORY, "按策略清理", self)
+        self.prune_button.clicked.connect(self._on_prune)
+        self.header.add_action(self.prune_button)
 
-        header = QHBoxLayout()
-        header.addWidget(TitleLabel("存档", self))
-        header.addStretch(1)
-        create_button = PrimaryPushButton(FluentIcon.SAVE, "创建存档", self)
-        create_button.clicked.connect(self._on_create)
-        header.addWidget(create_button)
-        clean_button = PushButton(FluentIcon.DELETE, "清理无用文件", self)
-        clean_button.clicked.connect(self._on_cleanup)
-        header.addWidget(clean_button)
-        prune_button = PushButton(FluentIcon.HISTORY, "按策略清理", self)
-        prune_button.clicked.connect(self._on_prune)
-        header.addWidget(prune_button)
-        root.addLayout(header)
         self.caption = CaptionLabel("", self)
-        root.addWidget(self.caption)
+        self.caption.setWordWrap(True)
+        self.add_widget(self.caption)
         self.policy_label = CaptionLabel("", self)
-        root.addWidget(self.policy_label)
+        self.policy_label.setWordWrap(True)
+        self.add_widget(self.policy_label)
 
-        body = QVBoxLayout()
-        body.setSpacing(12)
-
-        tabs_row = QHBoxLayout()
         self.tabs = SegmentedWidget(self)
         for route_key, label in ARCHIVE_TABS:
             self.tabs.addItem(route_key, label)
+        tabs_row = QHBoxLayout()
         tabs_row.addWidget(self.tabs)
         tabs_row.addStretch(1)
-        body.addLayout(tabs_row)
+        self.add_row(tabs_row)
 
         self.stack = QStackedWidget(self)
-        body.addWidget(self.stack, 1)
+        self.add_widget(self.stack, 1)
 
         # ---------------------------------------------------------- Tab 1：存档列表
         archive_card = CardWidget(self.stack)
         archive_card.setMinimumHeight(260)
         archive_layout = QVBoxLayout(archive_card)
-        archive_layout.setContentsMargins(12, 12, 12, 12)
+        archive_layout.setContentsMargins(*PANEL_MARGINS)
         archive_layout.setSpacing(8)
 
         archive_head = QHBoxLayout()
@@ -254,7 +246,7 @@ class ArchivePage(QWidget):
         # ---------------------------------------------------------- Tab 2：条目明细
         detail_card = CardWidget(self.stack)
         detail_layout = QVBoxLayout(detail_card)
-        detail_layout.setContentsMargins(16, 14, 16, 14)
+        detail_layout.setContentsMargins(*DETAIL_MARGINS)
         detail_layout.setSpacing(8)
         self.detail_title = SubtitleLabel("未选择存档", detail_card)
         self.detail_meta = CaptionLabel("", detail_card)
@@ -288,10 +280,7 @@ class ArchivePage(QWidget):
         self.tabs.currentItemChanged.connect(self._on_tab_changed)
         self.tabs.setCurrentItem(TAB_ARCHIVES)
 
-        root.addLayout(body, 1)
-
-        signalBus.itemsChanged.connect(self._reload_archives)
-        signalBus.archivesChanged.connect(self._reload_archives)
+        self.auto_refresh(signalBus.itemsChanged, signalBus.archivesChanged)
         signalBus.userChanged.connect(self._on_user_changed)
         self._load_identity()
         self._reload_archives()
@@ -630,31 +619,29 @@ class ArchivePage(QWidget):
         )
         if not dialog.exec():
             return
-        busy = BusyTip(self, "正在创建存档", "正在为所有数据项计算内容指纹")
+        busy = self.busy("正在创建存档", "正在为所有数据项计算内容指纹")
         try:
             archive = self.service.create(note=dialog.value())
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             busy.finish("创建存档失败")
-            toast_error(self, "创建存档失败", str(exc))
+            self.toast_error("创建存档失败", str(exc))
             return
         self.session.commit()
         self._reload_archives()
         busy.finish(f"{archive.name}（{archive.item_count} 项）")
-        toast_success(self, "存档已创建", f"{archive.name}（{archive.item_count} 项）")
+        self.toast_success("存档已创建", f"{archive.name}（{archive.item_count} 项）")
 
     def _on_restore(self) -> None:
         rows = sorted({index.row() for index in self.table.selectedItems()})
         if not rows:
-            toast_warning(self, "未选择条目", "请先在「存档内条目」中选择要还原的数据项")
+            self.toast_warning("未选择条目", "请先在「存档内条目」中选择要还原的数据项")
             return
         candidates = [
             row for row in rows if row < len(self._entries) and self._states[row] != "same"
         ]
         if not candidates:
-            toast_warning(
-                self, "无法还原", "所选条目与当前数据一致，只有不一致的数据才需要还原"
-            )
+            self.toast_warning("无法还原", "所选条目与当前数据一致，只有不一致的数据才需要还原")
             return
         restored = 0
         for row in candidates:
@@ -663,14 +650,14 @@ class ArchivePage(QWidget):
         self.session.commit()
         signalBus.itemsChanged.emit()
         if restored:
-            toast_success(self, "已还原", f"{restored} 项数据已恢复")
+            self.toast_success("已还原", f"{restored} 项数据已恢复")
         else:
-            toast_warning(self, "无法还原", "存档内容已缺失，无法恢复")
+            self.toast_warning("无法还原", "存档内容已缺失，无法恢复")
 
     def _on_restore_all(self) -> None:
         archive = self._current_archive()
         if archive is None:
-            toast_warning(self, "未选择存档", "请先在「存档列表」中选择要还原的存档")
+            self.toast_warning("未选择存档", "请先在「存档列表」中选择要还原的存档")
             return
         if not confirm(
             self,
@@ -678,31 +665,31 @@ class ArchivePage(QWidget):
             f"确定把「{archive.name}」的全部条目还原到各自用户的分类目录吗？",
         ):
             return
-        busy = BusyTip(self, "正在还原整个存档", "条目会放回其所属用户的分类目录")
+        busy = self.busy("正在还原整个存档", "条目会放回其所属用户的分类目录")
         try:
             stats = self.service.restore_all(archive)
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             busy.finish("还原失败")
-            toast_error(self, "还原失败", str(exc))
+            self.toast_error("还原失败", str(exc))
             return
         self.session.commit()
         signalBus.itemsChanged.emit()
         busy.finish(f"还原 {stats['restored']} 项")
-        toast_success(self, "整档还原完成", f"成功 {stats['restored']} 项，跳过 {stats['skipped']} 项")
+        self.toast_success("整档还原完成", f"成功 {stats['restored']} 项，跳过 {stats['skipped']} 项")
 
     def _on_toggle_pin(self) -> None:
         archive = self._current_archive()
         if archive is None:
-            toast_warning(self, "未选择存档", "请先在「存档列表」中选择要标记的存档")
+            self.toast_warning("未选择存档", "请先在「存档列表」中选择要标记的存档")
             return
         pinned = self.service.set_pinned(archive, not archive.pinned)
         self.session.commit()
         self._reload_archives()
         if pinned:
-            toast_success(self, "已标记存档", f"「{archive.name}」不会被自动清理删除")
+            self.toast_success("已标记存档", f"「{archive.name}」不会被自动清理删除")
         else:
-            toast_success(self, "已取消标记", f"「{archive.name}」将重新参与自动清理")
+            self.toast_success("已取消标记", f"「{archive.name}」将重新参与自动清理")
 
     def _on_delete(self) -> None:
         archive = self._current_archive()
@@ -710,7 +697,7 @@ class ArchivePage(QWidget):
             return
         if archive.pinned:
             # 已标记的存档受保护：必须先取消标记，才能手动删除。
-            toast_warning(self, "无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
+            self.toast_warning("无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
             return
         if not confirm(
             self,
@@ -719,40 +706,40 @@ class ArchivePage(QWidget):
         ):
             return
         if not self.service.delete(archive):
-            toast_warning(self, "无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
+            self.toast_warning("无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
             return
         self.session.commit()
         self._checked.discard(int(archive.id))
         self._selected_id = None
         self._reload_archives()
-        toast_success(self, "存档已删除", archive.name)
+        self.toast_success("存档已删除", archive.name)
 
     def _on_batch_pin(self, pinned: bool) -> None:
         """批量标记 / 批量取消标记勾选的存档。"""
         archives = self.checked_archives()
         if not archives:
-            toast_warning(self, "未选择存档", "请先勾选要批量操作的存档")
+            self.toast_warning("未选择存档", "请先勾选要批量操作的存档")
             return
         for archive in archives:
             self.service.set_pinned(archive, pinned)
         self.session.commit()
         self._reload_archives()
         if pinned:
-            toast_success(self, "已批量标记", f"{len(archives)} 个存档不会被自动清理删除")
+            self.toast_success("已批量标记", f"{len(archives)} 个存档不会被自动清理删除")
         else:
-            toast_success(self, "已批量取消标记", f"{len(archives)} 个存档将重新参与自动清理")
+            self.toast_success("已批量取消标记", f"{len(archives)} 个存档将重新参与自动清理")
 
     def _on_batch_delete(self) -> None:
         """批量删除勾选的存档；已标记的存档会被跳过，需要先取消标记。"""
         archives = self.checked_archives()
         if not archives:
-            toast_warning(self, "未选择存档", "请先勾选要批量删除的存档")
+            self.toast_warning("未选择存档", "请先勾选要批量删除的存档")
             return
         pinned = [archive for archive in archives if archive.pinned]
         removable = [archive for archive in archives if not archive.pinned]
         if not removable:
-            toast_warning(
-                self, "无法删除", f"勾选的 {len(pinned)} 个存档都已标记，请先取消标记再删除"
+            self.toast_warning(
+                "无法删除", f"勾选的 {len(pinned)} 个存档都已标记，请先取消标记再删除"
             )
             return
         note = f"其中 {len(pinned)} 个已标记的存档会被跳过，需要先取消标记。" if pinned else ""
@@ -769,35 +756,35 @@ class ArchivePage(QWidget):
         self._selected_id = None
         self._reload_archives()
         suffix = f"，跳过 {len(pinned)} 个已标记" if pinned else ""
-        toast_success(self, "存档已删除", f"删除 {len(removable)} 个存档{suffix}")
+        self.toast_success("存档已删除", f"删除 {len(removable)} 个存档{suffix}")
 
     def _on_prune(self) -> None:
-        busy = BusyTip(self, "正在按策略清理存档", "删除超出策略的较早快照，并释放不再被引用的内容")
+        busy = self.busy("正在按策略清理存档", "删除超出策略的较早快照，并释放不再被引用的内容")
         try:
             removed, freed = self.service.auto_prune()
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             busy.finish("清理失败")
-            toast_error(self, "清理失败", str(exc))
+            self.toast_error("清理失败", str(exc))
             return
         self.session.commit()
         self._reload_archives()
         if removed:
             busy.finish(f"删除 {removed} 个存档")
-            toast_success(self, "已按策略清理", f"删除 {removed} 个较早的存档，释放 {format_size(freed)}")
+            self.toast_success("已按策略清理", f"删除 {removed} 个较早的存档，释放 {format_size(freed)}")
         else:
             busy.finish("无需清理")
-            toast_warning(self, "无需清理", self.service.policy_summary())
+            self.toast_warning("无需清理", self.service.policy_summary())
 
     def _on_cleanup(self) -> None:
-        busy = BusyTip(self, "正在清理无用文件", "仓库中未被任何存档引用的内容会被删除")
+        busy = self.busy("正在清理无用文件", "仓库中未被任何存档引用的内容会被删除")
         count, freed = self.service.cleanup_orphans()
         self.session.commit()
         busy.finish(f"移除 {count} 个无用文件")
         if count:
-            toast_success(self, "已清理", f"移除 {count} 个无用文件，释放 {format_size(freed)}")
+            self.toast_success("已清理", f"移除 {count} 个无用文件，释放 {format_size(freed)}")
         else:
-            toast_warning(self, "无需清理", "没有发现无用文件")
+            self.toast_warning("无需清理", "没有发现无用文件")
 
 
 def _cell(text: str) -> QTableWidgetItem:

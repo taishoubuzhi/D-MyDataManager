@@ -21,7 +21,6 @@ from qfluentwidgets import (
     PushButton,
     SearchLineEdit,
     SubtitleLabel,
-    TitleLabel,
 )
 
 from ...core.plugins import KIND_VIEWER
@@ -38,16 +37,19 @@ from ...services.open_with_service import (
     open_with_service,
 )
 from ...services.user_service import UserService
-from ..common import toast_success, toast_warning
+from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page
 from ..viewers.open_flow import open_path
 
 
-class OpenWithPage(QWidget):
+class OpenWithPage(Page):
     """格式 → 打开方式 的配置页。"""
+
+    page_name = "openWithPage"
+    page_title = "打开方式"
+    page_subtitle = "左侧列出库里出现过的所有文件格式（含插件声明支持的格式），选中后即可为它指定打开方式。"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("openWithPage")
         self.session = database.new_session()
         self.service = open_with_service
         self.items = ItemService(self.session)
@@ -56,28 +58,14 @@ class OpenWithPage(QWidget):
         self._counts: dict[str, int] = {}
         self._current = ""
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
-
-        header = QHBoxLayout()
-        header.addWidget(TitleLabel("打开方式", self))
-        header.addStretch(1)
         plugin_button = PushButton(FluentIcon.APPLICATION, "管理插件", self)
         plugin_button.clicked.connect(self._on_manage_plugins)
-        header.addWidget(plugin_button)
+        self.header.add_action(plugin_button)
         refresh_button = PushButton(FluentIcon.SYNC, "刷新", self)
         refresh_button.clicked.connect(self._reload)
-        header.addWidget(refresh_button)
-        root.addLayout(header)
+        self.header.add_action(refresh_button)
 
-        root.addWidget(
-            CaptionLabel(
-                "左侧列出库里出现过的所有文件格式（含插件声明支持的格式），选中后即可为它指定打开方式。",
-                self,
-            )
-        )
-        root.addWidget(
+        self.add_widget(
             CaptionLabel(
                 "「使用插件打开」时可以在右侧挑一个具体插件；格式没有任何插件支持时，只剩「继承系统默认」与「自定义程序」。"
                 "设为自定义但未指定程序时，打开文件会弹出系统的「打开方式」对话框。",
@@ -91,7 +79,7 @@ class OpenWithPage(QWidget):
         left = CardWidget(self)
         left.setFixedWidth(340)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(12, 12, 12, 12)
+        left_layout.setContentsMargins(*PANEL_MARGINS)
         left_layout.setSpacing(8)
         left_layout.addWidget(SubtitleLabel("文件格式", left))
         self.search = SearchLineEdit(left)
@@ -107,7 +95,7 @@ class OpenWithPage(QWidget):
 
         right = CardWidget(self)
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(16, 14, 16, 14)
+        right_layout.setContentsMargins(*DETAIL_MARGINS)
         right_layout.setSpacing(8)
         self.detail_title = SubtitleLabel("未选择格式", right)
         self.detail_meta = CaptionLabel("先在左侧选择一个文件格式", right)
@@ -171,10 +159,9 @@ class OpenWithPage(QWidget):
         right_layout.addLayout(actions)
         body.addWidget(right, 1)
 
-        root.addLayout(body, 1)
+        self.body.addLayout(body, 1)
 
-        signalBus.openWithChanged.connect(self._reload)
-        signalBus.pluginsChanged.connect(self._reload)
+        self.auto_refresh(signalBus.openWithChanged, signalBus.pluginsChanged)
         self._reload()
 
     # ------------------------------------------------------------------ 数据
@@ -323,7 +310,7 @@ class OpenWithPage(QWidget):
 
     def _on_save(self) -> None:
         if not self._current:
-            toast_warning(self, "未选择格式", "请先在左侧选择一个文件格式")
+            self.toast_warning("未选择格式", "请先在左侧选择一个文件格式")
             return
         mode = self.mode_box.currentData() or MODE_INHERIT
         program = self.program_edit.text().strip() if mode == MODE_CUSTOM else ""
@@ -332,14 +319,14 @@ class OpenWithPage(QWidget):
         self.service.set_rule(self._current, mode, program, args, viewer_id)
         signalBus.openWithChanged.emit()
         detail = self._state_text(self._current)
-        toast_success(self, "已保存打开方式", f".{self._current} → {detail}")
+        self.toast_success("已保存打开方式", f".{self._current} → {detail}")
 
     def _on_reset(self) -> None:
         if not self._current:
             return
         self.service.remove_rule(self._current)
         signalBus.openWithChanged.emit()
-        toast_success(self, "已恢复默认", f".{self._current} 不再有单独规则")
+        self.toast_success("已恢复默认", f".{self._current} 不再有单独规则")
 
     def _sample_path(self, suffix: str) -> Path | None:
         for item in self.items.items.query(ItemFilter(include_hidden=True)):
@@ -353,13 +340,13 @@ class OpenWithPage(QWidget):
             return
         sample = self._sample_path(self._current)
         if sample is None:
-            toast_warning(self, "没有可测试的文件", f"库里还没有 .{self._current} 格式的数据")
+            self.toast_warning("没有可测试的文件", f"库里还没有 .{self._current} 格式的数据")
             return
         ok, message = open_path(sample, self.window())
         if ok:
-            toast_success(self, "已打开", f"{sample.name} · {message}")
+            self.toast_success("已打开", f"{sample.name} · {message}")
         else:
-            toast_warning(self, "打开失败", message)
+            self.toast_warning("打开失败", message)
 
     def _on_manage_plugins(self) -> None:
         signalBus.requestPlugins.emit(KIND_VIEWER)

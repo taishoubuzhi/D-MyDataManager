@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QTableWidgetItem, QWidget
 from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
@@ -11,16 +11,15 @@ from qfluentwidgets import (
     PrimaryPushButton,
     PushButton,
     TableWidget,
-    TitleLabel,
 )
 
 from ...core.signals import signalBus
 from ...db import database
 from ...db.models import Tag
 from ...services import TaxonomyService, UserService
-from ..common import confirm, toast_error, toast_success, toast_warning, tri_state
 from ..dialogs import TextInputDialog
-from ..widgets.data_table import (
+from ..framework import Page, confirm, tri_state
+from ..components.data_table import (
     TableFilterBar,
     check_cell,
     column_values,
@@ -41,12 +40,19 @@ _FILTER_COLUMNS = (
 )
 
 
-class TagPage(QWidget):
+class TagPage(Page):
     """标签管理：区分全局标签与个人标签；默认用户（管理员）可管理任意标签，其他用户只能管理自己创建的标签。"""
+
+    page_name = "tagPage"
+    page_title = "标签"
+    page_subtitle = (
+        "全局标签对所有用户可见，个人标签只属于创建者。基础标签（重要 / 待整理 / 收藏）默认即全局标签，"
+        "开箱即用；默认用户（管理员）可管理任意标签，其他用户只能改名、删除或切换自己创建的标签的归属，"
+        "个人标签不能与已有全局标签重名。"
+    )
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("tagPage")
         self.session = database.new_session()
         self.taxonomy = TaxonomyService(self.session)
         self.users = UserService(self.session)
@@ -57,27 +63,11 @@ class TagPage(QWidget):
         self._is_admin = False
         self._checked: set[int] = set()
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
-        root.setSpacing(12)
-
-        header = QHBoxLayout()
-        header.addWidget(TitleLabel("标签", self))
-        header.addStretch(1)
         self.global_box = CheckBox("新建时设为全局标签", self)
-        header.addWidget(self.global_box)
-        create_button = PrimaryPushButton(FluentIcon.ADD, "新建标签", self)
-        create_button.clicked.connect(self._on_create)
-        header.addWidget(create_button)
-        root.addLayout(header)
-        root.addWidget(
-            CaptionLabel(
-                "全局标签对所有用户可见，个人标签只属于创建者。基础标签（重要 / 待整理 / 收藏）默认即全局标签，"
-                "开箱即用；默认用户（管理员）可管理任意标签，其他用户只能改名、删除或切换自己创建的标签的归属，"
-                "个人标签不能与已有全局标签重名。",
-                self,
-            )
-        )
+        self.header.add_action(self.global_box)
+        self.create_button = PrimaryPushButton(FluentIcon.ADD, "新建标签", self)
+        self.create_button.clicked.connect(self._on_create)
+        self.header.add_action(self.create_button)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
@@ -92,14 +82,14 @@ class TagPage(QWidget):
             button.clicked.connect(slot)
             actions.addWidget(button)
         actions.addStretch(1)
-        root.addLayout(actions)
+        self.add_row(actions)
 
-        root.addLayout(self._build_selection_bar(self))
+        self.add_row(self._build_selection_bar(self))
 
         self.filter_bar = TableFilterBar(self)
         self.filter_bar.configure(_FILTER_COLUMNS)
         self.filter_bar.changed.connect(self._apply_filters)
-        root.addWidget(self.filter_bar)
+        self.add_widget(self.filter_bar)
 
         info_row = QHBoxLayout()
         self.filter_caption = CaptionLabel("", self)
@@ -108,7 +98,7 @@ class TagPage(QWidget):
         reset_button = PushButton(FluentIcon.CLEAR_SELECTION, "重置筛选", self)
         reset_button.clicked.connect(self._on_reset_filters)
         info_row.addWidget(reset_button)
-        root.addLayout(info_row)
+        self.add_row(info_row)
 
         self.table = TableWidget(self)
         self.table.setColumnCount(len(TAG_HEADERS))
@@ -117,10 +107,9 @@ class TagPage(QWidget):
         self.table.setBorderRadius(8)
         prepare_table(self.table, movable=True)
         self.table.itemChanged.connect(self._on_item_changed)
-        root.addWidget(self.table, 1)
+        self.add_widget(self.table, 1)
 
-        signalBus.tagsChanged.connect(self.refresh)
-        signalBus.userChanged.connect(self.refresh)
+        self.auto_refresh(signalBus.tagsChanged, signalBus.userChanged)
         self.refresh()
 
     # ---------------------------------------------------------------- 数据
@@ -317,15 +306,14 @@ class TagPage(QWidget):
     def _require_selection(self) -> Tag | None:
         tag = self._selected_tag()
         if tag is None:
-            toast_warning(self, "请先选择一个标签")
+            self.toast_warning("请先选择一个标签")
         return tag
 
     def _require_manage(self, tag: Tag) -> bool:
         """默认用户（管理员）可管理任意标签，其他用户只能管理自己创建的标签。"""
         if self.tag_repo.can_manage(tag, self._user_id, self._is_admin):
             return True
-        toast_warning(
-            self,
+        self.toast_warning(
             "无权修改该标签",
             f"「{tag.name}」不是你创建的标签，只有默认用户或创建者可以修改",
         )
@@ -334,7 +322,7 @@ class TagPage(QWidget):
     def _done(self, title: str, content: str = "") -> None:
         self.session.commit()
         signalBus.tagsChanged.emit()
-        toast_success(self, title, content)
+        self.toast_success(title, content)
 
     # ---------------------------------------------------------------- 操作
     def _on_create(self) -> None:
@@ -343,13 +331,13 @@ class TagPage(QWidget):
             return
         name = dialog.value()
         if not name:
-            toast_warning(self, "标签名称不能为空")
+            self.toast_warning("标签名称不能为空")
             return
         is_global = self.global_box.isChecked()
         tag = self.taxonomy.create_tag(name, user_id=self._user_id, is_global=is_global)
         if tag is None:
-            toast_warning(
-                self, "标签已存在", f"已有可见标签「{name}」，个人标签不能与全局标签重名"
+            self.toast_warning(
+                "标签已存在", f"已有可见标签「{name}」，个人标签不能与全局标签重名"
             )
             return
         self._done("标签已创建", f"{'全局' if is_global else '个人'}标签「{tag.name}」")
@@ -360,12 +348,12 @@ class TagPage(QWidget):
             return
         label = "全局" if is_global else "个人"
         if bool(tag.is_global) == is_global:
-            toast_warning(self, "标签归属未变化", f"「{tag.name}」已经是{label}标签")
+            self.toast_warning("标签归属未变化", f"「{tag.name}」已经是{label}标签")
             return
         if not self.taxonomy.set_tag_global(
             tag, is_global, user_id=self._user_id, is_admin=self._is_admin
         ):
-            toast_error(self, "切换失败", f"已存在同名全局标签「{tag.name}」")
+            self.toast_error("切换失败", f"已存在同名全局标签「{tag.name}」")
             return
         self._done("标签归属已更新", f"「{tag.name}」现在是{label}标签")
 
@@ -384,12 +372,12 @@ class TagPage(QWidget):
             return
         new_name = dialog.value()
         if not new_name or new_name == tag.name:
-            toast_warning(self, "标签名称未变化")
+            self.toast_warning("标签名称未变化")
             return
         if not self.taxonomy.rename_tag(
             tag, new_name, user_id=self._user_id, is_admin=self._is_admin
         ):
-            toast_error(self, "重命名失败", f"已存在可见标签「{new_name}」")
+            self.toast_error("重命名失败", f"已存在可见标签「{new_name}」")
             return
         self._done("标签已重命名", f"新名称「{new_name}」")
 
@@ -414,8 +402,7 @@ class TagPage(QWidget):
         ]
         skipped = [tag for tag in tags if tag not in owned]
         if skipped and not owned:
-            toast_warning(
-                self,
+            self.toast_warning(
                 f"无法{action}",
                 f"勾选的 {len(skipped)} 个标签都不是你创建的，只有默认用户或创建者可以{action}",
             )
@@ -425,7 +412,7 @@ class TagPage(QWidget):
         """批量切换勾选标签的归属（全局 / 个人）。"""
         tags = self.checked_tags()
         if not tags:
-            toast_warning(self, "未选择标签", "请先勾选要批量操作的标签")
+            self.toast_warning("未选择标签", "请先勾选要批量操作的标签")
             return
         label = "全局" if is_global else "个人"
         owned, skipped = self._owned_or_skipped(tags, f"转为{label}标签")
@@ -449,13 +436,13 @@ class TagPage(QWidget):
             detail.append(f"{failed} 个因存在同名全局标签而跳过")
         if skipped:
             detail.append(f"{len(skipped)} 个不是由你创建的已跳过")
-        toast_success(self, "标签归属已更新", "；".join(detail))
+        self.toast_success("标签归属已更新", "；".join(detail))
 
     def _on_batch_delete(self) -> None:
         """批量删除勾选的标签；只有默认用户或创建者能删除，其余跳过。"""
         tags = self.checked_tags()
         if not tags:
-            toast_warning(self, "未选择标签", "请先勾选要批量删除的标签")
+            self.toast_warning("未选择标签", "请先勾选要批量删除的标签")
             return
         owned, skipped = self._owned_or_skipped(tags, "删除")
         if not owned:
@@ -473,8 +460,7 @@ class TagPage(QWidget):
             self._checked.discard(int(tag.id))
         self.session.commit()
         signalBus.tagsChanged.emit()
-        toast_success(
-            self,
+        self.toast_success(
             "标签已删除",
             f"{len(owned)} 个标签已从 {affected} 个数据项上移除",
         )
@@ -485,7 +471,7 @@ class TagPage(QWidget):
         )
         self.session.commit()
         signalBus.tagsChanged.emit()
-        toast_success(self, "清理完成", f"已删除 {removed} 个未使用的标签")
+        self.toast_success("清理完成", f"已删除 {removed} 个未使用的标签")
 
 
 __all__ = ["TAG_CHECK_COLUMN", "TAG_HEADERS", "TagPage"]

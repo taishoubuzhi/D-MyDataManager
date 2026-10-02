@@ -10,6 +10,7 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PushButton, Slider, SubtitleLabel
 
+from ..framework import COMPACT_MARGINS
 from ...core.viewer_data import human_size
 
 
@@ -49,7 +50,7 @@ class _MediaViewer(QWidget):
     # ------------------------------------------------------------------ 界面
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         if self.shows_video:

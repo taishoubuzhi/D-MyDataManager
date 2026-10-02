@@ -36,7 +36,7 @@ _TEXT_LIMIT = 512 * 1024  # 超过该大小的文本文件不复制正文
 
 # 批量导入时直接跳过的系统文件 / 目录，避免把噪声带进库
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini"}
-SKIP_DIRS = {"__MACOSX", ".git", ".svn", "__pycache__", "node_modules"}
+SKIP_DIRS = {"__MACOSX", ".git", ".svn", "__pycache__", "node_modules", ".datamanager"}
 
 # 进度回调：每处理完一个文件调用一次（已是最终状态）
 ImportEventHook = Callable[["ImportEvent"], None]
@@ -336,10 +336,7 @@ class ImportService:
             # 「未分类」是固定分类，不能在其下创建子分类：文件夹改为导入成一级分类。
             logger.info("「{}」是固定分类，{} 改为导入成一级分类", UNCATEGORIZED_NAME, clean)
             parent_id = None
-        existing = self.categories.by_name(clean, parent_id, user_id)
-        if existing is not None:
-            return existing
-        created = self.categories.create(clean, parent_id, "", "", "", user_id)
+        created = self.categories.ensure(clean, parent_id, user_id)
         self.session.flush()
         return created
 

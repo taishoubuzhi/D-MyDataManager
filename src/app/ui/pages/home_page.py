@@ -1,4 +1,8 @@
-"""首页：KPI 概览、快捷操作、最近导入与类型分布。"""
+"""首页：KPI 概览、快捷操作、最近导入与类型分布。
+
+页面骨架由 `framework.ScrollPage` 提供（标题区 + 分区卡片 + 统一间距），
+本模块只负责把统计数据填进卡片，并保留 `_total_card` 等既有属性名。
+"""
 
 from __future__ import annotations
 
@@ -15,35 +19,29 @@ from qfluentwidgets import (
     PrimaryPushButton,
     ProgressBar,
     PushButton,
-    ScrollArea,
     StrongBodyLabel,
     TitleLabel,
 )
 
 from ...core.config import resources_root
-from ..dialogs import TextInputDialog
 from ...core.shell import reveal
 from ...core.signals import signalBus
 from ...db import database
 from ...repositories import ArchiveRepository
 from ...services import ArchiveService, UserService, overview, recent
-from ..widgets.flow_area import FlowArea
-from ..common import (
+from ..components.flow_area import FlowArea
+from ..dialogs import TextInputDialog
+from ..framework import (
     DETAIL_MARGINS,
-    BusyTip as BusyTipWidget,
-    confirm,
+    KPI_MARGINS,
+    ROW_SPACING,
+    ScrollPage,
+    clear_layout,
+    empty_state,
     format_datetime,
     format_size,
-    clear_scroll_background,
-    page_header,
-    page_layout,
-    release_widget,
-    toast_error,
-    toast_success,
     type_icon,
     type_name,
-    toast_warning,
-    section_card,
 )
 
 KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数")
@@ -142,7 +140,7 @@ class _Row(CardWidget):
         for label in (icon_label, left, right):
             label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setContentsMargins(*KPI_MARGINS)
         layout.setSpacing(8)
         layout.addWidget(icon_label)
         layout.addWidget(left)
@@ -175,35 +173,35 @@ class _TypeBar(QWidget):
         layout.addWidget(CaptionLabel(str(count), self), 0)
 
 
-class HomePage(ScrollArea):
+class HomePage(ScrollPage):
+    page_name = "homePage"
+    page_title = "数据概览"
+    page_subtitle = "所有数据都保存在本机，导入时会自动去重并记录特征"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("homePage")
         self.session = database.new_session()
         self.kpi_cards: list[StatCard] = []
         self._type_bars: list[_TypeBar] = []
 
-        host = QWidget(self)
-        host.setObjectName("homeHost")
-        layout = page_layout(host)
-
-        header = page_header(layout, host, "数据概览", "所有数据都保存在本机，导入时会自动去重并记录特征")
-        self.user_box = ComboBox(host)
+        self.user_box = ComboBox(self.header)
         self.user_box.setMinimumWidth(150)
         self.user_box.setToolTip("切换当前用户；数据管理、标签、存档等页面会随之切换")
         self.user_box.currentIndexChanged.connect(self._on_user_changed)
-        header.addWidget(CaptionLabel("当前用户", host))
-        header.addWidget(self.user_box)
+        self.header.add_action(CaptionLabel("当前用户", self.header))
+        self.header.add_action(self.user_box)
 
+        cards_card, cards_body = self.add_section("概览", "当前用户的数据总量、占用空间与今日导入情况")
         self.cards_host = FlowArea(
-            host, adaptive=True, minimum_width=180, horizontal_spacing=12, vertical_spacing=12
+            cards_card, adaptive=True, minimum_width=180, horizontal_spacing=12, vertical_spacing=12
         )
-        cards_card, cards_body = section_card(host, "概览", "当前用户的数据总量、占用空间与今日导入情况")
         cards_body.addWidget(self.cards_host)
-        layout.addWidget(cards_card)
 
+        actions_card, actions_body = self.add_section(
+            "快捷操作", "常用入口：导入数据、管理数据、打开资源文件夹与新建存档"
+        )
         self.actions_host = FlowArea(
-            host, adaptive=True, minimum_width=120, horizontal_spacing=8, vertical_spacing=8
+            actions_card, adaptive=True, minimum_width=120, horizontal_spacing=8, vertical_spacing=8
         )
         import_button = PrimaryPushButton(FluentIcon.ADD, "导入数据", self.actions_host)
         import_button.setToolTip("导入文件或文件夹，自动去重并记录特征")
@@ -218,36 +216,32 @@ class HomePage(ScrollArea):
         archive_button.setToolTip("为当前数据创建一份存档快照")
         archive_button.clicked.connect(self._create_archive)
         self.actions_host.add_widgets((import_button, manage_button, folder_button, archive_button))
-        actions_card, actions_body = section_card(host, "快捷操作", "常用入口：导入数据、管理数据、打开资源文件夹与新建存档")
         actions_body.addWidget(self.actions_host)
-        layout.addWidget(actions_card)
 
-        self._recent_host = QWidget(host)
+        recent_card, recent_body = self.add_section(
+            "最近导入", "最近导入的数据，点击一行可直接定位到数据管理页"
+        )
+        self._recent_host = QWidget(recent_card)
         self._recent_layout = QVBoxLayout(self._recent_host)
         self._recent_layout.setContentsMargins(0, 0, 0, 0)
-        self._recent_layout.setSpacing(6)
-        recent_card, recent_body = section_card(host, "最近导入", "最近导入的数据，点击一行可直接定位到数据管理页")
+        self._recent_layout.setSpacing(ROW_SPACING)
         recent_body.addWidget(self._recent_host)
-        layout.addWidget(recent_card)
 
-        self._type_host = QWidget(host)
+        type_card, type_body = self.add_section("类型分布", "按文件类型统计当前用户的数据占比")
+        self._type_host = QWidget(type_card)
         self._type_layout = QVBoxLayout(self._type_host)
         self._type_layout.setContentsMargins(0, 0, 0, 0)
-        self._type_layout.setSpacing(6)
-        type_card, type_body = section_card(host, "类型分布", "按文件类型统计当前用户的数据占比")
+        self._type_layout.setSpacing(ROW_SPACING)
         type_body.addWidget(self._type_host)
-        layout.addWidget(type_card)
 
-        layout.addStretch(1)
-        self.setWidget(host)
-        clear_scroll_background(self)
-        self.setWidgetResizable(True)
-
-        signalBus.itemsChanged.connect(self.refresh)
-        signalBus.categoriesChanged.connect(self.refresh)
-        signalBus.tagsChanged.connect(self.refresh)
-        signalBus.userChanged.connect(self.refresh)
-        signalBus.archivesChanged.connect(self.refresh)
+        self.add_stretch()
+        self.auto_refresh(
+            signalBus.itemsChanged,
+            signalBus.categoriesChanged,
+            signalBus.tagsChanged,
+            signalBus.userChanged,
+            signalBus.archivesChanged,
+        )
         self.refresh()
 
     # ------------------------------------------------------------------ 刷新
@@ -262,17 +256,18 @@ class HomePage(ScrollArea):
         self._rebuild_cards(entries)
         self._sync_card_refs(entries)
 
-        self._clear(self._recent_layout)
+        clear_layout(self._recent_layout)
         items = recent(self.session, user_id=user_id)
         if not items:
-            self._recent_layout.addWidget(CaptionLabel("还没有导入任何数据", self._recent_host))
+            self._recent_layout.addWidget(empty_state(self._recent_host, "还没有导入任何数据"))
         for item in items:
             self._recent_layout.addWidget(_Row(item, self._recent_host))
 
         self._rebuild_type_bars(type_distribution(stats["by_type"], stats["total"]))
 
     def _rebuild_cards(self, entries: list[tuple[str, str, str]]) -> None:
-        self._clear(self.cards_host)
+        for widget in self.cards_host.take_widgets():
+            widget.deleteLater()
         self.kpi_cards = []
         for title, value, sub in entries:
             card = StatCard(title, KPI_ICONS.get(title, FluentIcon.LABEL), self.cards_host)
@@ -292,10 +287,10 @@ class HomePage(ScrollArea):
         self._archive_card = by_title["存档数"]
 
     def _rebuild_type_bars(self, distribution: list[tuple[str, int, float]]) -> None:
-        self._clear(self._type_layout)
+        clear_layout(self._type_layout)
         self._type_bars = []
         if not distribution:
-            self._type_layout.addWidget(CaptionLabel("还没有导入任何数据", self._type_host))
+            self._type_layout.addWidget(empty_state(self._type_host, "还没有导入任何数据"))
             return
         for key, count, ratio in distribution:
             bar = _TypeBar(key, count, ratio, self._type_host)
@@ -328,48 +323,35 @@ class HomePage(ScrollArea):
                 "切换用户", f"请输入 {user.name} 的口令", parent=self.window(), hint="留空以取消"
             )
             if not dialog.exec() or not service.verify(user, dialog.value()):
-                toast_warning(self, "口令错误", f"无法切换到 {user.name}")
+                self.toast_warning("口令错误", f"无法切换到 {user.name}")
                 self._reload_users()
                 return
         service.set_current(user)
         self.session.commit()
         signalBus.userChanged.emit()
-        toast_success(self, "已切换用户", user.name)
+        self.toast_success("已切换用户", user.name)
 
     def _open_resource_folder(self) -> None:
         path = resources_root()
         if not reveal(path):
-            toast_error(self, "无法打开资源文件夹", str(path))
+            self.toast_error("无法打开资源文件夹", str(path))
 
     def _create_archive(self) -> None:
-        if not confirm(self, "新建存档", "将为当前数据创建一份存档快照，是否继续？"):
+        if not self.confirm("新建存档", "将为当前数据创建一份存档快照，是否继续？"):
             return
-        tip = BusyTipWidget(self, "正在创建存档", "整理数据快照…")
+        tip = self.busy("正在创建存档", "整理数据快照…")
         try:
             ArchiveService(self.session).create()
             self.session.commit()
         except Exception as error:  # noqa: BLE001
             self.session.rollback()
             tip.finish("存档失败")
-            toast_error(self, "创建存档失败", str(error))
+            self.toast_error("创建存档失败", str(error))
             return
         tip.finish("存档完成")
-        toast_success(self, "已创建存档", "可在「存档」页查看与还原")
+        self.toast_success("已创建存档", "可在「存档」页查看与还原")
         signalBus.archivesChanged.emit()
         self.refresh()
-
-    def _clear(self, container) -> None:
-        """清空普通布局或 FlowArea 中的控件，并交回 Qt 释放。"""
-        if isinstance(container, FlowArea):
-            widgets = container.take_widgets()
-        else:
-            widgets = []
-            while container.count():
-                entry = container.takeAt(0)
-                widgets.append(entry.widget() if hasattr(entry, "widget") else entry)
-        for widget in widgets:
-            if widget is not None:
-                release_widget(widget)
 
 
 __all__ = ["HomePage", "StatCard", "format_summary", "type_distribution"]

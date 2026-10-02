@@ -6,7 +6,7 @@ from PyQt6.QtCore import QEvent, QRect, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, FlowLayout, FluentIcon, LineEdit, ToolButton, ToolTipFilter
 
-from ..common import accent_color
+from ..framework import accent_color
 
 
 def _chip_qss() -> str:

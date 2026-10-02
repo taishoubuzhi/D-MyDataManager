@@ -9,6 +9,7 @@ import atexit
 import datetime as dt
 import json
 import os
+import runpy
 import sys
 from pathlib import Path
 
@@ -30,7 +31,7 @@ from app.services.layout_migration import migrate_layout, migrate_uncategorized 
 from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.services.privacy_service import privacy  # noqa: E402
-from app.ui.common import install_app_theme  # noqa: E402
+from app.ui.framework import install_app_theme  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -162,9 +163,29 @@ def _lock_on_exit() -> None:
     _clear_session_marker()
 
 
+def _run_selfcheck() -> int | None:
+    """`--self-check`：源码仓库里存在新自检套件时交给它运行，返回它的退出码。
+
+    套件自带隔离（临时库、临时配置），所以这里在启动流程之前就返回，不碰真实数据；
+    打包后没有 `scripts/` 目录，返回 None 让调用方退回「建好界面就退出」的冒烟测试。
+    """
+    script = Path(__file__).resolve().parents[1] / "scripts" / "selfcheck.py"
+    if not script.is_file():
+        return None
+    sys.argv = [arg for arg in sys.argv if arg != "--self-check"]
+    logger.info("运行自检套件：{} {}", script, " ".join(sys.argv[1:]))
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else 0
+    return 0
+
+
 def main() -> int:
     if "--unlock" in sys.argv:  # 应急：只放行保护区，不启动界面
         return _unlock_only()
+    if "--self-check" in sys.argv and (code := _run_selfcheck()) is not None:
+        return code
     setup_logging()
     _apply_dpi_scale()
     _report_previous_session()

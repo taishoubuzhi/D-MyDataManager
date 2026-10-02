@@ -33,26 +33,39 @@ class CategoryRepository(Repository[Category]):
         )
         return list(self.session.scalars(stmt))
 
+    def siblings_named(self, name: str, parent_id: int | None) -> list[Category]:
+        """同级下所有同名分类（不分归属）。"""
+        stmt = select(Category).where(Category.name == name)
+        stmt = stmt.where(Category.parent_id.is_(None)) if parent_id is None else stmt.where(Category.parent_id == parent_id)
+        return list(self.session.scalars(stmt))
+
     def by_name(
         self, name: str, parent_id: int | None = None, user_id: int | None = None
     ) -> Category | None:
-        stmt = select(Category).where(Category.name == name)
-        stmt = stmt.where(Category.parent_id.is_(None)) if parent_id is None else stmt.where(Category.parent_id == parent_id)
-        if user_id is not None:
-            stmt = stmt.where(Category.user_id == user_id)
-        return self.session.scalars(stmt).first()
+        """按名字取同级分类：优先同归属，其次共享（无归属）；不返回其他用户的分类。
+
+        同级唯一约束 `(parent_id, name)` 是全局的，指定归属时若只看自己那一行，
+        会在已有共享同名分类的情况下误判「没有重名」，进而触发唯一约束冲突。
+        """
+        rows = self.siblings_named(name, parent_id)
+        if not rows:
+            return None
+        if user_id is None:
+            return next((row for row in rows if row.user_id is None), rows[0])
+        owned = next((row for row in rows if row.user_id == user_id), None)
+        return owned or next((row for row in rows if row.user_id is None), None)
 
     def unique_sibling_name(
         self, name: str, parent_id: int | None = None, user_id: int | None = None
     ) -> str:
-        """同级不允许重名：name 已被占用时依次尝试 name-1、name-2…"""
+        """同级不允许重名：被任何归属占用时依次尝试 name-1、name-2…（唯一约束是全局的）。"""
         name = (name or "").strip()
-        if not name or self.by_name(name, parent_id, user_id) is None:
+        if not name or not self.siblings_named(name, parent_id):
             return name
         index = 1
         while True:
             candidate = f"{name}-{index}"
-            if self.by_name(candidate, parent_id, user_id) is None:
+            if not self.siblings_named(candidate, parent_id):
                 return candidate
             index += 1
 
@@ -83,8 +96,12 @@ class CategoryRepository(Repository[Category]):
         return self.add(category)
 
     def ensure(self, name: str, parent_id: int | None = None, user_id: int | None = None) -> Category:
+        """按名字取分类，没有就新建；被其他用户占用同级同名时改用空闲名字，避免唯一约束冲突。"""
         category = self.by_name(name, parent_id, user_id)
-        return category if category is not None else self.create(name, parent_id, user_id=user_id)
+        if category is not None:
+            return category
+        safe = name if not self.siblings_named(name, parent_id) else self.unique_sibling_name(name, parent_id)
+        return self.create(safe, parent_id, user_id=user_id)
 
     def path_of(self, category: Category | None) -> str:
         if category is None:

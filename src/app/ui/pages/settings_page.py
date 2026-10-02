@@ -1,8 +1,7 @@
-"""设置页：外观、导入、存储、日志与维护。"""
+"""设置页：外观、导入、存储、资源文件夹、隐私、日志与维护。"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -15,7 +14,6 @@ from qfluentwidgets import (
     PushButton,
     PushSettingCard,
     RangeSettingCard,
-    ScrollArea,
     SettingCard,
     SettingCardGroup,
     StrongBodyLabel,
@@ -27,24 +25,18 @@ from qfluentwidgets import (
 from ...core import logging_setup, paths
 from ...core.config import config, export_dir, resources_root, set_resource_root
 from ...core.signals import signalBus
+from ...core.version import APP_VERSION
 from ...db import database
 from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
 from ...services.privacy_service import privacy
-from ..common import (
-    BusyTip,
+from ..framework import (
+    ScrollPage,
     confirm,
-    clear_scroll_background,
-    page_header,
-    page_layout,
+    open_path,
     release_widget,
     restart_application,
-    toast_success,
-    toast_warning,
-    section_card,
 )
-
-APP_VERSION = "0.1.0"
 
 
 class ComboSettingCard(SettingCard):
@@ -76,42 +68,38 @@ class ActionCard(PushSettingCard):
         self.button.clicked.connect(self.clicked)
 
 
-class SettingsPage(ScrollArea):
+class SettingsPage(ScrollPage):
+    page_name = "settingsPage"
+    page_title = "设置"
+    page_subtitle = "外观、导入、存储与隐私选项，改动会立即生效"
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("settingsPage")
         self.session = database.new_session()
         self.users = UserService(self.session)
         self._is_admin = self.users.is_admin()
 
-        host = QWidget(self)
-        host.setObjectName("settingsHost")
-        layout = page_layout(host)
-        page_header(layout, host, "设置", "外观、导入、存储与隐私选项，改动会立即生效")
-
-        layout.addWidget(self._appearance_group(host))
-        layout.addWidget(self._import_group(host))
-        layout.addWidget(self._storage_group(host))
-        layout.addWidget(self._library_group(host))
-        layout.addWidget(self._privacy_group(host))
-        layout.addWidget(self._library_card(host))
-        layout.addWidget(self._log_group(host))
-        layout.addWidget(self._maintenance_group(host))
-        layout.addWidget(self._about_group(host))
-        layout.addStretch(1)
-
-        self.setWidget(host)
-        clear_scroll_background(self)
-        self.setWidgetResizable(True)
+        for group in (
+            self._appearance_group(),
+            self._import_group(),
+            self._storage_group(),
+            self._library_group(),
+            self._privacy_group(),
+            self._library_card(),
+            self._log_group(),
+            self._maintenance_group(),
+            self._about_group(),
+        ):
+            self.add_widget(group)
+        self.add_stretch()
 
         signalBus.userChanged.connect(self._sync_admin)
         self._apply_permissions()
 
     # ------------------------------------------------------------------ 分组
-    def _appearance_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("外观", parent)
-
-        theme_card = ComboSettingCard(
+    def _appearance_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("外观", self)
+        self._theme_card = ComboSettingCard(
             FluentIcon.BRUSH,
             "主题",
             "切换浅色、深色或跟随系统",
@@ -120,7 +108,7 @@ class SettingsPage(ScrollArea):
             self._on_theme_changed,
             group,
         )
-        group.addSettingCard(theme_card)
+        group.addSettingCard(self._theme_card)
 
         mica_card = SwitchSettingCard(
             FluentIcon.TRANSPARENT,
@@ -145,8 +133,8 @@ class SettingsPage(ScrollArea):
         )
         return group
 
-    def _import_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("导入", parent)
+    def _import_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("导入", self)
 
         group.addSettingCard(
             SwitchSettingCard(
@@ -179,8 +167,8 @@ class SettingsPage(ScrollArea):
         )
         return group
 
-    def _storage_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("存储", parent)
+    def _storage_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("存储", self)
 
         pick_export = ActionCard("选择目录", FluentIcon.SAVE, "默认导出目录", str(export_dir()), group)
         pick_export.clicked.connect(self._choose_export_dir)
@@ -233,14 +221,14 @@ class SettingsPage(ScrollArea):
         return group
 
     def _rebuild_search_index(self) -> None:
-        busy = BusyTip(self, "正在重建索引", "数据较多时需要一点时间")
+        busy = self.busy("正在重建索引", "数据较多时需要一点时间")
         database.rebuild_fts()
         self.session.expire_all()
         busy.finish("全文检索已可正常使用")
-        toast_success(self, "索引已重建", "全文检索已可正常使用")
+        self.toast_success("索引已重建", "全文检索已可正常使用")
 
-    def _log_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("日志", parent)
+    def _log_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("日志", self)
 
         group.addSettingCard(
             ComboSettingCard(
@@ -326,8 +314,8 @@ class SettingsPage(ScrollArea):
         )
         return group
 
-    def _maintenance_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("维护", parent)
+    def _maintenance_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("维护", self)
         self._reset_card = ActionCard(
             "恢复初始化",
             FluentIcon.DELETE,
@@ -347,8 +335,8 @@ class SettingsPage(ScrollArea):
         group.addSettingCard(self._maintenance_permission_card)
         return group
 
-    def _about_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("关于", parent)
+    def _about_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("关于", self)
         group.addSettingCard(
             SettingCard(FluentIcon.INFO, "版本", f"v{APP_VERSION} · 数据目录 {paths.ROOT}", group)
         )
@@ -359,13 +347,11 @@ class SettingsPage(ScrollArea):
         mapping = {"light": Theme.LIGHT, "dark": Theme.DARK, "auto": Theme.AUTO}
         setTheme(mapping.get(value, Theme.AUTO))
         config.set(config.theme, value)
-        toast_success(self, "主题已切换", {"light": "浅色", "dark": "深色"}.get(value, "跟随系统"))
+        self.toast_success("主题已切换", {"light": "浅色", "dark": "深色"}.get(value, "跟随系统"))
 
     def _open_path(self, path) -> None:
-        try:
-            os.startfile(str(path))  # noqa: S606
-        except Exception as exc:  # noqa: BLE001
-            toast_warning(self, "无法打开目录", str(exc))
+        if not open_path(path):
+            self.toast_warning("无法打开目录", str(path))
 
     def _reload_session(self) -> None:
         """恢复初始化会销毁数据库引擎，旧会话随之失效。"""
@@ -392,7 +378,7 @@ class SettingsPage(ScrollArea):
         """系统级设置只有默认用户（管理员）可以改动。"""
         if self._is_admin:
             return True
-        toast_warning(self, "无权操作", f"只有默认用户可以{action}")
+        self.toast_warning("无权操作", f"只有默认用户可以{action}")
         return False
 
     def _reset_to_defaults(self) -> None:
@@ -405,23 +391,26 @@ class SettingsPage(ScrollArea):
             "此操作不可撤销，确定继续？",
         ):
             return
-        tip = BusyTip(self, "正在恢复初始化", "清空数据并写入默认用户与分类…")
+        tip = self.busy("正在恢复初始化", "清空数据并写入默认用户与分类…")
         try:
             reset_to_defaults()
         except Exception as exc:  # noqa: BLE001
             tip.finish("恢复失败")
-            toast_warning(self, "恢复初始化失败", str(exc))
+            self.toast_warning("恢复初始化失败", str(exc))
             return
         self._reload_session()
         self._refresh_libraries()
-        signalBus.itemsChanged.emit()
-        signalBus.categoriesChanged.emit()
-        signalBus.tagsChanged.emit()
-        signalBus.userChanged.emit()
-        signalBus.archivesChanged.emit()
-        signalBus.librariesChanged.emit()
+        for signal in (
+            signalBus.itemsChanged,
+            signalBus.categoriesChanged,
+            signalBus.tagsChanged,
+            signalBus.userChanged,
+            signalBus.archivesChanged,
+            signalBus.librariesChanged,
+        ):
+            signal.emit()
         tip.finish("已恢复初始化")
-        toast_success(self, "已恢复初始化", "设置已重置，应用即将重启")
+        self.toast_success("已恢复初始化", "设置已重置，应用即将重启")
         restart_application()
 
     def _choose_export_dir(self) -> None:
@@ -430,7 +419,7 @@ class SettingsPage(ScrollArea):
             return
         config.set(config.exportPath, directory)
         self._export_card.setContent(directory)
-        toast_success(self, "已更新导出目录", directory)
+        self.toast_success("已更新导出目录", directory)
 
     def _on_prune_mode_changed(self, value: str) -> None:
         config.set(config.pruneMode, value)
@@ -447,7 +436,7 @@ class SettingsPage(ScrollArea):
         config.set(config.logMode, value)
         self._sync_log_cards()
         label = logging_setup.MODE_LABELS.get(value, value)
-        toast_success(self, "已切换日志文件模式", f"{label} · 重启应用后生效")
+        self.toast_success("已切换日志文件模式", f"{label} · 重启应用后生效")
 
     def _sync_log_cards(self) -> None:
         """按日志模式启用对应的细节设置卡。"""
@@ -455,9 +444,9 @@ class SettingsPage(ScrollArea):
         self._log_max_file_card.setEnabled(bool(logging_setup.MODE_USES_FILE_SIZE.get(mode, True)))
         self._log_keep_days_card.setEnabled(bool(logging_setup.MODE_USES_KEEP_DAYS.get(mode, False)))
 
-    # ------------------------------------------------------------------ 库
-    def _library_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("资源文件夹", parent)
+    # ------------------------------------------------------------------ 资源文件夹
+    def _library_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("资源文件夹", self)
 
         self._path_card = ActionCard(
             "更改位置",
@@ -508,8 +497,8 @@ class SettingsPage(ScrollArea):
         group.addSettingCard(self._library_permission_card)
         return group
 
-    def _privacy_group(self, parent: QWidget) -> SettingCardGroup:
-        group = SettingCardGroup("隐私保护", parent)
+    def _privacy_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("隐私保护", self)
 
         self._resource_switch = SwitchSettingCard(
             FluentIcon.FOLDER,
@@ -560,21 +549,21 @@ class SettingsPage(ScrollArea):
             return
         self._normalize_privacy()
         if not privacy.supported():
-            toast_warning(self, "当前系统不支持", "只有 Windows 支持 ACL 锁定")
+            self.toast_warning("当前系统不支持", "只有 Windows 支持 ACL 锁定")
             self._refresh_privacy()
             return
         if config.resourceProtected.value or config.hiddenProtected.value:
-            toast_success(self, "已开启保护", "程序退出后会锁定保护目录；运行期间保持可访问")
+            self.toast_success("已开启保护", "程序退出后会锁定保护目录；运行期间保持可访问")
         else:
             count, message = privacy.unlock()
             if count:
-                toast_success(self, "已关闭保护", f"已放行 {count} 个目录")
+                self.toast_success("已关闭保护", f"已放行 {count} 个目录")
             else:
-                toast_warning(self, "放行失败", message)
+                self.toast_warning("放行失败", message)
         self._refresh_privacy()
 
-    def _library_card(self, parent: QWidget) -> CardWidget:
-        card, layout = section_card(parent, "库内容", "各用户的数据文件夹与全局资源目录")
+    def _library_card(self) -> CardWidget:
+        card, layout = self.add_section("库内容", "各用户的数据文件夹与全局资源目录")
         self._library_layout = QVBoxLayout()
         self._library_layout.setContentsMargins(0, 0, 0, 0)
         self._library_layout.setSpacing(6)
@@ -645,17 +634,17 @@ class SettingsPage(ScrollArea):
             moved = set_resource_root(directory)
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
-            toast_warning(self, "无法更改位置", str(exc))
+            self.toast_warning("无法更改位置", str(exc))
             return
         # 引擎已指向新位置，各页面持有的会话随之失效：重启程序最稳妥。
         privacy.invalidate()
-        toast_success(self, "资源文件夹已迁移", f"{moved}\n程序即将重启")
+        self.toast_success("资源文件夹已迁移", f"{moved}\n程序即将重启")
         restart_application()
 
     def _scan_library(self) -> None:
         if not self._require_admin("扫描并登记库文件夹"):
             return
-        busy = BusyTip(self, "正在扫描库文件夹", "扫描完成后文件才会登记为数据项")
+        busy = self.busy("正在扫描库文件夹", "扫描完成后文件才会登记为数据项")
         try:
             service = LibraryService(self.session)
             result = service.scan(service.ensure_default())
@@ -663,13 +652,13 @@ class SettingsPage(ScrollArea):
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
             busy.finish("扫描失败")
-            toast_warning(self, "扫描失败", str(exc))
+            self.toast_warning("扫描失败", str(exc))
             return
         for signal in (signalBus.itemsChanged, signalBus.categoriesChanged, signalBus.librariesChanged):
             signal.emit()
         self._refresh_libraries()
         busy.finish(f"扫描完成：{result.summary()}")
-        toast_success(self, "扫描完成", result.summary())
+        self.toast_success("扫描完成", result.summary())
 
     def _rebuild_layout(self) -> None:
         if not self._require_admin("重建目录结构"):
@@ -679,11 +668,11 @@ class SettingsPage(ScrollArea):
             self.session.commit()
         except Exception as exc:  # noqa: BLE001
             self.session.rollback()
-            toast_warning(self, "无法重建目录结构", str(exc))
+            self.toast_warning("无法重建目录结构", str(exc))
             return
         signalBus.librariesChanged.emit()
         self._refresh_libraries()
-        toast_success(self, "已重建目录结构", "、".join(created))
+        self.toast_success("已重建目录结构", "、".join(created))
 
 
 __all__ = ["SettingsPage"]
