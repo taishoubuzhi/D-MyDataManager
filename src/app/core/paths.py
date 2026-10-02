@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
@@ -54,6 +53,8 @@ PLUGIN_DIR = ROOT / "plugins"
 PLUGIN_STATE_FILE = CONFIG_DIR / "plugins.json"
 # 打开方式规则：扩展名 → 内置 / 继承 / 自定义
 OPEN_WITH_FILE = CONFIG_DIR / "open_with.json"
+# 会话标记：程序启动时写下，正常退出时删除；残留下来的就是「上次没正常退出」
+SESSION_FILE = CONFIG_DIR / "session.json"
 PLUGIN_MANIFEST = "plugin.json"
 
 # 库文件夹结构（单一库）：<库>/全局/ 放全局资源，<库>/<用户名>/ 放该用户的数据
@@ -85,13 +86,20 @@ def global_subdirs(library_root: Path) -> tuple[Path, ...]:
     )
 
 
-def release_locked_root() -> None:
-    """按设置放行被 ACL 锁上的资源文件夹（保护未开启时什么都不做）。
+#: 本进程是否已经放行过资源文件夹（静态保护：运行期整场放行，只需放行一次）
+_released = False
 
-    上一次会话退出时会锁上资源文件夹（拒绝 Everyone 读写），此时按路径的
-    新建/删除都会被拒绝，所以动文件系统前先放行；调用方负责之后恢复锁定
-    （`privacy.guard()` / `privacy.lock()`）。
+
+def release_locked_root() -> None:
+    """放行被 ACL 锁上的资源文件夹（保护未开启时什么都不做）。
+
+    上一次会话退出时会锁上资源文件夹，此时按路径的 mkdir / 新建都会被拒绝，
+    所以动文件系统前先放行。静态保护模型下运行期不再加锁，因此同一进程里
+    只真正放行一次（否则 `ensure_dirs()` 会反复调用 icacls，启动要多花好几秒）。
     """
+    global _released
+    if _released:
+        return
     from . import acl  # 延迟导入：acl 只依赖标准库
     from .config import config, resources_root  # 延迟导入，避免 core 内部循环
 
@@ -99,31 +107,28 @@ def release_locked_root() -> None:
         return
     for target in dict.fromkeys((resources_root(), DATA_DIR, DEFAULT_RESOURCE_DIR)):
         acl.unlock(target)
-
-
-@contextmanager
-def resource_access():
-    """访问资源文件夹：被锁着时瞬时放行，退出后立即恢复锁定。"""
-    from ..services.privacy_service import privacy  # 延迟导入，避免循环依赖
-
-    with privacy.guard():
-        yield
+    _released = True
 
 
 def make_dir(directory: str | Path) -> Path:
-    """创建目录：资源文件夹被锁上时先瞬时放行。
+    """创建目录（幂等）：资源文件夹被锁上时先放行，失败只记日志不抛出。
 
     被锁上时 `mkdir(exist_ok=True)` 会因为无法确认「目录已存在」抛
-    `FileExistsError: [WinError 183]`，所以统一走这里。
+    `FileExistsError: [WinError 183]`，所以统一走这里；真的建不出来时也不能
+    让程序起不来——后面真正需要这个目录的操作会自己报错。
     """
     target = Path(directory)
-    with resource_access():
+    release_locked_root()
+    try:
         target.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _logger.warning("创建目录失败：%s：%s", target, exc)
     return target
 
 
 def ensure_dirs() -> None:
     """创建运行期需要的目录（幂等）。"""
+    release_locked_root()
     directories = [
         DATA_DIR,
         LOG_DIR,
@@ -180,6 +185,6 @@ def migrate_legacy_dir(target: Path | None = None) -> Path | None:
         make_dir(destination.parent)
         legacy.rename(destination)
     except OSError as exc:  # 跨盘 / 权限不足时不阻断启动
-        _logger.warning("无法把 {} 迁移到 {}：{}", legacy, destination, exc)
+        _logger.warning("无法把 %s 迁移到 %s：%s", legacy, destination, exc)
         return None
     return destination

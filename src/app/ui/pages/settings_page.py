@@ -473,7 +473,7 @@ class SettingsPage(ScrollArea):
         self._resource_switch = SwitchSettingCard(
             FluentIcon.FOLDER,
             "保护资源文件夹",
-            "对 Everyone 关闭继承并拒绝读/遍历，资源管理器显示「拒绝访问」；程序读写时瞬时放行",
+            "程序退出后对 Everyone 关闭继承并拒绝读/遍历，资源管理器显示「拒绝访问」；运行期间保持可访问",
             configItem=config.resourceProtected,
             parent=group,
         )
@@ -483,7 +483,7 @@ class SettingsPage(ScrollArea):
         self._hidden_switch = SwitchSettingCard(
             FluentIcon.HIDE,
             "保护隐藏文件",
-            "锁定各分类下的 .hiddens 隐藏目录；隐藏数据在磁盘上同样不可直接查看",
+            "程序退出后锁定各分类下的 .hiddens 隐藏目录；隐藏数据在磁盘上同样不可直接查看",
             configItem=config.hiddenProtected,
             parent=group,
         )
@@ -514,7 +514,7 @@ class SettingsPage(ScrollArea):
         privacy.invalidate()
 
     def _on_protection_changed(self) -> None:
-        """开关变化：开启即刻锁定，关闭即刻放行。"""
+        """开关变化：开启只是记下设置（程序退出后生效），关闭立刻放行。"""
         if getattr(self, "_suppress_privacy", False):
             return
         self._normalize_privacy()
@@ -523,14 +523,13 @@ class SettingsPage(ScrollArea):
             self._refresh_privacy()
             return
         if config.resourceProtected.value or config.hiddenProtected.value:
-            count, message = privacy.lock()
-            if count:
-                toast_success(self, "已开启保护", f"已锁定 {count} 个目录")
-            else:
-                toast_warning(self, "锁定失败", message)
+            toast_success(self, "已开启保护", "程序退出后会锁定保护目录；运行期间保持可访问")
         else:
-            privacy.unlock()
-            toast_success(self, "已关闭保护", "保护目录已放行")
+            count, message = privacy.unlock()
+            if count:
+                toast_success(self, "已关闭保护", f"已放行 {count} 个目录")
+            else:
+                toast_warning(self, "放行失败", message)
         self._refresh_privacy()
 
     def _library_card(self, parent: QWidget) -> CardWidget:

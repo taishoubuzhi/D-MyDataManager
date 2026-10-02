@@ -63,6 +63,7 @@ def redirect_paths(root: Path) -> None:
     paths.PLUGIN_DIR = root / "plugins"
     paths.PLUGIN_STATE_FILE = paths.CONFIG_DIR / "plugins.json"
     paths.OPEN_WITH_FILE = paths.CONFIG_DIR / "open_with.json"
+    paths.SESSION_FILE = paths.CONFIG_DIR / "session.json"
     paths.ensure_dirs()
     return data
 

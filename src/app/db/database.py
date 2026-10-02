@@ -52,10 +52,7 @@ _FTS_BACKFILL = f"""INSERT INTO {FTS_TABLE}(rowid, name, content, keywords)
 
 
 def _sqlite_pragmas(dbapi_connection, _record) -> None:
-    """SQLite 默认关闭外键约束，这里打开并启用 WAL 以改善并发读写。
-
-    自建连接（`_guarded_sqlite_connection`）已经在放行窗口内设过，不再重复注册。
-    """
+    """SQLite 默认关闭外键约束，这里打开并启用 WAL 以改善并发读写。"""
     try:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
@@ -73,10 +70,8 @@ def get_engine() -> Engine:
         if url.startswith("sqlite"):
             paths.make_dir(db_file().parent)
             options["connect_args"] = {"check_same_thread": False}
-            if not config.dbUrl.value:  # 自定义 URL 时不动它的连接方式
-                options["creator"] = _guarded_sqlite_connection
         _engine = create_engine(url, **options)
-        if not options.get("creator"):
+        if url.startswith("sqlite"):
             event.listens_for(_engine, "connect")(_sqlite_pragmas)
         logger.info("数据库引擎已创建：{}", url)
     return _engine
@@ -126,36 +121,6 @@ def _stored_schema_version(engine: Engine) -> int | None:
         return None
 
 
-def _privacy_guard():
-    """资源文件夹受保护时，打开/重建数据库要先瞬时放行。
-
-    延迟导入避免 core.config ↔ db.database 的循环依赖。
-    """
-    from ..services.privacy_service import privacy
-
-    return privacy.guard()
-
-
-def _guarded_sqlite_connection():
-    """新建 SQLite 连接：资源文件夹被 ACL 锁着时先瞬时放行。
-
-    连接池只在会话真正用到时才建连接（多个页面/线程同时用会话就会再建一个），
-    而且 `-wal` / `-shm` 也是连接首次读写时按路径打开的，所以连接建立、PRAGMA 与
-    首次读都要放在同一个放行窗口里，否则会报 `unable to open database file`
-    或 `disk I/O error`。
-    """
-    with _privacy_guard():
-        connection = sqlite3.connect(str(db_file()), check_same_thread=False)
-        cursor = connection.cursor()
-        try:
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("SELECT count(*) FROM sqlite_master").fetchone()
-        finally:
-            cursor.close()
-    return connection
-
-
 def backup_database_file(target: Path) -> Path | None:
     """把当前数据库完整复制到 target。
 
@@ -167,11 +132,10 @@ def backup_database_file(target: Path) -> Path | None:
         return None
     paths.make_dir(target.parent)
     try:
-        with _privacy_guard():
-            # sqlite3 的 with 只提交事务不关连接，Windows 上必须显式关闭，否则 data.db 一直被占用
-            with closing(sqlite3.connect(str(source))) as src, closing(sqlite3.connect(str(target))) as dst:
-                src.backup(dst)
-                dst.execute("PRAGMA journal_mode=DELETE")
+        # sqlite3 的 with 只提交事务不关连接，Windows 上必须显式关闭，否则 data.db 一直被占用
+        with closing(sqlite3.connect(str(source))) as src, closing(sqlite3.connect(str(target))) as dst:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
     except sqlite3.Error as exc:
         logger.error("备份数据库失败：{}", exc)
         return None
@@ -185,13 +149,12 @@ def _reset_for_schema_change() -> None:
         return
     path = db_file()
     dispose_engine()
-    with _privacy_guard():
-        if path.exists() and path.stat().st_size:
-            backup = backup_database_file(path.with_name(f"{path.name}.bak-{dt.datetime.now():%Y%m%d-%H%M%S}"))
-            if backup is not None:
-                logger.warning("数据库结构已更新，旧库已备份为 {}，将重建空库", backup.name)
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{path}{suffix}").unlink(missing_ok=True)
+    if path.exists() and path.stat().st_size:
+        backup = backup_database_file(path.with_name(f"{path.name}.bak-{dt.datetime.now():%Y%m%d-%H%M%S}"))
+        if backup is not None:
+            logger.warning("数据库结构已更新，旧库已备份为 {}，将重建空库", backup.name)
+    for suffix in ("", "-wal", "-shm"):
+        Path(f"{path}{suffix}").unlink(missing_ok=True)
 
 
 # 2 -> 3：tags 表补 is_global / created_by，历史 user_id 为空的行视为全局标签
@@ -316,21 +279,20 @@ def _write_schema_version(engine: Engine) -> None:
 
 
 def init_db(force: bool = False) -> None:
-    # 连接池在这里建立，之后一直复用；受保护时打开数据库要先放行
-    with _privacy_guard():
-        engine = get_engine()
-        if force:
-            with engine.begin() as connection:
-                connection.exec_driver_sql(f"DROP TABLE IF EXISTS {FTS_TABLE}")
-            Base.metadata.drop_all(engine)
-            logger.warning("已按要求删除全部数据表")
-        else:
-            _reset_for_schema_change()
-            _upgrade_schema()
-        engine = get_engine()
-        Base.metadata.create_all(engine)
-        ensure_fts(engine)
-        _write_schema_version(engine)
+    # 连接池在这里建立，之后一直复用；静态保护下运行期整场放行，连接不再需要放行窗口
+    engine = get_engine()
+    if force:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+        Base.metadata.drop_all(engine)
+        logger.warning("已按要求删除全部数据表")
+    else:
+        _reset_for_schema_change()
+        _upgrade_schema()
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    ensure_fts(engine)
+    _write_schema_version(engine)
     logger.info("数据表已就绪")
 
 

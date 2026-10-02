@@ -12,7 +12,7 @@ from pathlib import Path
 from qfluentwidgets import ConfigItem, qconfig
 
 from ..core import paths
-from ..core.config import config, library_root, lock_resource_root, release_resource_root
+from ..core.config import config, library_root, release_resource_root
 from ..db import database
 from ..db.seed import seed
 
@@ -72,7 +72,7 @@ def reset_runtime_data() -> None:
         session.commit()
     finally:
         session.close()
-    lock_resource_root()  # 重建后按设置恢复锁定
+    # 静态保护：运行期整场放行，重建后不需要立刻锁上（退出时才锁）
 
 
 def reset_to_defaults() -> None:

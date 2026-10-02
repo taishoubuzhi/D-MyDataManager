@@ -1392,7 +1392,8 @@ def _check_settings_extras(window) -> list[str]:
 
 
 def _check_privacy_group(window) -> list[str]:
-    """资源文件夹卡片与隐私保护分组存在，资源加密时隐藏开关置灰。"""
+    """资源文件夹卡片与隐私保护分组存在；开关只记设置，打开不会立刻锁定，关闭立刻放行。"""
+    from app.core import acl
     from app.core.config import config, resources_root
     from app.services.privacy_service import privacy
 
@@ -1417,6 +1418,10 @@ def _check_privacy_group(window) -> list[str]:
         problems.append("隐私状态文案为空")
     key = bool(config.resourceProtected.value)
     hidden_key = bool(config.hiddenProtected.value)
+    calls: list[str] = []
+    real_lock, real_unlock = acl.lock, acl.unlock
+    acl.lock = lambda path: (calls.append(f"lock:{path}"), (True, ""))[1]
+    acl.unlock = lambda path: (calls.append(f"unlock:{path}"), (True, ""))[1]
     try:
         config.set(config.resourceProtected, True)
         config.set(config.hiddenProtected, True)
@@ -1426,11 +1431,22 @@ def _check_privacy_group(window) -> list[str]:
             problems.append("资源文件夹保护开启时没有收起隐藏文件开关")
         if page._hidden_switch.isEnabled():
             problems.append("资源文件夹保护开启时隐藏文件开关没有置灰")
+        if "退出后" not in joined:
+            problems.append("隐私保护说明没有写清「退出后才锁定」")
+        # 打开开关只是记下设置：运行期整场放行，不能立刻改动 ACL
+        page._on_protection_changed()
+        if calls:
+            problems.append(f"打开保护开关时立刻改动了 ACL：{calls}")
+        # 关闭开关立刻放行
         config.set(config.resourceProtected, False)
+        page._on_protection_changed()
+        if not any(call.startswith("unlock:") for call in calls):
+            problems.append("关闭保护开关时没有立刻放行")
         page._refresh_privacy()
         if not page._hidden_switch.isEnabled():
             problems.append("关闭资源文件夹保护后隐藏文件开关仍然置灰")
     finally:
+        acl.lock, acl.unlock = real_lock, real_unlock
         config.set(config.resourceProtected, key)
         config.set(config.hiddenProtected, hidden_key)
         page._hidden_switch.setChecked(hidden_key)

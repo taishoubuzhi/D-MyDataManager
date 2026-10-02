@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import atexit
+import datetime as dt
+import json
 import os
 import sys
 from pathlib import Path
@@ -58,28 +61,129 @@ def _apply_theme() -> None:
     setTheme({"light": Theme.LIGHT, "dark": Theme.DARK}.get(config.theme.value, Theme.AUTO))
 
 
+#: 退出流程只跑一次（aboutToQuit 与 atexit 都会调）
+_locked = False
+
+
+def _unlock_only() -> int:
+    """`--unlock`：程序因保护区打不开时的应急命令，放行后不启动界面。"""
+    count, message = privacy.force_unlock()
+    text = f"已放行 {count} 个目录" + (f"（{message}）" if message else "")
+    logger.info(text)
+    print(text)
+    return 0
+
+
+def _previous_session_marker() -> dict:
+    """上次会话留下的标记；没有则返回空字典。"""
+    try:
+        raw = paths.SESSION_FILE.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        logger.warning("读取会话标记失败：{}", exc)
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_session_marker() -> None:
+    """写下本次会话标记（配置目录不在保护区里，任何时候都能写）。"""
+    payload = {
+        "pid": os.getpid(),
+        "started_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "resource_protected": bool(config.resourceProtected.value),
+        "hidden_protected": bool(config.hiddenProtected.value),
+    }
+    try:
+        paths.make_dir(paths.SESSION_FILE.parent)
+        paths.SESSION_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        logger.warning("写入会话标记失败：{}", exc)
+
+
+def _clear_session_marker() -> None:
+    try:
+        paths.SESSION_FILE.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("删除会话标记失败：{}", exc)
+
+
+def _report_previous_session() -> None:
+    """上次没正常退出（标记残留）时记一条日志：保护可能没锁上，但启动不受影响。"""
+    previous = _previous_session_marker()
+    if not previous:
+        return
+    logger.warning(
+        "上次会话未正常结束（标记残留：pid={}，开始于 {}）；保护目录可能仍处于放行状态，本次启动会重新放行一次",
+        previous.get("pid", "?"),
+        previous.get("started_at", "?"),
+    )
+    _clear_session_marker()
+
+
+def _bootstrap_data() -> None:
+    """建目录、开库并补齐基础数据（此时资源文件夹已放行）。"""
+    paths.ensure_dirs()
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        migrate_layout(session)
+        migrate_uncategorized(session)
+
+
+def _degrade_protection(exc: Exception) -> None:
+    """放行失败时的兜底：关掉保护开关并强制放行——宁可少一层保护，也不能让程序打不开。"""
+    logger.error("资源文件夹保护影响了启动（{}）：已关闭保护开关并强制放行", exc)
+    config.set(config.resourceProtected, False)
+    config.set(config.hiddenProtected, False)
+    count, message = privacy.force_unlock()
+    logger.info("强制放行完成：{} 个目录（{}）", count, message)
+
+
 def _lock_on_exit() -> None:
-    """退出前收好数据库再按设置重新锁定，让数据「静止时不可读」。"""
-    with privacy.guard():
+    """退出前收好数据库，再按设置锁定——静态保护下这是唯一真正锁上的时机。"""
+    global _locked
+    if _locked:
+        return
+    _locked = True
+    try:
         dispose_engine()
-    count, message = privacy.lock()
-    if count:
-        logger.info("已按隐私设置锁定 {} 个目录", count)
-    elif message and message != "没有开启保护":
-        logger.warning("退出前锁定失败：{}", message)
+        count, message = privacy.end_session()
+        if count:
+            logger.info("已按隐私设置锁定 {} 个目录", count)
+        elif message and message != "没有开启保护":
+            logger.warning("退出前锁定失败：{}", message)
+    except Exception as exc:  # 退出流程不能再抛异常
+        logger.warning("退出前锁定失败：{}", exc)
+    _clear_session_marker()
 
 
 def main() -> int:
+    if "--unlock" in sys.argv:  # 应急：只放行保护区，不启动界面
+        return _unlock_only()
     setup_logging()
     _apply_dpi_scale()
-    # 上一次退出时锁上的资源文件夹要先放行：建目录、开库、补数据都只用这一小段时间
-    with privacy.guard():
-        paths.ensure_dirs()
-        init_db()
-        with session_scope() as session:
-            seed(session)
-            migrate_layout(session)
-            migrate_uncategorized(session)
+    _report_previous_session()
+    _write_session_marker()
+    # 启动自愈第一步：无论上次是正常退出还是崩溃，先放行资源文件夹；静态保护下运行期一直放行
+    privacy.begin_session()
+    try:
+        _bootstrap_data()
+    except Exception as exc:
+        _degrade_protection(exc)
+        try:
+            _bootstrap_data()
+        except Exception as fatal:
+            logger.exception("数据库初始化失败，程序无法启动：{}", fatal)
+            print(
+                f"数据库初始化失败：{fatal}\n可执行 `python src/main.py --unlock` 应急放行后重试",
+                file=sys.stderr,
+            )
+            return 2
 
     app = QApplication(sys.argv)
     _setup_translator(app)
@@ -88,6 +192,7 @@ def main() -> int:
     install_app_theme()
     # 退出时把资源文件夹与隐藏目录重新锁上（开启保护时）
     app.aboutToQuit.connect(_lock_on_exit)
+    atexit.register(_lock_on_exit)  # 控制台 Ctrl+C 等非 Qt 退出路径也收尾
 
     # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())

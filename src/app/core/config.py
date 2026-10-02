@@ -188,17 +188,11 @@ def _migrate_legacy_resource_path() -> None:
 
 
 def release_resource_root() -> None:
-    """放行被 ACL 锁上的资源文件夹（启动、重建、搬迁前调用；保护未开启时不动）。"""
+    """放行被 ACL 锁上的资源文件夹（启动、重建、搬迁前调用；保护未开启时不动）。
+
+    静态保护下运行期整场放行，只有程序退出时才重新锁定，因此这里不需要配对加锁。
+    """
     paths.release_locked_root()
-
-
-def lock_resource_root() -> None:
-    """按当前设置重新锁定资源文件夹（保护未开启时什么都不做）。"""
-    if not config.resourceProtected.value:
-        return
-    from ..services.privacy_service import privacy  # 延迟导入，避免循环依赖
-
-    privacy.lock()
 
 
 def set_resource_root(folder: str | Path) -> Path:
@@ -223,7 +217,6 @@ def set_resource_root(folder: str | Path) -> Path:
     paths.ensure_dirs()
     database.init_db()
     _rebase_library_paths(current / "library", target / "library")
-    lock_resource_root()  # 换了位置：按设置把新位置锁上
     return target
 
 

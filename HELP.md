@@ -51,20 +51,22 @@
   导入时 `is_hidden=True` 直接落到 `.hiddens/`（`ImportService.sanitize_subdir()`）；扫描时 `.hiddens/` 之后不再参与分类匹配，里面的文件登记为隐藏项。
   存档记录 `ArchiveEntry.is_hidden`（schema 5 → 6），还原时按存档把隐藏状态对齐回来（内容相同但隐藏状态不同也算 `changed`）。
 - 隐私保护（`src/app/core/acl.py` + `src/app/services/privacy_service.py`）：配置项 `Storage/Resource-Protected`（锁资源文件夹）与
-  `Storage/Hidden-Protected`（只锁各 `.hiddens/`），在「设置 → 隐私保护」用两个开关直接切换：打开即刻锁定、关闭即刻放行。
-  `acl.lock()` 用 `icacls <路径> /inheritance:r /deny *S-1-1-0:(OI)(CI)(RX)` 拒绝 Everyone 读取并去掉继承，`acl.unlock()` 反向恢复；
-  需要读写库的服务方法用 `@guarded`（或 `with privacy.guard():`）在调用期间临时放行，`acl.released()` 可重入（计数加锁，封面缩略图在工作线程读取）。
+  `Storage/Hidden-Protected`（只锁各 `.hiddens/`），在「设置 → 隐私保护」用两个开关切换。
+  `acl.lock()` 用 `icacls <路径> /inheritance:r /deny *S-1-1-0:(OI)(CI)(RX)` 拒绝 Everyone 读取并去掉继承，`acl.unlock()` 反向恢复。
   资源文件夹受保护时隐藏项开关置灰并自动收起（`targets()` 用 `elif`：资源根已锁就不再单独列 `.hiddens`），
   设置页 `_normalize_privacy()` 负责把同时为真的两个开关收敛掉。
-- 长时间读取用 `privacy.hold()` / `privacy.release()` 保持放行：查看器窗口打开期间一直持锁（`ViewerWindow.__init__` 持有、`closeEvent`/`destroyed` 释放），
-  期间 `privacy.guard()` 不再反复加解锁；封面缩略图线程用 `with privacy.guard():` 包住 `QImage` 读取。
-- 打开数据库也要放行：`database._privacy_guard()`（延迟导入避免循环依赖）包住 `init_db()`、`_reset_for_schema_change()`
-  与 `backup_database_file()` —— 受保护时新建连接/备份/删除 `-wal`/`-shm` 都需要目录可进入。
-  程序运行期连接池保持已建立的连接，正常读写不需要反复加解锁。
-- `main.py` 启动时把「建目录 + 开库 + 补数据」整体包在 `with privacy.guard():` 里（瞬时放行、退出即恢复锁定），
-  退出时 `aboutToQuit` → `_lock_on_exit()` 先 `dispose_engine()`（让 WAL 收尾写回 `data.db`）再 `privacy.lock()`。
-  非 Windows 平台 `is_supported()` 为假，一律跳过并只打日志。
-- `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转与 ACL 命令构造；`dev_check_ui.py` 的 `privacy_group` 检查设置页分组。
+- **静态保护模型**：ACL 无法区分同一用户下的不同进程，程序自己也会被拒绝，因此不再「平时锁着、读写时瞬时放行」，而是
+  **运行期整场放行、退出时才锁定**。开关的语义随之变为：打开只是记下设置（下次启动整场放行、退出后锁定），关闭立刻放行
+  （`_on_protection_changed()` → `privacy.unlock()`）。`privacy.guard()` / `@guarded` 现在是纯语义标记（直接 `yield`），不再翻转 ACL；
+  数据库连接、备份、删除 `-wal`/`-shm` 都不再需要放行窗口（`database._privacy_guard()` / `_guarded_sqlite_connection()` 已删除）。
+- **异常退出自愈**：启动时 `privacy.begin_session()` 先强制放行资源根与各 `.hiddens`（`force_unlock()` 无视设置），
+  `paths.make_dir()` 建目录失败只告警不致命，`paths.release_locked_root()` 每个进程只放行一次（`_released` 标志）。
+  `_bootstrap_data()`（建目录 + 开库 + 补数据）失败时 `_degrade_protection()` 会关掉两个开关并强制放行再重试一次；
+  仍然失败则打印 `python src/main.py --unlock` 的应急提示并返回码 2。`--unlock` 只强制放行、不改设置。
+  会话标记 `config/session.json`（`paths.SESSION_FILE`）在启动时写入、退出时删除，残留即说明上次异常退出并记入日志。
+  退出路径是 `aboutToQuit` + `atexit` 双保险：`_lock_on_exit()` 先 `dispose_engine()`（让 WAL 收尾写回 `data.db`）再 `privacy.end_session()`，
+  幂等（`main._locked`）。非 Windows 平台 `is_supported()` 为假，一律跳过并只打日志。
+- `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转、ACL 命令构造、会话标记与启动自愈；`dev_check_ui.py` 的 `privacy_group` 检查设置页分组与「打开不立刻锁定、关闭立刻放行」。
 
 ## 翻译文件
 
