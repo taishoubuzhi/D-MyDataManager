@@ -43,3 +43,4 @@ _*.log
 _legacy_src/
 _backup_*/
 
+/stubs/

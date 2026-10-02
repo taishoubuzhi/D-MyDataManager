@@ -1,6 +1,6 @@
 # 项目重写方案（TODO.md 任务 1）
 
-> 状态：Phase 0–6 全部完成。`src/app/ui/{framework,components,pages}` 就位，旧 `common.py`、`widgets/` 与旧门禁脚本 `scripts/dev_check*.py` 已删除；`scripts/selfcheck.py` 四层（`data` 4 / `services` 18 / `pages` 22 / `flows` 3）共 47 项检查全绿（末行 `RESULT failures=0`），`src\main.py --self-check` 在源码仓库里等价于全量自检，`compileall`（本机 3.14 与打包目标 3.13 都通过）、`unittest` 50 项、旧套件在删除前也保持可用。移植期与收尾期修掉四个产品缺陷并各配回归检查：①`CategoryRepository` 同级重名在归属不同时误判「无重名」，触发 `UNIQUE constraint failed: categories.parent_id, categories.name` 使整档还原崩溃（`category_shared_conflicts`）；②导入页切换目标用户后分类下拉回落到第一个根分类而不是「未分类」（`import_page_scope` 新增断言）；③插件列表为空时非管理员仍能点到「启用 / 停用插件」「插件更多选项」「删除插件」（`superuser_permissions` 新增断言）；④滚动区只清视口时自身仍按调色板实绘底色，浅色主题下三个滚动页与用户页卡片列表会露出上一个主题的深色底，改按 qfluentwidgets `ScrollArea.enableTransparentBackground()`的写法把滚动区自身与内层容器设为透明（`scroll_backgrounds`）；另按目录树导入时跳过库元数据目录 `.datamanager`（`import_tree_skips_meta`）。旧 34 项门禁的逐项去向见第 7.1 节，打包（PyAppify）验证结论见第 7.2 节，旧实现只读快照见第 9 节。第 4、6 节细节见 `logs/_rewrite/spec/{A_core_db_repo,B_services,C_ui_plugins_checks}.md`（只读参考）。
+> 状态：Phase 0–6 全部完成。`src/app/ui/{framework,components,pages}` 就位，旧 `common.py`、`widgets/` 与旧门禁脚本 `scripts/dev_check*.py` 已删除；`scripts/selfcheck.py` 四层（`data` 4 / `services` 27 / `pages` 26 / `flows` 3）共 60 项检查全绿（末行 `RESULT failures=0`；18 / 22 → 26 / 26 与新增的插件检查来自后续的任务 2，见第 10 节；v5 又加 `plugin_stubs_current`，见第 11 节），`src\main.py --self-check` 在源码仓库里等价于全量自检，`compileall`（本机 3.14 与打包目标 3.13 都通过）、`unittest` 50 项、旧套件在删除前也保持可用。移植期与收尾期修掉四个产品缺陷并各配回归检查：①`CategoryRepository` 同级重名在归属不同时误判「无重名」，触发 `UNIQUE constraint failed: categories.parent_id, categories.name` 使整档还原崩溃（`category_shared_conflicts`）；②导入页切换目标用户后分类下拉回落到第一个根分类而不是「未分类」（`import_page_scope` 新增断言）；③插件列表为空时非管理员仍能点到「启用 / 停用插件」「插件更多选项」「删除插件」（`superuser_permissions` 新增断言）；④滚动区只清视口时自身仍按调色板实绘底色，浅色主题下三个滚动页与用户页卡片列表会露出上一个主题的深色底，改按 qfluentwidgets `ScrollArea.enableTransparentBackground()`的写法把滚动区自身与内层容器设为透明（`scroll_backgrounds`）；另按目录树导入时跳过库元数据目录 `.datamanager`（`import_tree_skips_meta`）。旧 34 项门禁的逐项去向见第 7.1 节，打包（PyAppify）验证结论见第 7.2 节，旧实现只读快照见第 9 节。第 4、6 节细节见 `logs/_rewrite/spec/{A_core_db_repo,B_services,C_ui_plugins_checks}.md`（只读参考）。
 > 参考仓库：`PyQt-Fluent-Widgets/`（库源码 1.11.3，与 `requirements.txt` 里 `PyQt6-Fluent-Widgets==1.11.3` 同版本），参考其 `docs/source/*` 与 `examples/gallery` 的工程组织。
 
 ## 1. 目标与范围
@@ -8,12 +8,12 @@
 - **目标**：从零重写 D-MyDataManager，以 PyQt-Fluent-Widgets 的 GUI 架构为基准，消除现存页面之间"风格 / 结构 / 交互不一致"的问题；功能与真实数据保持兼容。
 - **范围内**：`src/` 全部（core / data / repositories / services / ui / 插件宿主 / 入口）、`scripts/`（自检与开发脚本）、`tests/`（单测套件）、随代码的文档（`README.md` / `HELP.md` / `PLUGIN.md`）。
 - **范围外（用户明确要求先不做）**：TODO 任务 2（插件系统重构）、任务 3（存档增量 / 压缩）、任务 4（远程交互）。
-  - 因此**插件协议与现有插件冻结**：`plugins/` 下 11 个内置插件必须在新架构下继续可用，协议字段、`plugin.py` 约定、插件使用的 `app.*` 导入路径都要保持（或提供兼容层）。
+  - 因此**插件协议与现有插件冻结**：`plugins/` 下 11 个内置插件必须在新架构下继续可用，协议字段、`plugin.py` 约定、插件使用的 `app.*` 导入路径都要保持（或提供兼容层）。（**后续变化**：用户随后要求实施 TODO 任务 2，插件协议改为 v4 并重建内置插件，见第 10 节；第 5 节里标注「冻结」的插件协议面已随任务 2 调整。）
 - **验收**：另写一套新的自检套件（见第 7 节）；旧套件（`scripts/dev_check*.py`）已在新套件功能对等后删除（只读快照见第 9 节）。
 - **红线（不可破坏）**：
   1. 真实数据 `.resources/data.db`（含正文 FTS）与 `.resources/library/**` 的文件布局；
   2. `config/config.json`、`config/open_with.json`、`config/plugins.json` 的键与语义；
-  3. `plugins/*/plugin.json` + `plugin.py` 的协议；
+  3. `plugins/*/plugin.json` + `plugin.py` 的协议（重写期冻结；任务 2 起由 v4 协议取代，见第 10 节）；
   4. Windows 下的沙箱 / ACL 行为（资源保护、隐藏文件开关）；
   5. `src/main.py --self-check` 这类既有入口语义要保留（可重构实现）。
 
@@ -40,7 +40,7 @@ app/
 
 ## 3. 新目录布局
 
-顶层包名保持不变（`app.core.viewer_data`、`app.core.plugin_kinds`、`app.ui.viewers.*` 是冻结的插件导入面，改路径等于改插件协议），重写的是包内部的代码组织。
+顶层包名保持不变（重写期 `app.core.viewer_data`、`app.core.plugin_kinds`、`app.ui.viewers.*` 被当作冻结的插件导入面，改路径等于改插件协议），重写的是包内部的代码组织。（任务 2 取消了类型概念，`app.core.plugin_kinds` 已删除，扩展名表也从 `app.core.viewer_data` 下沉到插件 `data/viewer.json`；v5 进一步取消了「插件按 `app.ui.viewers.<x>` 导入」这条冻结面 —— 视图代码已搬进各插件，程序侧不再被插件依赖，见第 11 节。）
 
 ```
 src/
@@ -48,16 +48,16 @@ src/
   app/
     bootstrap.py             # 启动装配：日志 → 配置 → 数据库 → 插件 → 信号 → UI
     core/                    # 基础设施（不含业务）：paths / config / logging_setup / signals / security / acl / shell / version
-                             #   插件协议面（冻结）：plugins(host) / plugin_kinds / plugin_options / viewers / viewer_data / app_ui / extensions
+                             #   插件协议面：plugin_core / plugin_options / viewers / app_ui / extensions
     db/                      # SQLAlchemy：database(engine/session/迁移/一次性修复) / models / seed
     repositories/            # 纯数据访问：items / categories / tags / users / libraries / archives / base
     services/                # 业务：library / taxonomy / item / import / archive / blob / export / stats / user / privacy / open_with / plugin / feature / maintenance / layout_migration
     ui/
       framework/             # 页面基座：Page 基类、page_header、section_card、间距常量、EmptyState、StyleSheet、toast/confirm 包装
       components/            # 可复用控件：DataTable / Pager / FilterPanel / FlowArea / CategoryTree / ItemCard / KeywordInput / TagPicker…
-      pages/                 # 9 个页面
+      pages/                 # 10 个页面（任务 2 新增「页面管理」）
       dialogs/               # 对话框
-      viewers/               # 查看器（路径冻结：插件按 app.ui.viewers.<x> 导入）
+      viewers/               # 查看器调度：open_flow.py + window.py（只有调度，视图代码在各自插件目录里）
       models/                # Qt item models
       main_window.py         # FluentWindow 主窗口 + 导航装配
     resource/                # qss / i18n / images
@@ -101,17 +101,20 @@ scripts/
     fixtures.py           # 种子数据（用户 / 分类树 / 标签 / 数据项 / 存档 / 插件）
     checks_data.py        # 数据层与迁移（schema、FTS、seed、一次性修复）
     checks_services.py    # 服务层业务规则（权限、迁移、标签合并、存档、导入导出、隐私）
+    checks_plugins.py     # 插件协议与服务（清单白名单、data 引用、导入边界、类契约、多库、载入报告、查看器扩展名、事件广播）
     checks_pages.py       # 页面骨架与统一样式（page_shells / page_navigation / pages_style_guard /
                           #   style_uniformity / theme_background / home_kpis）
     checks_manage_ui.py   # 数据管理 · 导入页行为（分类过滤、筛选面板、批量选择、导入范围、标签选择器）
     checks_tags_ui.py     # 标签 / 用户 / 设置页行为（三态、全局标签、权限态、隐私分组、最近访问）
     checks_archive_ui.py  # 存档 / 打开方式 / 插件页与查看器（分栏、表格、详情、页面注入、图片查看器）
+    checks_contributions.py # 界面扩展点贡献与贡献生命周期（任务 2 新增）
+    checks_navigation.py  # 导航工作台：固定 / 排序 / 恢复默认 / 插件页随启停出现消失（任务 2 新增）
     checks_flows.py       # 端到端流程（导入 → 过滤 → 批量移动 → 存档 → 恢复）
 tests/                    # 单元测试：按主题拆 test_<主题>.py + IsolatedCase
 ```
 
-分层由 `harness.py` 的 `MODULES` 决定：`data → checks_data`、`services → checks_services`、
-`pages → checks_pages + checks_manage_ui + checks_tags_ui + checks_archive_ui`、`flows → checks_flows`；
+分层由 `harness.py` 的 `MODULES` 决定：`data → checks_data`、`services → checks_services + checks_plugins`、
+`pages → checks_pages + checks_manage_ui + checks_tags_ui + checks_archive_ui + checks_contributions + checks_navigation`、`flows → checks_flows`；
 模块文件不存在时跳过，便于分人并行移植。
 
 规则：
@@ -148,6 +151,8 @@ tests/                    # 单元测试：按主题拆 test_<主题>.py + Isola
 
 新套件另有旧套件没有的结构性检查：`page_shells`、`page_navigation`、`pages_style_guard`（页面骨架、
 导航注册、源码里禁写死边距/样式），以及 `checks_flows.py` 的 `user_journey`、`pages_on_real_data`。
+任务 2 之后又多了整组插件检查（`checks_plugins.py` 8 项、`checks_contributions.py` 2 项、`checks_navigation.py` 1 项），
+其中 `plugin_page_detail` / `plugin_injected_pages` 也按 v4 协议调整过。
 
 ### 7.2 打包验证（PyAppify）
 
@@ -180,7 +185,7 @@ tests/                    # 单元测试：按主题拆 test_<主题>.py + Isola
 | 2 | `services` | 服务层自检（权限、迁移、标签、存档、导入导出、隐私）通过 |
 | 3 | UI 基座：主窗口 / 导航 / 页面骨架 / 公共组件 | 空壳窗口可跑，`components` 有自检（间距、组件类型、QSS） |
 | 4 | 页面重写（home / manage / import / tag / user / archive / open_with / plugin / settings + viewers） | 每页功能对等 + 页面结构自检通过 |
-| 5 | 插件宿主移植（协议冻结） | 11 个内置插件可载入、启用/禁用/页面注入正常 |
+| 5 | 插件宿主移植（协议冻结） | 11 个内置插件可载入、启用/禁用/页面注入正常（任务 2 重建为 9 个内置插件 + 1 个示例插件） |
 | 6 | 新自检套件收口 + 单测 + 打包（pyappify）+ 文档 + 删旧代码 | 新套件全绿、`--self-check` 通过、`HELP.md`/`README.md`/`PLUGIN.md` 与实现一致 |
 
 ## 9. 迁移与回滚
@@ -188,3 +193,48 @@ tests/                    # 单元测试：按主题拆 test_<主题>.py + Isola
 - 旧代码快照（只读参考，`.gitignore` 已忽略 `logs/`）：`logs/_rewrite/legacy_snapshot/{src,scripts,tests,plugins}`。
 - 仓库自身 git 历史即回滚点；重写期间保持"每个 Phase 结束时 `compileall` + 该层自检通过"。
 - 真实数据只在必要时（Phase 1 之后）用**只读**方式验证；任何写操作都在临时副本上进行。
+
+## 10. 后续变化：TODO 任务 2（插件系统重构）
+
+Phase 0–6 收尾之后，用户要求实施 TODO.md 任务 2，插件协议改成 v4，本方案里标注「冻结」的插件
+部分随之调整（实施记录见 `logs/_rewrite/plugin_refactor_plan.md`）：
+
+- **协议**：取消 `kind` / `kinds` 等类型字段（`src/app/core/plugin_kinds.py` 已删除），工具库插件就是库；
+  插件用清单的 `libraries` 声明对外提供的库模块、用 `data` 声明数据文件，复用别的插件走
+  `depends` + `from dm_plugin.<id>.<模块> import ...` 静态导入（`library()` 兜底）；字段与规则见
+  `plugins/PLUGIN_PROTOCOL.md`，扩展点与事件见 `plugins/EXTENSION_POINTS.md`。
+- **内置插件**：11 个 → 9 个（`builtin.lib.viewer` 查看器基类库 + `builtin.lib.dialog` 弹窗工具库 + 7 个查看器），
+  扩展名表从 `src/app/core/viewer_data.py` 下沉到各插件的 `data/viewer.json`；另有示例插件
+  `plugins/example.ui_extension`；每个插件目录都有自己的 `PLUGIN.md`。
+- **界面**：8 个界面扩展点（概览卡片 / 设置卡片 / 工具栏按钮 / 条目菜单 / 详情行 / 导入筛选 / 打开方式 / 页面）
+  与 7 个事件都有了真实消费方；新增内置页「页面管理」（只读列出全部页面，侧栏顺序固定：
+  内置页按内置顺序、设置恒在最下面，插件页按载入顺序追加，追加不下的只在页面管理里打开）。
+- **自检**：新增 `checks_plugins.py`（8 项）、`checks_contributions.py`（2 项）、`checks_navigation.py`（1 项），
+  `plugin_page_detail` / `plugin_injected_pages` 也按 v4 调整；检查总数 47 → 59（v5 再加 `plugin_stubs_current`，见第 11 节）。
+
+## 11. 后续变化：插件系统 v5（插件与程序彻底解耦）
+
+任务 2 验收之后，用户又提了一组修复要求，逐条落在 v5 里（协议细节见 `plugins/PLUGIN_PROTOCOL.md`）：
+
+- **协议补充**：清单新增 `enabled`（默认启用状态；内置插件可用它默认禁用自己，用户改动以 `config/plugins.json` 为准），
+  示例插件 `example.ui_extension` 因此默认禁用；`item.imported` 收窄为「文件 / 目录 / 粘贴文本导入」，
+  库扫描登记不再广播。
+- **公开面收窄**：一个插件对其他插件的公开面只有入口 `plugin.py`，`libraries` 的 `module` 一律写 `plugin.py`
+  （`builtin.lib.viewer`、`builtin.lib.dialog` 都已改），跨插件只允许 `from dm_plugin.<id>.plugin import ...`；
+  自检 `plugin_imports` 收紧为「`app` 下只放行 `app.sdk`」，插件不再 import 程序 UI。
+- **SDK 扩容**：新增 `app.sdk.data`（文本解码 / xlsx / csv / 压缩包成员与读取 / 图片信息，原 `app.core.viewer_data`
+  整体搬入并删除该模块）与 `app.sdk.ui`（间距常量、`clear_scroll_background`、`open_default` / `reveal`）；
+  程序侧改为从 SDK 取同一份实现（`ui/framework/tokens.py`、`ui/framework/theme.py`、`core/viewers.py`）。
+- **查看器搬进插件**：`builtin.lib.viewer` 的库模块 `plugin.py` 提供 `ViewerPlugin` 基类、`ViewerWindow` 窗口外壳，
+  另有 `viewer_window.py` / `media_panel.py` 实现文件；`builtin.lib.dialog` 继续提供弹窗外壳与 `dialog` 接口。
+  7 个查看器的视图代码（约 800 行）从 `src/app/ui/viewers/` 搬进各自插件目录（`archive_view.py`、`image_view.py`、
+  `markdown_view.py`、`sheet_view.py`、`text_view.py`，以及拆出来的 `audio_view.py` / `video_view.py`），
+  `src/app/ui/viewers/` 只剩 `open_flow.py` 与瘦身后的 `window.py`（只做调度）。新登记的 `Viewer.opener` +
+  `ctx.add_viewer(opener=...)` 让插件自己建窗口、自己经 `dialog` 弹出，程序侧不参与界面。
+- **IDE 支持**：`scripts/plugin_stubs.py` 按插件清单生成 `stubs/dm_plugin/**` 的 `.pyi` 桩（`.idea/D-MyDataManager.iml`
+  把 `stubs` 标成源码根），解决「`from dm_plugin` 在 PyCharm 里始终报错」。
+- **界面**：撤销「侧栏可改」——删掉 `config/navigation.json`、`src/app/core/navigation.py`、`navigationChanged` 与
+  页面的固定 / 排序接口；侧栏顺序固定（内置页按内置顺序、设置恒在最下面），插件页面按载入顺序追加，
+  追加不下的只出现在只读的「页面管理」页里（原来每次应用后设置图标消失的问题随之一并消失）。
+- **自检**：新增 `plugin_stubs_current`（桩与清单一致），`plugin_imports` / `plugin_viewer_extensions` 按 v5 调整；
+  总数 59 → 60。

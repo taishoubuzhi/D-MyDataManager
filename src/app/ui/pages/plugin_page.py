@@ -1,7 +1,7 @@
 """插件配置页：筛选、排序、查看详情、插件选项、导入 / 启停 / 编辑 / 删除。
 
-所有插件（含内置）都在插件目录下扫描出来并显示在同一条列表里；插件类型表随清单累积，
-所以类型筛选下拉里会出现插件自己声明的类型。
+所有插件（含内置）都在插件目录下扫描出来并显示在同一条列表里；插件按扩展点（贡献）归类，
+筛选下拉来自 SDK 的扩展点常量，插件在 setup() 里登记自己的贡献。
 """
 
 from __future__ import annotations
@@ -24,11 +24,17 @@ from qfluentwidgets import (
 )
 
 from ...core import shell
-from ...core.plugin_kinds import plugin_kinds
 from ...core.signals import signalBus
 from ...db import database
 from ...services import UserService
-from ...services.plugin_service import PLUGIN_ORDERS, SOURCE_FILTERS, STATE_FILTERS, PluginError, plugin_service
+from ...services.plugin_service import (
+    CONTRIBUTION_FILTERS,
+    PLUGIN_ORDERS,
+    SOURCE_FILTERS,
+    STATE_FILTERS,
+    PluginError,
+    plugin_service,
+)
 from ..components import FlowArea
 from ..dialogs import TextInputDialog
 from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page, confirm, tri_state
@@ -42,7 +48,7 @@ class PluginPage(Page):
     page_title = "插件"
     page_subtitle = (
         "所有插件（含内置）都放在插件目录下：每个插件是一个含 plugin.json 的子目录。"
-        "类型（kind）写在清单里，随清单累积成类型表，两个插件声明同一个类型不会冲突；"
+        "插件在 setup() 里按扩展点登记贡献（查看器、页面……），列表按贡献归类；"
         "插件声明了 options 就会在「插件选项」里出现可配置项。"
     )
 
@@ -81,10 +87,12 @@ class PluginPage(Page):
         self.search.setFixedWidth(230)
         self.search.textChanged.connect(self._fill_list)
         filters.addWidget(self.search)
-        self.kind_box = ComboBox(self)
-        self.kind_box.setMinimumWidth(120)
-        self.kind_box.currentIndexChanged.connect(self._fill_list)
-        filters.addWidget(self.kind_box)
+        self.point_box = ComboBox(self)
+        self.point_box.setMinimumWidth(120)
+        for value, label in CONTRIBUTION_FILTERS:
+            self.point_box.addItem(label, userData=value)
+        self.point_box.currentIndexChanged.connect(self._fill_list)
+        filters.addWidget(self.point_box)
         self.source_box = ComboBox(self)
         for value, label in SOURCE_FILTERS:
             self.source_box.addItem(label, userData=value)
@@ -196,10 +204,10 @@ class PluginPage(Page):
         self._apply_permissions()
 
     # ------------------------------------------------------------------ 筛选
-    def apply_kind(self, kind: str) -> None:
-        """从「打开方式」页跳转过来时自动筛成指定类型，类型未知时回到全部。"""
-        index = self.kind_box.findData(kind)
-        self.kind_box.setCurrentIndex(index if index >= 0 else 0)
+    def apply_contribution(self, point: str) -> None:
+        """从「打开方式」页跳转过来时自动筛成指定扩展点，未知扩展点时回到全部。"""
+        index = self.point_box.findData(point)
+        self.point_box.setCurrentIndex(index if index >= 0 else 0)
         self._reload()
 
     def _select_plugin(self, plugin_id: str) -> bool:
@@ -212,7 +220,7 @@ class PluginPage(Page):
 
     def _filters(self) -> dict:
         return {
-            "kind": self.kind_box.currentData() or "",
+            "contribution": self.point_box.currentData() or "",
             "state": self.state_box.currentData() or "",
             "source": self.source_box.currentData() or "",
             "author": self.author_box.currentData() or "",
@@ -227,17 +235,7 @@ class PluginPage(Page):
         self._fill_list()
 
     def _reload_filters(self) -> None:
-        """类型表与创建者都随插件清单出现，刷新下拉内容并保留当前选择。"""
-        kind = self.kind_box.currentData() or ""
-        self.kind_box.blockSignals(True)
-        self.kind_box.clear()
-        self.kind_box.addItem("全部类型", userData="")
-        for spec in plugin_kinds.all():
-            self.kind_box.addItem(spec.name, userData=spec.id)
-        index = self.kind_box.findData(kind)
-        self.kind_box.setCurrentIndex(index if index >= 0 else 0)
-        self.kind_box.blockSignals(False)
-
+        """创建者随插件清单出现，刷新下拉内容并保留当前选择。"""
         author = self.author_box.currentData() or ""
         self.author_box.blockSignals(True)
         self.author_box.clear()
@@ -298,7 +296,7 @@ class PluginPage(Page):
         self.plugin_list.clear()
         for info in self._plugins:
             mark = "✔" if info.enabled and not info.error else "✖"
-            item = QListWidgetItem(f"{mark} {info.name} · {info.kind_label} · {info.source_label}")
+            item = QListWidgetItem(f"{mark} {info.name} · {info.contributions_text} · {info.source_label}")
             item.setData(Qt.ItemDataRole.UserRole, info.id)
             item.setToolTip(f"{info.id}\n状态：{info.state_label}\n创建者：{info.author_text}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -340,7 +338,7 @@ class PluginPage(Page):
         self._current = info.id
         self.detail_title.setText(info.name)
         self.detail_meta.setText(
-            f"{info.id} · {info.kind_label} · {info.source_label} · 版本 {info.version_text} · 创建者 {info.author_text}"
+            f"{info.id} · {info.contributions_text} · {info.source_label} · 版本 {info.version_text} · 创建者 {info.author_text}"
         )
         state = f"状态：{info.state_label} · 目录：{info.path or '—'}"
         if info.note:
@@ -348,13 +346,14 @@ class PluginPage(Page):
         if info.error:
             state += f" · {info.error}"
         self.detail_state.setText(state)
-        self.detail_ext.setText(f"扩展名（{len(info.extensions)}）：{info.extensions_text}")
+        self.detail_ext.setText(f"清单数据：{info.data_text}")
         self.detail_protocol.setText(
             " · ".join(
                 [
+                    f"贡献：{info.contributions_text}",
                     f"依赖插件：{info.depends_text}",
                     f"扩展接口：{info.provides_text}",
-                    f"功能：{info.capabilities_text}",
+                    f"提供库：{info.libraries_text}",
                     f"适用管理器版本：{info.manager_text}",
                     f"入口文件：{info.entry or '—'}",
                 ]

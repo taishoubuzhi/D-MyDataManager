@@ -41,6 +41,7 @@ from ..framework import (
     format_size,
     type_name,
 )
+from ..framework.contributions import path_filters
 from ..components.data_table import fit_columns, prepare_table
 from ..components.drop_area import DropArea
 from ..components.keyword_input import KeywordInput
@@ -355,10 +356,19 @@ class ImportPage(ScrollPage):
 
     # -------------------------------------------------------------- 文件信息
     def _collect_sources(self) -> list[tuple[Path, str]]:
-        """当前待导入的 (文件, 子目录) 列表：文件夹会展开并保留相对子目录。"""
+        """当前待导入的 (文件, 子目录) 列表：文件夹会展开并保留相对子目录。
+
+        插件贡献的导入过滤器（扩展点 app.ui.import.filter）在这里统一生效，
+        所以预览与实际导入看到的是同一份清单。
+        """
         if self._directory:
-            return self._tree_files
-        return [(Path(path), "") for path in self._files]
+            sources = list(self._tree_files)
+        else:
+            sources = [(Path(path), "") for path in self._files]
+        filters = path_filters()
+        if not filters:
+            return sources
+        return [(path, subdir) for path, subdir in sources if all(accept(path) for accept in filters)]
 
     def _scan_tree(self) -> None:
         self._tree_files = []

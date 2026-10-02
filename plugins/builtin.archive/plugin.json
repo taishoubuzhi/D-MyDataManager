@@ -2,36 +2,19 @@
   "id": "builtin.archive",
   "name": "内置压缩包查看器",
   "version": "1.0.0",
-  "kind": "viewer",
   "description": "列出压缩包内的条目与大小，支持预览包内文本。",
   "author": "D-MyDataManager",
-  "manager_version": "0.1.0",
   "builtin": true,
   "entry": "plugin.py",
   "depends": [
-    "builtin.kind.viewer",
-    "builtin.dialog"
+    {
+      "id": "builtin.lib.viewer"
+    },
+    {
+      "id": "builtin.lib.dialog"
+    }
   ],
-  "provides": [
-    "viewer"
-  ],
-  "capabilities": [
-    "条目列表",
-    "压缩比",
-    "包内文本预览"
-  ],
-  "extensions": [
-    "zip",
-    "jar",
-    "whl",
-    "apk",
-    "tar",
-    "gz",
-    "tgz",
-    "bz2",
-    "tbz",
-    "tbz2",
-    "xz",
-    "txz"
-  ]
+  "data": {
+    "viewer": "data/viewer.json"
+  }
 }

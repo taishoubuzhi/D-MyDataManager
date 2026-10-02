@@ -26,12 +26,19 @@ LAYERS: tuple[str, ...] = ("data", "services", "pages", "flows")
 #: 每层可以拆成多个模块，按主题分工、便于并行维护。
 MODULES: dict[str, tuple[str, ...]] = {
     "data": ("checks_data",),
-    "services": ("checks_services",),
-    "pages": ("checks_pages", "checks_manage_ui", "checks_tags_ui", "checks_archive_ui"),
+    "services": ("checks_services", "checks_plugins"),
+    "pages": (
+        "checks_pages",
+        "checks_manage_ui",
+        "checks_tags_ui",
+        "checks_archive_ui",
+        "checks_contributions",
+        "checks_navigation",
+    ),
     "flows": ("checks_flows", "checks_tags_ui"),
 }
 
-#: 主窗口上九个页面的属性名（页面级检查共用）。
+#: 主窗口上十个页面的属性名（页面级检查共用）。
 PAGE_ATTRS: tuple[str, ...] = (
     "home_page",
     "import_page",
@@ -41,8 +48,27 @@ PAGE_ATTRS: tuple[str, ...] = (
     "archive_page",
     "open_with_page",
     "plugin_page",
+    "workbench_page",
     "settings_page",
 )
+
+#: 仓库里的内置插件目录；自检环境的插件目录是临时目录，插件相关检查要先把它装进去。
+BUILTIN_PLUGINS = ROOT / "plugins"
+
+
+def install_builtin_plugins() -> None:
+    """把仓库内置插件复制进隔离插件目录，并让插件服务重新载入。"""
+    import shutil
+
+    from app.core import paths
+    from app.services.plugin_service import plugin_service
+
+    target = Path(paths.PLUGIN_DIR)
+    target.mkdir(parents=True, exist_ok=True)
+    for source in sorted(BUILTIN_PLUGINS.iterdir()):
+        if source.is_dir() and (source / "plugin.json").is_file():
+            shutil.copytree(source, target / source.name, dirs_exist_ok=True)
+    plugin_service.load_viewers()
 
 
 @dataclass(frozen=True)
@@ -143,6 +169,22 @@ def ensure_app():
     return _APP
 
 
+def prune_router_history() -> int:
+    """摘掉 qfluentwidgets 全局路由里已被销毁的 StackedWidget，返回清理条数。
+
+    库里的 `qrouter` 会把每个窗口的 StackedWidget 一直留在 `stackHistories` 里；
+    窗口销毁后再卸载导航项（`qrouter.remove` → `stacked.findChild`）就会抛
+    `RuntimeError: wrapped C/C++ object of type StackedWidget has been deleted`。
+    """
+    from PyQt6 import sip
+    from qfluentwidgets.common.router import qrouter
+
+    dead = [stacked for stacked in list(qrouter.stackHistories) if sip.isdeleted(stacked)]
+    for stacked in dead:
+        qrouter.stackHistories.pop(stacked, None)
+    return len(dead)
+
+
 def dispose_window(window) -> None:
     """确定性地销毁主窗口（整棵控件树排队销毁在本机会 0xC0000005）。"""
     from PyQt6 import sip
@@ -157,6 +199,7 @@ def dispose_window(window) -> None:
     window.close()
     window.setParent(None)
     sip.delete(window)
+    prune_router_history()
     app = QApplication.instance()
     if app is not None:
         app.processEvents()

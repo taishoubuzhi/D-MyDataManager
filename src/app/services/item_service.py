@@ -89,7 +89,14 @@ class ItemService:
 
     # ----------------------------------------------------------------- 回收站
     def delete(self, items: list[DataItem]) -> int:
-        return self.items.soft_delete(items)
+        count = self.items.soft_delete(items)
+        # 广播条目删除事件：插件可以订阅 item.deleted
+        from ..sdk import Events
+        from .plugin_service import plugin_service
+
+        for item in items:
+            plugin_service.publish(Events.ITEM_DELETED, item_id=item.id, name=item.name)
+        return count
 
     def restore(self, items: list[DataItem]) -> int:
         return self.items.restore(items)

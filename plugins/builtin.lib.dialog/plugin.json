@@ -1,0 +1,19 @@
+{
+  "id": "builtin.lib.dialog",
+  "name": "内置弹窗工具库",
+  "version": "1.0.0",
+  "description": "弹窗工具库：在程序本体之外弹出独立窗口；其他插件（如七个查看器）依赖它来显示自己的页面。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "provides": [
+    "dialog"
+  ],
+  "libraries": [
+    {
+      "name": "dialog",
+      "module": "plugin.py",
+      "description": "弹窗外壳 PopupWindow 与扩展接口 DialogApi（实现住在 dialog_host.py）"
+    }
+  ]
+}

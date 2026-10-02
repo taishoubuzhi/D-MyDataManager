@@ -28,6 +28,7 @@ from ...core.shell import reveal
 from ...core.signals import signalBus
 from ...db import database
 from ...repositories import ArchiveRepository
+from ...sdk import ExtensionPoint
 from ...services import ArchiveService, UserService, overview, recent
 from ..components.flow_area import FlowArea
 from ..dialogs import TextInputDialog
@@ -43,6 +44,7 @@ from ..framework import (
     type_icon,
     type_name,
 )
+from ..framework.contributions import icon_of, items, text_of, title_of, value_of
 
 KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数")
 
@@ -182,6 +184,7 @@ class HomePage(ScrollPage):
         super().__init__(parent)
         self.session = database.new_session()
         self.kpi_cards: list[StatCard] = []
+        self.plugin_cards: list[StatCard] = []
         self._type_bars: list[_TypeBar] = []
 
         self.user_box = ComboBox(self.header)
@@ -241,6 +244,7 @@ class HomePage(ScrollPage):
             signalBus.tagsChanged,
             signalBus.userChanged,
             signalBus.archivesChanged,
+            signalBus.pluginsChanged,
         )
         self.refresh()
 
@@ -255,6 +259,7 @@ class HomePage(ScrollPage):
         entries = format_summary(stats, users=users, archives=archives)
         self._rebuild_cards(entries)
         self._sync_card_refs(entries)
+        self._rebuild_plugin_cards()
 
         clear_layout(self._recent_layout)
         items = recent(self.session, user_id=user_id)
@@ -285,6 +290,16 @@ class HomePage(ScrollPage):
         self._category_card = by_title["分类"]
         self._tag_card = by_title["标签数"]
         self._archive_card = by_title["存档数"]
+
+    def _rebuild_plugin_cards(self) -> None:
+        """插件贡献的概览卡片（扩展点 app.ui.home.kpi）：值可以给回调，每次刷新重算。"""
+        self.plugin_cards = []
+        for item in items(ExtensionPoint.HOME_KPI):
+            data = value_of(item)
+            card = StatCard(title_of(item), icon_of(data.get("icon")), self.cards_host)
+            card.set_value(text_of(data.get("value")), text_of(data.get("sub")))
+            self.cards_host.add_widget(card)
+            self.plugin_cards.append(card)
 
     def _rebuild_type_bars(self, distribution: list[tuple[str, int, float]]) -> None:
         clear_layout(self._type_layout)

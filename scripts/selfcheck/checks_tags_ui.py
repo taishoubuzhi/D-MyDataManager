@@ -495,7 +495,7 @@ def superuser_permissions(case: Case) -> None:
         # 回归点 2：装了插件、有选中行时，非管理员下 11 个改动按钮全部禁用。
         # 隔离夹具的插件目录是空的，先导入一个仓库内置插件让列表非空、有选中行，
         # 否则 _sync_detail 不会同步「启用 / 更多选项 / 删除」的可用态。
-        sample = ROOT / "plugins" / "builtin.kind"
+        sample = ROOT / "plugins" / "builtin.lib.dialog"
         if not sample.exists():
             problems.append(f"找不到内置插件目录 {sample}，插件页权限判据不完整")
         else:

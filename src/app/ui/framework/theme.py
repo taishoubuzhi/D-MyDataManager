@@ -13,6 +13,9 @@ from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import isDarkTheme, qconfig, themeColor
 from qfluentwidgets.common.style_sheet import CustomStyleSheet, setStyleSheet
 
+# 滚动区底色的处理住在 app.sdk.ui（插件也要用），这里重新导出给程序侧。
+from ...sdk.ui import clear_scroll_background
+
 #: 页面底色：与 qfluentwidgets 窗口背景一致（浅色 / 深色）。
 PAGE_BG_LIGHT = QColor(240, 244, 249)
 PAGE_BG_DARK = QColor(32, 32, 32)
@@ -73,19 +76,7 @@ def highlight_hover() -> QColor:
     return _tinted(accent_color(), 40)
 
 
-#: 滚动区自身与内层容器的透明写法，取自 qfluentwidgets 的
-#: `ScrollArea.enableTransparentBackground()`：只清视口不够——滚动区自身仍会按调色板
-#: 实绘底色，换肤后还留着上一个主题的颜色。
-_SCROLL_AREA_QSS = "QScrollArea{border: none; background: transparent}"
-_SCROLL_INNER_QSS = "QWidget{background: transparent}"
-
-
-def clear_scroll_background(area, inner: bool = True) -> None:
-    """滚动区不按调色板实绘底色：滚动区自身（必要时连内层容器）设为透明。"""
-    setStyleSheet(area, CustomStyleSheet(area).setCustomStyleSheet(_SCROLL_AREA_QSS, _SCROLL_AREA_QSS))
-    host = area.widget()
-    if inner and host is not None:
-        setStyleSheet(host, CustomStyleSheet(host).setCustomStyleSheet(_SCROLL_INNER_QSS, _SCROLL_INNER_QSS))
+# clear_scroll_background 见 app.sdk.ui，本模块只重新导出。
 
 
 def theme_palette(dark: bool | None = None) -> QPalette:

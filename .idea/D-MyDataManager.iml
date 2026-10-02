@@ -6,6 +6,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src/app" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src/app/common" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/stubs" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/.idea/dataSources" />
       <excludeFolder url="file://$MODULE_DIR$/.trae/documents" />
       <excludeFolder url="file://$MODULE_DIR$/.trae/specs" />
@@ -19,6 +20,8 @@
       <excludeFolder url="file://$MODULE_DIR$/.trae" />
       <excludeFolder url="file://$MODULE_DIR$/.resources" />
       <excludeFolder url="file://$MODULE_DIR$/tests/_tmp" />
+      <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets" />
+      <excludeFolder url="file://$MODULE_DIR$/tests/_scratch" />
     </content>
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />

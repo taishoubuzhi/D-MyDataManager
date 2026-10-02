@@ -166,6 +166,7 @@ class ImportService:
         self._add_version(item, "导入")
         self.session.flush()
         logger.info("已导入文本：{} -> {}", name, rel_path)
+        self._announce_import(item)
         return item
 
     # ----------------------------------------------------------------- 文件
@@ -253,6 +254,7 @@ class ImportService:
         feature_service.replace_features(self.session, item, path)
         self.session.flush()
         logger.info("已导入文件：{} -> {}", path.name, rel_path)
+        self._announce_import(item)
         return item
 
     def import_files(self, sources, *, on_event: ImportEventHook | None = None, **options) -> ImportResult:
@@ -339,6 +341,13 @@ class ImportService:
         created = self.categories.ensure(clean, parent_id, user_id)
         self.session.flush()
         return created
+
+    def _announce_import(self, item: DataItem) -> None:
+        """导入成功后广播事件：插件可以订阅 item.imported。"""
+        from ..sdk import Events
+        from .plugin_service import plugin_service
+
+        plugin_service.publish(Events.ITEM_IMPORTED, item_id=item.id, name=item.name)
 
     @guarded
     def _import_one(

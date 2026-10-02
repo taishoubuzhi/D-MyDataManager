@@ -1,0 +1,28 @@
+{
+  "name": "图片查看器",
+  "kind": "viewer",
+  "host": "dialog",
+  "extensions": [
+    "png",
+    "jpg",
+    "jpeg",
+    "jpe",
+    "bmp",
+    "gif",
+    "webp",
+    "tif",
+    "tiff",
+    "ico",
+    "ppm",
+    "pgm",
+    "jfif"
+  ],
+  "capabilities": [
+    "缩放",
+    "旋转",
+    "适应窗口",
+    "图片信息"
+  ],
+  "description": "查看 png / jpg / gif 等图片，支持缩放、旋转与适应窗口。",
+  "order": 100
+}

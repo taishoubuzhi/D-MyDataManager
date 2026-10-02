@@ -13,6 +13,9 @@ from typing import Callable
 #: 创建视图控件：`(path, parent) -> QWidget`，由插件自己延迟 import Qt
 ViewerFactory = Callable[[Path, object], object]
 
+#: 插件自带的打开函数：`(path) -> (是否成功, 说明)`，由查看器插件在弹窗里打开自己的页面
+ViewerOpener = Callable[[Path], "tuple[bool, str]"]
+
 #: 内置插件的 id 前缀，便于界面上区分「内置」与「外部」
 BUILTIN_PREFIX = "builtin:"
 
@@ -32,13 +35,9 @@ KIND_LABELS = dict(KINDS)
 
 def normalize_suffix(value: str | Path) -> str:
     """取小写、不带点的扩展名：`A.TXT` → `txt`，`a.tar.gz` → `gz`。"""
-    text = str(value or "").strip().lower()
-    if not text:
-        return ""
-    text = text.replace("\\", "/").rsplit("/", 1)[-1]
-    if "." in text:
-        text = text.rsplit(".", 1)[-1]
-    return text.strip(".")
+    from ..sdk.data import suffix_of
+
+    return suffix_of(value)
 
 
 @dataclass(frozen=True)
@@ -51,6 +50,8 @@ class Viewer:
     kind: str = "text"
     plugin_id: str = ""
     factory: ViewerFactory | None = None
+    #: 插件自带的打开函数（有它时界面不再替它找宿主窗口）
+    opener: ViewerOpener | None = None
     #: 负责显示该查看器的扩展接口名（例如 "dialog"）；空值表示由界面自带窗口显示
     host: str = ""
     description: str = ""

@@ -23,11 +23,11 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from ...core.plugins import KIND_VIEWER
 from ...core.signals import signalBus
 from ...core.viewers import normalize_suffix, viewer_registry
 from ...db import database
 from ...repositories import ItemFilter
+from ...sdk import ExtensionPoint
 from ...services.item_service import ItemService
 from ...services.open_with_service import (
     MODE_BUILTIN,
@@ -349,4 +349,4 @@ class OpenWithPage(Page):
             self.toast_warning("打开失败", message)
 
     def _on_manage_plugins(self) -> None:
-        signalBus.requestPlugins.emit(KIND_VIEWER)
+        signalBus.requestPlugins.emit(ExtensionPoint.VIEWER)

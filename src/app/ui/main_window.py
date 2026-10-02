@@ -30,14 +30,37 @@ from .pages.plugin_page import PluginPage
 from .pages.settings_page import SettingsPage
 from .pages.tag_page import TagPage
 from .pages.user_page import UserPage
+from .pages.workbench_page import NavEntry, WorkbenchPage
 from .components.cover_loader import shutdown_cover_loader
 from .components.library_watcher import LibraryWatcher
+
+
+#: 内置页面：属性名、侧栏标题、图标、是否放在侧栏底部。
+BUILTIN_PAGES: tuple[tuple[str, str, FluentIcon, bool], ...] = (
+    ("home_page", "首页", FluentIcon.HOME, False),
+    ("import_page", "导入", FluentIcon.CLOUD, False),
+    ("manage_page", "数据管理", FluentIcon.FOLDER, False),
+    ("tag_page", "标签", FluentIcon.TAG, False),
+    ("user_page", "用户", FluentIcon.PEOPLE, False),
+    ("archive_page", "存档", FluentIcon.HISTORY, False),
+    ("open_with_page", "打开方式", FluentIcon.APPLICATION, False),
+    ("plugin_page", "插件", FluentIcon.TILES, False),
+    ("workbench_page", "页面管理", FluentIcon.LAYOUT, False),
+    ("settings_page", "设置", FluentIcon.SETTING, True),
+)
+
+#: 侧栏最多追加的插件页面图标数：默认窗口高度下不会把侧栏撑出滚动条，
+#: 超出的插件页面只出现在「页面管理」页里（内置页面永远全部显示）。
+PLUGIN_SIDEBAR_LIMIT = 7
 
 
 class MainWindow(FluentWindow):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._plugin_pages: dict[str, QWidget] = {}
+        self._plugin_specs: dict[str, PageSpec] = {}
+        #: 已经追加到侧栏的插件页面路由（顺序即侧栏里的顺序）。
+        self._plugin_nav_routes: list[str] = []
         self.home_page = HomePage(self)
         self.import_page = ImportPage(self)
         self.manage_page = ManagePage(self)
@@ -46,6 +69,7 @@ class MainWindow(FluentWindow):
         self.archive_page = ArchivePage(self)
         self.open_with_page = OpenWithPage(self)
         self.plugin_page = PluginPage(self)
+        self.workbench_page = WorkbenchPage(self)
         self.settings_page = SettingsPage(self)
 
         self._init_navigation()
@@ -59,15 +83,10 @@ class MainWindow(FluentWindow):
         signalBus.itemsChanged.connect(self.library_watcher.pause)
 
     def _init_navigation(self) -> None:
-        self.addSubInterface(self.home_page, FluentIcon.HOME, "首页")
-        self.addSubInterface(self.import_page, FluentIcon.CLOUD, "导入")
-        self.addSubInterface(self.manage_page, FluentIcon.FOLDER, "数据管理")
-        self.addSubInterface(self.tag_page, FluentIcon.TAG, "标签")
-        self.addSubInterface(self.user_page, FluentIcon.PEOPLE, "用户")
-        self.addSubInterface(self.archive_page, FluentIcon.HISTORY, "存档")
-        self.addSubInterface(self.open_with_page, FluentIcon.APPLICATION, "打开方式")
-        self.addSubInterface(self.plugin_page, FluentIcon.TILES, "插件")
-        self.addSubInterface(self.settings_page, FluentIcon.SETTING, "设置", NavigationItemPosition.BOTTOM)
+        """把页面挂进堆叠区：内置页按内置顺序装配侧栏，插件页面随后追加。"""
+        for attr, title, icon, bottom in BUILTIN_PAGES:
+            position = NavigationItemPosition.BOTTOM if bottom else NavigationItemPosition.TOP
+            self.addSubInterface(getattr(self, attr), icon, title, position)
         self._sync_plugin_pages()
 
     # ------------------------------------------------------ 插件界面
@@ -80,7 +99,7 @@ class MainWindow(FluentWindow):
         return tuple(self._plugin_pages)
 
     def _sync_plugin_pages(self) -> None:
-        """按 `app.ui` 里登记的页面增删导航项：插件启停或重载后保持同步。"""
+        """按 `app.ui` 里登记的页面增删堆叠区页面：插件启停或重载后保持同步。"""
         api = self._app_ui()
         specs: dict[str, PageSpec] = {}
         if api is not None and hasattr(api, "pages"):
@@ -88,6 +107,7 @@ class MainWindow(FluentWindow):
                 specs[spec.key] = spec
         for key in [key for key in self._plugin_pages if key not in specs]:
             widget = self._plugin_pages.pop(key)
+            self._plugin_specs.pop(key, None)
             self.removeInterface(widget, True)
         for key, spec in specs.items():
             if key in self._plugin_pages:
@@ -97,8 +117,9 @@ class MainWindow(FluentWindow):
                 continue
             widget.setObjectName(spec.route)
             self._plugin_pages[key] = widget
-            position = NavigationItemPosition.BOTTOM if spec.bottom else NavigationItemPosition.TOP
-            self.addSubInterface(widget, self._plugin_icon(spec.icon), spec.title, position)
+            self._plugin_specs[key] = spec
+            self.stackedWidget.addWidget(widget)
+        self._sync_plugin_nav()
 
     def _build_plugin_page(self, spec: PageSpec) -> QWidget | None:
         """调用插件提供的工厂创建页面控件；插件出错时退化成提示页。"""
@@ -117,6 +138,83 @@ class MainWindow(FluentWindow):
         """把清单里的图标名解析成 FluentIcon，未知名字回退成通用图标。"""
         icon = getattr(FluentIcon, str(name or "").upper(), None)
         return icon if icon is not None else FluentIcon.APPLICATION
+
+    # ------------------------------------------------------ 侧栏与页面清单
+    def sidebar_routes(self) -> tuple[str, ...]:
+        """当前侧栏里显示的页面路由：内置页按内置顺序（设置恒在最后），插件页追加在后。"""
+        routes = [
+            getattr(self, attr).objectName()
+            for attr, _title, _icon, bottom in BUILTIN_PAGES
+            if not bottom
+        ]
+        routes.extend(self._plugin_nav_routes)
+        routes.extend(
+            getattr(self, attr).objectName()
+            for attr, _title, _icon, bottom in BUILTIN_PAGES
+            if bottom
+        )
+        return tuple(routes)
+
+    def page_entries(self) -> list[NavEntry]:
+        """全部页面（内置 + 插件）的清单，供「页面管理」页列出与打开。"""
+        shown = set(self.sidebar_routes())
+        entries: list[NavEntry] = []
+        for attr, title, icon, bottom in BUILTIN_PAGES:
+            widget = getattr(self, attr)
+            entries.append(
+                NavEntry(
+                    widget=widget,
+                    icon=icon,
+                    title=title,
+                    bottom=bottom,
+                    in_sidebar=widget.objectName() in shown,
+                )
+            )
+        for key, widget in self._plugin_pages.items():
+            spec = self._plugin_specs.get(key)
+            if spec is None:
+                continue
+            entries.append(
+                NavEntry(
+                    widget=widget,
+                    icon=self._plugin_icon(spec.icon),
+                    title=spec.title,
+                    builtin=False,
+                    plugin_id=spec.plugin_id,
+                    bottom=spec.bottom,
+                    in_sidebar=widget.objectName() in shown,
+                )
+            )
+        return entries
+
+    def _sync_plugin_nav(self) -> None:
+        """把插件页面按载入顺序追加到侧栏；超出名额的只在「页面管理」页里出现。"""
+        live = {widget.objectName() for widget in self._plugin_pages.values()}
+        shown = [route for route in self._plugin_nav_routes if route in live]
+        for route in self._plugin_nav_routes:
+            if route not in shown:
+                self.navigationInterface.removeWidget(route)
+        self._plugin_nav_routes = shown
+        for key, widget in self._plugin_pages.items():
+            route = widget.objectName()
+            if route in self._plugin_nav_routes:
+                continue
+            spec = self._plugin_specs.get(key)
+            if spec is None or len(self._plugin_nav_routes) >= PLUGIN_SIDEBAR_LIMIT:
+                continue
+            # 插件页面一律追加在内置页面之后、设置之前：设置永远在最下面，谁也不能挤到它下面。
+            self.addSubInterface(widget, self._plugin_icon(spec.icon), spec.title, NavigationItemPosition.TOP)
+            self._plugin_nav_routes.append(route)
+        current = self.stackedWidget.currentWidget()
+        if current is not None:
+            self.navigationInterface.setCurrentItem(current.objectName())
+
+    def open_navigation(self, route: str) -> None:
+        """打开某个页面：侧栏里没显示的页面（插件页面过多时）也照样切过去。"""
+        for entry in self.page_entries():
+            if entry.route == route and self.stackedWidget.indexOf(entry.widget) >= 0:
+                self.switchTo(entry.widget)
+                return
 
     def _init_window(self) -> None:
         self._centered = False
@@ -157,10 +255,10 @@ class MainWindow(FluentWindow):
         self.switchTo(self.manage_page)
         self.manage_page.focus_item(item_id)
 
-    def _on_request_plugins(self, kind: str = "") -> None:
-        """从「打开方式」页跳到插件页并自动筛选成对应类型。"""
+    def _on_request_plugins(self, point: str = "") -> None:
+        """从「打开方式」页跳到插件页并自动筛选成对应扩展点。"""
         self.switchTo(self.plugin_page)
-        self.plugin_page.apply_kind(kind)
+        self.plugin_page.apply_contribution(point)
 
     def _on_libraries_changed(self) -> None:
         """库增删或扫描登记后重新绑定监听，并忽略本次内部写入。"""
@@ -188,6 +286,7 @@ class MainWindow(FluentWindow):
             self.archive_page,
             self.open_with_page,
             self.plugin_page,
+            self.workbench_page,
             self.settings_page,
             *self._plugin_pages.values(),
         ):

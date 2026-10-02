@@ -1,7 +1,7 @@
 """页面骨架的尺寸与纯格式化工具。
 
-这里的常量是**全站唯一的间距来源**：页面与组件只允许引用这些名字，
-不允许再写死数字，否则页面之间必然再次走样。
+间距常量住在 app.sdk.ui：它是**全站唯一的间距来源**，程序页面、组件与插件界面
+都只引用这些名字，不写死数字，否则界面之间必然再次走样。
 """
 
 from __future__ import annotations
@@ -13,25 +13,20 @@ from qfluentwidgets import FluentIcon
 
 from ...db.models import DATA_TYPE_NAMES, DataType
 
+from ...sdk.ui import (
+    CARD_SPACING,
+    COMPACT_MARGINS,
+    DETAIL_MARGINS,
+    KPI_MARGINS,
+    PAGE_MARGINS,
+    PAGE_SPACING,
+    PANEL_MARGINS,
+    ROW_SPACING,
+    SCROLL_GUTTER,
+)
+
 # ---------------------------------------------------------------------- 间距
-#: 页面外边距（标题、卡片都落在这个内边距里）。
-PAGE_MARGINS = (24, 20, 24, 20)
-#: 页面内各分区之间的垂直间距。
-PAGE_SPACING = 12
-#: 面板卡片（工具条、表格容器）的内边距。
-PANEL_MARGINS = (12, 12, 12, 12)
-#: 明细卡片（标题 + 说明 + 内容）的内边距。
-DETAIL_MARGINS = (16, 14, 16, 14)
-#: 紧凑正文边距：查看器正文、筛选面板内层。
-COMPACT_MARGINS = (10, 8, 10, 8)
-#: KPI / 统计卡片的内边距（数字与说明更紧凑）。
-KPI_MARGINS = (14, 8, 14, 8)
-#: 滚动区右侧留白：避免内容贴住滚动条。
-SCROLL_GUTTER = 6
-#: 卡片内标题与内容之间的间距。
-CARD_SPACING = 10
-#: 列表行、表单行之间的间距。
-ROW_SPACING = 6
+# 间距常量定义在 app.sdk.ui（插件界面与程序页面共用同一套），这里重新导出。
 
 # ---------------------------------------------------------------------- 类型
 TYPE_ICONS: dict[str, FluentIcon] = {

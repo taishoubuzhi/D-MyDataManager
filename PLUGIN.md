@@ -1,466 +1,350 @@
 # 插件开发指南
 
-本指南面向想给 **D-MyDataManager** 写插件的人：插件目录长什么样、清单有哪些字段、程序怎么载入它、
-`register(api)` 里能调用哪些接口、怎么自定义插件类型，以及大型插件如何把自己的页面挂进主界面。
+这份文档教你**怎么写一个插件**：从最小插件开始，再到库插件、依赖与排错。
 
-- 相关源码：`src/app/core/plugins.py`（清单与依赖排序）、`src/app/core/plugin_kinds.py`（类型表）、
-  `src/app/core/extensions.py`（扩展接口注册表）、`src/app/core/app_ui.py`（主程序界面扩展接口）、
-  `src/app/services/plugin_service.py`（发现 / 载入 / 启停 / 导入）。
-- 现成样例：`plugins/builtin.kind/`（引导类型插件，提供 `plugin.kind` 接口）、`plugins/builtin.kind.viewer/`
-  （纯数据插件，声明 `viewer` 类型）、`plugins/builtin.dialog/`（提供 `dialog` 扩展接口）、`plugins/builtin.image/`
-  （依赖它显示图片）。
+- 清单字段、版本范围、依赖规则、载入阶段、状态文件等**规范**见 [`plugins/PLUGIN_PROTOCOL.md`](plugins/PLUGIN_PROTOCOL.md)。
+- 程序开放了哪些**扩展点**、会广播哪些**事件**见 [`plugins/EXTENSION_POINTS.md`](plugins/EXTENSION_POINTS.md)。
+- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/builtin.lib.viewer/`（库插件）、`plugins/builtin.image/`（功能插件样板）。
 
 ## 1. 插件是什么
 
-一个插件就是**插件目录下的一个子目录**：
+插件就是一个目录，放在 `plugins/` 下，用 `plugin.json` 声明自己，用 `plugin.py` 里的插件类干活：
 
 ```
-plugins/
-├─ builtin.kind/             # 内置类型插件：提供 plugin.kind 接口
-│  ├─ plugin.json
-│  └─ plugin.py
-├─ builtin.kind.viewer/      # 纯数据类型插件：只有清单，用 kinds 声明 viewer 类型
-│  └─ plugin.json
-├─ builtin.dialog/           # 内置插件（随仓库分发）
-│  ├─ plugin.json            # 清单：元信息 + 依赖 + 对外接口
-│  └─ plugin.py              # 入口脚本，必须定义 register(api)
-└─ demo.hello/               # 你自己的插件，放进同一个目录即可
-   ├─ plugin.json
-   └─ plugin.py
+plugins/demo.hello/
+  plugin.json     清单：我是谁、依赖谁、有哪些数据文件
+  plugin.py       插件类：注册贡献、订阅事件
+  data/           可选：插件自己的数据文件
+  PLUGIN.md       说明：这个插件有什么用
 ```
 
-- 程序启动时扫描 `plugins/*/plugin.json`，校验清单，按依赖排序，然后 `import` 入口脚本并调用 `register(api)`。
-- 插件与主程序**同进程**、就是普通 Python 模块：`import app.services.xxx`、`import app.ui.components.xxx`
-  都可以用。你不需要注册任何东西，把目录放进去就会出现在「插件」页。
-- 内置插件和外部插件走**完全相同**的流程（同样的清单、同样的入口、同样的 `register(api)`）；
-  区别只是内置插件随程序分发、清单里写了 `"builtin": true`、不能被删除，并且在依赖排序里优先载入。
-- 外部插件可以用「插件」页的「导入插件」按钮以**目录**或 **`.zip`** 包的形式安装（导入时会强制
-  `builtin=false`），也可以手动把目录拷进插件目录。
+程序启动时按依赖顺序把插件载入内存，插件通过 **SDK**（`app.sdk`）拿到程序给的能力：
 
-## 2. 最小插件
+- 往**扩展点**放东西（概览卡片、工具栏按钮、右键菜单、详情行、设置卡片、页面、查看器……）；
+- 订阅程序的**事件**（导入、删除、用户切换、主题变化……）；
+- 读**插件选项**与**数据文件**；
+- 用 `provide()` / `require()` 在插件之间交换运行期对象；
+- 用 `libraries` 把可复用的类暴露给别的插件（库插件）。
+
+协议里**没有「插件类型」这个概念**：一个插件想当查看器，就依赖查看器库并继承它的基类；
+想同时是别的什么，就再依赖另一个库。插件之间请用 `depends` + `dm_plugin.<id>` 静态导入显式取库。
+
+## 2. 快速开始：最小插件
+
+### 2.1 建目录与清单
 
 `plugins/demo.hello/plugin.json`：
 
 ```json
 {
   "id": "demo.hello",
-  "name": "演示插件",
+  "name": "打招呼插件",
   "version": "1.0.0",
-  "kind": "page",
-  "description": "在导航栏加一个自己的页面。",
+  "description": "在概览页加一张卡片，数一数这次会话导入了几条数据。",
   "author": "你的名字",
-  "manager_version": "0.1.0",
-  "entry": "plugin.py",
-  "depends": ["builtin.kind.page"],
-  "provides": ["hello"]
+  "entry": "plugin.py"
 }
 ```
+
+- `id` 要与目录名一致（`demo.hello` → `plugins/demo.hello/`）。
+- 只有 `id`、`name`、`entry` 是必须的；其余字段见协议文档。
+
+### 2.2 写插件类
 
 `plugins/demo.hello/plugin.py`：
 
 ```python
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from app.sdk import Events, ExtensionPoint, Plugin, PluginContext
 
 
-def register(api) -> None:          # 入口函数，必须叫 register，参数是 PluginApi
-    api.provide("hello", object())  # 对外提供扩展接口（其它插件可以 require）
-    ui = api.require("app.ui")      # 主程序提供的界面接口
-    ui.add_page("hello", "演示页", _build, icon="HOME", plugin_id=api.plugin_id)
+class HelloPlugin(Plugin):
+    """最小插件：一张概览卡片 + 一个事件计数。"""
 
+    def setup(self, ctx: PluginContext) -> None:
+        self._ctx = ctx
+        self._imported = 0
+        ctx.contribute(
+            ExtensionPoint.HOME_KPI,
+            {"title": "本次导入", "value": self._text, "sub": "打招呼插件", "icon": "HEART"},
+            key="demo.hello.kpi",
+            description="打招呼插件贡献的概览卡片",
+        )
+        ctx.on(Events.ITEM_IMPORTED, self._on_imported)
 
-def _build() -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.addWidget(QLabel("你好，这是插件页面。"))
-    return page
+    def describe(self) -> list[tuple[str, str]]:
+        """插件页详情里的额外信息行。"""
+        return [("导入计数", str(self._imported))]
+
+    def _text(self) -> str:
+        return str(self._imported)
+
+    def _on_imported(self, **payload) -> None:
+        self._imported += 1
 ```
 
-改完代码后在「插件」页点一次「刷新」即可整体重载（载入时会重新 `import` 入口脚本）。
+要点：
 
-## 3. 清单字段（plugin.json）
+- 插件类必须继承 `app.sdk.Plugin`，程序在载入时构造它并调用 `setup(ctx)`；入口里只有一个 `Plugin` 子类时可以省略清单的 `class` 字段。
+- `ctx.contribute(...)` 注册贡献，`ctx.on(...)` 订阅事件；插件被禁用 / 卸载时程序自动撤销这些，你不用手动清理。
+- 事件处理函数**必须能接住关键字参数**（`def _on_x(self, **payload)`），因为程序是 `handler(**payload)` 调用的。
+- 需要跟随数量变化重新渲染的东西，把 `value` 写成一个回调（如上面的 `self._text`），界面刷新时会重新取值。
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `id` | ✅ | 插件唯一 id，`^[A-Za-z0-9][A-Za-z0-9_.\-]{1,63}$`，通常用 `作者.功能` 形式（如 `demo.hello`） |
-| `name` | ✅ | 显示名，出现在「插件」页与界面标题里 |
-| `kind` | ✅ | 插件类型，`^[a-z][a-z0-9_.\-]{1,63}$`，必须已被某个类型插件声明（内置类型见第 6 节） |
-| `version` | 建议 | 插件版本号，仅用于展示 |
-| `entry` | 外部插件必填 | 相对插件目录的入口脚本，必须存在；里面要有 `register(api)`。内置插件与纯数据类型插件可省略 |
-| `description` | 可选 | 一句话介绍 |
-| `author` | 可选 | 作者 |
-| `manager_version` | 可选 | 需要的最低管理器版本；当前版本见 `src/app/core/version.py` 的 `APP_VERSION`，不满足时插件被标为「异常」 |
-| `depends` | 可选 | 依赖的插件 id 列表（字符串或数组），不能依赖自己，必须都已安装；**用某个类型就要依赖声明它的类型插件** |
-| `provides` | 可选 | 对外提供的扩展接口名列表，`^[a-z][a-z0-9_.\-]{1,63}$`，对应 `api.provide(name, provider)` |
-| `capabilities` | 可选 | 能力标签（字符串或数组），在插件详情里展示 |
-| `extensions` | 类型要求时必填 | 适用的文件扩展名（字符串或数组），如 `[".PNG", "jpg"]`；自动转小写、去掉点、去重 |
-| `builtin` | 可选 | `true` 表示随程序分发；导入的插件会被强制为 `false`。**外部插件不要写 `true`** |
-| `kinds` | 类型插件用 | 声明插件类型（列表），每项字段见第 6 节；只有 `kind = "kind"` 的类型插件需要它 |
-| `options` | 可选 | 用户可配置的选项声明（列表或对象），插件页据此生成「插件选项」页；插件用 `api.option("键")` 读回，见第 5 节 |
+### 2.3 写说明
 
-字符串型列表字段（`depends` / `provides` / `capabilities` / `extensions`）既可以写成数组，也可以写成
-用逗号、分号或空白分隔的字符串，例如 `"extensions": ".png, jpg jpeg"`。
+`plugins/demo.hello/PLUGIN.md`：一句话说清这个插件有什么用，再列出它用到的扩展点与事件。
+可以照抄 `plugins/example.ui_extension/PLUGIN.md` 的结构。
 
-## 4. 载入流程与生命周期
+### 2.4 跑起来
 
-```
-扫描 plugins/*/            →  校验清单  →  套用启用状态（config/plugins.json）
-        ↓                                        ↓
-依赖拓扑排序（内置优先、依赖在前） → 清空类型表并登记引导类型 kind
-        ↓
-逐个载入：类型插件声明 kinds（登记类型）→ 校验自己的 kind 已登记 → import 入口并执行 register(api)
-        ↓
-收集查看器 / 接口 / 页面
-```
+1. 把目录放进 `plugins/`，重启程序（或在「插件」页点「重新载入」）；
+2. 打开「插件」页确认它已载入且为「已启用」；
+3. 去概览页看那张卡片，导入一个文件试试计数。
 
-- **类型声明**：类型插件（`kind = "kind"`）在载入时把自己的 `kinds` 登记进类型表，其他插件必须 `depends` 它，
-  否则在拓扑序里可能先载入而报 `插件类型未注册：xxx`（见第 6 节）。
+## 3. SDK 速览
 
-- **顺序**：依赖插件一定先于依赖它的插件载入，所以 `register` 里 `api.require("xxx")` 一定能拿到已载入的接口。
-- **程序本体接口**（如 `app.ui`）在每次清空注册表后由主程序重新提供，插件可以直接依赖。
-- **失败隔离**：某个插件 `register(api)` 抛错时，它已经 `provide` 的接口会被回收，依赖它的插件会被标成
-  「依赖插件未启用：xxx」，其余插件照常载入 —— **插件出错不会影响程序启动**。
-- **整体重载**：在「插件」页启用 / 禁用 / 导入 / 删除插件，或点「刷新」，都会整体重新载入；插件登记的
-  界面页面也随之增删（见第 7 节）。
-- **查看器注册**：重载时查看器注册表会被清空并重建，所以插件里不要长期持有旧的对象引用。
-
-常见的载入错误（会在「插件」页显示为「异常」，原因写在详情里）：
-
-| 报错 | 原因 |
-| --- | --- |
-| `插件清单缺少 id` / `插件清单缺少 name` | 必填字段没写 |
-| `插件 id 不合法：xxx` | id 不满足命名规则 |
-| `插件类型不合法：xxx` | `kind` 不满足命名规则 |
-| `插件类型未注册：xxx（请依赖声明该类型的类型插件：…）` | 用了某个类型却没 `depends` 声明它的类型插件（第 6 节） |
-| `插件清单不再用 kind_label 声明类型信息：请改由类型插件的 kinds 声明` | 用了旧的类型字段 |
-| `缺少插件类型接口「plugin.kind」` | 类型插件声明了 `kinds`，但没有可用的 `builtin.kind` |
-| `插件类型 panorama 的登记方法不存在：add_panorama` | `contributor` 指向的方法主程序里没有 |
-| `需要管理器版本 9.9.9，当前 0.1.0` | `manager_version` 高于当前程序版本 |
-| `缺少依赖插件：xxx` | `depends` 里写了没安装的插件 |
-| `插件依赖存在循环：a → b → a` | 依赖成环 |
-| `插件清单缺少 entry（入口文件）` / `入口文件不存在：plugin.py` | 入口脚本缺失 |
-| `无法载入插件模块：plugin.py` | 入口脚本导入时报语法错误或缺少依赖库 |
-| `插件入口缺少 register(api)：plugin.py` | 入口脚本没定义 `register` |
-| `插件选项 kind 不合法：number` | `options` 里的 `kind` 只能是 `bool` / `text` / `choice` |
-| `插件选项 zoom_step 是 choice 类型，至少要声明一个选项值：choices` | `choice` 没写 `choices` |
-| `插件选项 zoom_step 的默认值不在选项里：2.0` | `choice` 的 `default` 不在 `choices` 里 |
-| `插件选项 key 重复：zoom_step` | 同一个 `options` 里写了两个相同的 `key` |
-| `插件载入时发生未预期的错误，详见日志` | `register` 内其它异常，日志里有完整堆栈 |
-| `依赖插件未启用：xxx` | 依赖被禁用或载入失败 |
-
-## 5. 可用接口：`PluginApi`
-
-`register(api)` 收到的 `api` 就是 `PluginApi`，字段与方法如下。
+### 3.1 插件父类 `Plugin`
 
 | 成员 | 说明 |
 | --- | --- |
-| `api.plugin_id` | 当前插件 id（登记页面 / 查看器归属时用得上） |
-| `api.plugin_name` | 当前插件显示名 |
-| `api.default_extensions` | 清单里声明的 `extensions`，插件不显式传扩展名时作为默认值 |
-| `api.registry` | 扩展接口注册表（`ExtensionRegistry`），一般用不到 |
-| `api.add_viewer(name, extensions=(), factory=None, kind="text", description="", capabilities=(), viewer_id="", host="")` | 注册一个查看器，返回注册进注册表的 `Viewer` |
-| `api.option(key, default=None)` | 读取用户在「插件选项」页里设置的值（未设置时返回清单默认值），见下文 |
-| `api.add(kind, name="", *args, **fields)` | 通用登记入口，按插件类型路由（见第 6 节） |
-| `api.entries(kind="")` | 读取本插件登记的自定义类型条目（`PluginContribution`） |
-| `api.provide(name, provider)` | 对外提供扩展接口（配合清单 `provides`） |
-| `api.require(name)` | 取别的插件 / 主程序提供的接口，取不到会抛错（错误信息提示去「插件」页启用） |
-| `api.has(name)` | 接口是否存在，不会抛错 |
-| `api.extensions()` | 当前注册表里所有接口名 |
+| `setup(ctx)` | 载入时调用：注册贡献、订阅事件、读配置。**默认什么都不做** |
+| `teardown()` | 卸载时调用：只用于释放自己的额外资源（贡献由程序自动撤销） |
+| `describe()` | 插件页详情里的 `[(标题, 内容), ...]`，默认空 |
+| `data(key, default=None)` | 读清单 `data` 声明的文件（`.json` 自动解析，其余按文本读），结果会缓存 |
+| `data_path(key)` | 同一个文件的 `Path`（想自己处理时用），没声明返回 `None` |
+| `log` | 该插件的日志器（日志里带插件名，便于排查） |
+| `data_dir` | 插件目录 |
 
-### 查看器约定（`kind = "viewer"`）
+`attach(...)` 是程序内部调用的，插件不要自己调。
 
-```python
-def register(api) -> None:
-    api.require("dialog")                      # 声明用弹窗外壳显示内容（清单里要写 depends）
-    api.add_viewer(
-        "演示查看器",
-        extensions=("demo",),
-        factory=_factory,                      # factory(path, parent) -> QWidget
-        kind="text",                           # 查看器内部类别：image/video/audio/archive/text/code/markdown/spreadsheet
-        description="演示用查看器。",
-        capabilities=("只读",),
-        host="dialog",                         # 由哪个扩展接口承载窗口，内置查看器都是 "dialog"
-    )
-```
+### 3.2 插件上下文 `PluginContext`
 
-- `factory(path, parent)` 返回一个 `QWidget`；如果返回 `None`，查看器会被视为「没有可用控件」。
-  建议在 factory 里**延迟导入** `app.ui.viewers.*`，这样插件清单校验阶段不会加载界面依赖。
-- `host` 指定承载窗口的扩展接口名。程序自带 `dialog`（内置弹窗页面插件），它会把你的控件放进一个
-  独立弹窗外壳里，并提供 Esc / 关闭按钮退出；插件也**可以自己提供 `host` 接口**，只要对方提供了
-  `open_page(title=..., content_factory=..., meta=...)`。
-- 扩展名匹配由注册表按后缀完成；同一个扩展名有多个查看器时，先注册的优先。打开方式还可以在
-  「打开方式」页按扩展名改用系统默认程序（见 HELP 文档）。
-
-### 插件选项（`options`）与 `api.option`
-
-插件可以在清单里声明**用户可配置的选项**，程序会在插件页给它生成「插件选项」页，改完的值存进
-`config/plugins.json`，插件在 `register(api)` 里用 `api.option("键")` 读回来：
-
-```json
-{
-  "options": [
-    {"key": "fit_on_open", "label": "打开时适应窗口", "kind": "bool", "default": true,
-     "description": "小图也放大到填满窗口。"},
-    {"key": "zoom_step", "label": "缩放步长", "kind": "choice",
-     "choices": {"1.25": "1.25×（默认）", "1.5": "1.5×（快速）"}, "default": "1.25"},
-    {"key": "watermark", "label": "水印文字", "kind": "text", "default": ""}
-  ]
-}
-```
-
-```python
-def register(api) -> None:
-    fit = api.option("fit_on_open", True)          # 没设置过时用清单里的默认值
-    step = float(api.option("zoom_step", "1.25"))
-    api.add_viewer("演示查看器", ("demo",), factory=make_factory(fit, step))
-```
-
-- `kind` 支持 `bool`（开关）/ `text`（单行文本）/ `choice`（下拉单选，必须给 `choices`，可以写成对象或
-  `[["值", "显示名"], ...]`）。
-- `key` 要满足 `^[a-z][a-z0-9_.\-]{0,63}$`；`label` / `description` 可选，`description` 会作为控件提示。
-- 取值会被规范化（`"是"` / `"开"` / `"1"` → `True`，无法识别的取值回退默认值），所以 `api.option` 拿到
-  的类型是可预期的。
-- 插件选项改动后插件会被**整体重新载入**，工厂闭包里的取值随之更新（上面的例子就是这么生效的）。
-- 选项列表与当前取值也会显示在插件页详情里（`插件选项（N）：…`）。
-
-### 用 `app.open_with` 帮用户改打开方式
-
-`app.open_with` 是主程序提供的扩展接口（`OpenWithApi`），插件可以据此把某个扩展名指定成
-「用本插件打开」，实现「一键把本插件支持的格式都设为默认」之类的功能：
-
-| 方法 | 说明 |
+| 成员 | 说明 |
 | --- | --- |
-| `suffix_of(path)` | 从路径取扩展名 |
-| `viewers_for(suffix)` / `viewer_ids_for(suffix)` | 该扩展名可用的查看器 |
-| `suffixes_of(viewer_id)` / `suffixes_of_plugin(plugin_id)` | 某个查看器 / 插件覆盖的扩展名 |
-| `current_viewer_id(suffix)` | 当前指定的查看器 id（空字符串表示自动） |
-| `set_viewer(suffix, viewer_id)` | 指定某个扩展名用哪个查看器 |
-| `use_viewer_for_all(viewer_id, suffixes=None)` | 一次性把某查看器覆盖的（或指定的）扩展名都改成用它打开 |
-| `reset_viewer(viewer_id, suffixes=None)` | 撤销上述指定，回到自动选择 |
+| `ctx.plugin_id` / `ctx.plugin_name` / `ctx.manifest` | 自己的身份与清单 |
+| `ctx.log` | 日志器 |
+| `ctx.data(key, default=None)` / `ctx.data_path(key)` | 读 `data` 文件 |
+| `ctx.option(key, default=None)` / `ctx.options()` | 读清单 `options` 的当前取值 |
+| `ctx.contribute(point, value, *, key="", order=100, description="", **extra)` | 往扩展点放东西 |
+| `ctx.contributions(point="")` | 看自己贡献了什么 |
+| `ctx.on(event, handler)` / `ctx.emit(event, **payload)` | 订阅 / 广播事件 |
+| `ctx.add_viewer(name, **fields)` | 注册打开方式（查看器） |
+| `ctx.add_page(key, title, factory, **fields)` | 往主窗口加一个页面 |
+| `ctx.provide(name, obj)` / `ctx.require(name)` / `ctx.has(name)` | 插件之间交换运行期对象 |
+| `ctx.host` | 宿主服务对象（高级用法，一般用不到） |
+
+扩展点的名字用 `ExtensionPoint` 常量，事件名用 `Events` 常量，别手写字符串（写错了贡献会静默失效）。
+
+### 3.3 允许导入什么
 
 ```python
-def register(api) -> None:
-    open_with = api.require("app.open_with")
-    viewer = api.add_viewer("演示查看器", ("demo",))
-    open_with.use_viewer_for_all(viewer.id)       # 本插件声明的格式都用它打开
+from app.sdk import Plugin, PluginContext, Events, ExtensionPoint   # ✅
+from dm_plugin.<依赖的插件 id>.plugin import SomeClass               # ✅ 要在 depends 里声明（只能取 plugin.py）
+from app.services.item_service import ItemService                    # ❌ 自检会报错
 ```
 
-「插件选项」页在本插件注册了查看器时，也会自动列出这些格式的勾选框，勾选等同于调用 `set_viewer`。
-内置的 `builtin.image` 插件就是完整示例：3 个选项 + 图片格式的批量勾选。
+插件只能依赖 `app.sdk`、Python 标准库、第三方包，以及**声明过的** `dm_plugin.<id>`。
+程序内部模块（`app.core` / `app.services` / `app.repositories` / `app.db` / `app.data` / `app.ui.*`）
+对插件不开放：需要什么能力就通过扩展点、事件或插件库来拿（自检 `plugin_imports` 只放行 `app.sdk`）。
 
-### 内置的扩展接口
+跨插件引用也只有一个入口：**对方插件的 `plugin.py`**（`dm_plugin.<id>.plugin`）。库插件把要公开的类 / 函数都在
+`plugin.py` 里导出，其他模块属于实现细节（`dm_plugin.<id>.其它模块` 会被自检拦下）。
 
-| 接口名 | 提供者 | 能力 |
-| --- | --- | --- |
-| `plugin.kind` | 内置类型插件 `builtin.kind` | `declare(spec, plugin_id="")` 登记一个插件类型、`kinds()` 读当前所有类型；服务会替类型插件调用它，一般不用手动用 |
-| `dialog` | 内置插件 `builtin.dialog` | `open_page(title, content_factory, meta="", buttons=(), width=980, height=700)` → 独立弹窗；`windows()`、`close_all()` |
-| `app.ui` | 主程序本体 | `add_page(key, title, factory, icon="", bottom=False, plugin_id="")` 等，见第 7 节 |
-| `app.open_with` | 主程序本体 | `set_viewer` / `use_viewer_for_all` / `reset_viewer` 等，见上 |
+### 3.4 让 IDE 认识 `dm_plugin`
 
-大插件可以像内置插件一样 `api.provide("自己的接口", 对象)`，让别的插件依赖你 —— 依赖关系写在
-清单的 `provides` / `depends` 里，程序会保证载入顺序。
+`dm_plugin.<id>` 是载入期间在内存里合成的包，磁盘上并不存在，所以编辑器会把 `from dm_plugin...`
+标成找不到模块。仓库里备了一份生成好的桩：
 
-## 6. 插件类型（kind）与类型插件
+    python scripts/plugin_stubs.py     # 按插件清单刷新 stubs/dm_plugin/**
 
-### 6.1 类型由「类型插件」声明
+把 `stubs` 目录标记为源码根（PyCharm：右键 → Mark Directory as → Sources Root；仓库自带的
+`.idea/D-MyDataManager.iml` 已经配好），导入就不再标红。改了清单或库的 `__all__` 之后重跑一次脚本即可，
+自检 `plugin_stubs_current` 会检查桩与清单一不一致。
 
-- `kind` **不是枚举**：它由**类型插件**在清单的 `kinds` 数组里声明，其他插件只要 `depends` 那个类型插件，
-  就能使用这个类型。内置三个类型插件（源码目录 `plugins/builtin.kind*`）：
-  - `builtin.kind`：引导类型插件，`kind` 为 `kind`，对外提供 `plugin.kind` 扩展接口；
-  - `builtin.kind.viewer`：声明 `viewer`（显示名「打开方式」，要求 `extensions`，`contributor` 为 `add_viewer`）；
-  - `builtin.kind.page`：声明 `page`（显示名「弹窗页面」）。
-- 类型插件本身是**纯数据插件**：只有 `plugin.json`，不需要 `plugin.py`（内置插件可以不写 `entry`）。
-- 类型表在**每次载入插件时重建**：先登记引导类型 `kind`，再按依赖顺序执行每个类型插件的 `kinds` 声明。
-  所以类型插件被禁用 / 删除后，它声明的类型也会从表里消失，依赖该类型的插件随即报
-  `插件类型未注册：xxx`。
-- 多个类型插件声明同一个类型**不会报错**：已有的非空字段优先，`plugins` 记录声明过它的插件。
+## 4. 库插件怎么写
 
-`plugins/demo.kind/plugin.json`（一个自定义类型插件）：
+「库插件」= 把可复用的类 / 函数做成模块，给别的插件继承或调用。内置的查看器库就是典型例子：
+
+`plugins/builtin.lib.viewer/plugin.json`：
 
 ```json
 {
-  "id": "demo.kind",
-  "name": "全景类型插件",
+  "id": "builtin.lib.viewer",
+  "name": "查看器库",
   "version": "1.0.0",
-  "kind": "kind",
-  "author": "你的名字",
-  "manager_version": "0.1.0",
-  "depends": ["builtin.kind"],
-  "provides": ["panorama.kind"],
-  "kinds": [
-    {
-      "id": "panorama",
-      "label": "全景",
-      "description": "球面全景浏览。",
-      "requires_extensions": true,
-      "order": 30
-    }
+  "entry": "plugin.py",
+  "libraries": [
+    {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、播放页 MediaViewer"}
   ]
 }
 ```
 
-`kinds` 每项的字段：
+`plugins/builtin.lib.viewer/plugin.py`（库模块就是入口文件）里定义基类（节选）：
 
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `id` | ✅ | 类型名，`^[a-z][a-z0-9_.\-]{1,63}$` |
-| `label` | 可选 | 显示名（插件页类型下拉里显示的名字），缺省用 `id` |
-| `description` | 可选 | 类型说明 |
-| `requires_extensions` | 可选 | 该类型是否必须声明 `extensions`，默认 `false` |
-| `contributor` | 可选 | 登记方法名：类型插件声明 `contributor` 后，`api.add(kind, ...)` 会路由到 `PluginApi` 上同名的方法（如 `add_viewer`），所以**只有主程序已经实现了该方法的类型才能写** `contributor` |
-| `order` | 可选 | 类型下拉里的排序值，越小越靠前（内置：`kind` 1、`viewer` 10、`page` 20） |
+```python
+from app.sdk import Plugin
 
-> 旧写法 `kind_label` / `kind_description` / `kind_requires_extensions` 已**不再支持**：清单里写了会直接报
-> `插件清单不再用 kind_label 声明类型信息：请改由类型插件的 kinds 声明`。
 
-### 6.2 用新类型登记条目
+class ViewerPlugin(Plugin):
+    """查看器插件基类：子类只需要实现 create_view()。"""
 
-声明了新类型的插件（依赖 `demo.kind`）可以这样用：
+    default_kind = "text"
+    default_host = "dialog"
+    default_order = 100
+
+    def setup(self, ctx):
+        self._ctx = ctx
+        data = ctx.data("viewer")          # data/viewer.json：名称、扩展名、能力……
+        ...
+        ctx.require(self.default_host)     # 先确认弹窗外壳可用
+        ctx.add_viewer(name, extensions=..., factory=self.create_view,
+                       opener=self.open_view, kind=..., host=...)
+
+    def create_view(self, path, parent=None):
+        raise NotImplementedError      # 子类在这里造自己的视图控件
+
+    def open_view(self, path, parent=None):
+        """在自己的目录里造好视图，再让弹窗工具库弹出来。"""
+        host = self._ctx.require(self._host)
+        host.open_page(title=..., content_factory=lambda container: ViewerWindow(
+            path, lambda holder: self.create_view(path, holder), self.view_name, container))
+        return True, self.view_name
+```
+
+使用方（内置 7 个查看器插件）只需要：
+
+```python
+from dm_plugin.builtin.lib.viewer.plugin import ViewerPlugin
+
+
+class ImageViewerPlugin(ViewerPlugin):
+    """按扩展名打开图片。"""
+
+    def create_view(self, path, parent=None):
+        return ImageView(path, parent)
+```
+
+配合清单：
 
 ```json
 {
-  "id": "demo.panorama",
-  "name": "全景插件",
-  "kind": "panorama",
-  "entry": "plugin.py",
-  "extensions": [".jpg", ".png"],
-  "depends": ["demo.kind"]
+  "id": "builtin.image",
+  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.dialog"}],
+  "data": {"viewer": "data/viewer.json"}
 }
 ```
 
-```python
-def register(api) -> None:
-    api.add("panorama", "球面全景", fov=110)   # 登记一条自定义类型条目
+写库插件的注意点：
+
+- 用 **`libraries`** 声明要暴露的 `.py` 模块（文件必须存在且非空）；使用者用 `dm_plugin.<你的 id>.<模块>` 导入，或者 `library("<你的 id>", "<模块>")`（兜底写法）。
+- 库插件自己也可以有 `entry` 与 `setup()`（可以做初始化、`provide()` 运行期对象）；纯数据 / 纯代码的库插件可以不要 `entry`（内置插件允许省略）。
+- 别人用你的库之前必须 `depends` 你；你也可以在库里调 `requires("...")` 断言使用者确实声明过依赖。
+- 只改库模块的代码不会「热更新」：载入时程序会清理上一轮的 `dm_plugin.*` 模块，重新导入。
+
+## 5. 多依赖与依赖顺序
+
+一个插件可以同时依赖多个插件（一个插件也可以依赖多个库）：
+
+```json
+{
+  "depends": [
+    {"id": "builtin.lib.viewer"},
+    {"id": "builtin.lib.dialog"},
+    {"id": "other.storage", "version": ">=1.2 <2", "optional": true}
+  ]
+}
 ```
 
-自定义条目会被记录成 `PluginContribution(kind, plugin_id, name, args, fields)`，其它插件和界面可以读：
+- 程序按依赖拓扑排序载入：被依赖的先载入；同层内「内置优先、其次按 id」。
+- `version` 是版本范围（`>=1.0 <2`、`^1.2`、`~1.2.3`、`1.2.*`、`A || B` 见协议文档第 3 节）；不满足会让插件标为异常并禁用。
+- `optional: true`：目标不存在也能载入。
+- `incompatible` 用来声明冲突；`load_after` 只调顺序（目标可以不存在）。
+- 循环依赖会被指出来：`插件依赖存在循环：a → b → a`。
 
-```python
-from app.services.plugin_service import plugin_service
-
-for entry in plugin_service.contributions("panorama"):
-    print(entry.plugin_id, entry.name, entry.fields)
-```
-
-- 类型插件通过 `api.provide("plugin.kind", ...)` 暴露声明能力（内置 `builtin.kind` 就是这样做的，
-  接口对象是 `KindApi`，方法 `declare(spec, plugin_id="")` / `kinds()`）；自定义类型插件如果不用
-  `contributor`，只要写 `kinds` 就会由服务在载入时登记。
-- 「插件」页的类型下拉框里的类型，就是当前载入插件重建出来的类型表，所以新类型装上类型插件后立刻可选；
-  跳转过来的「打开方式」筛选会选中 `viewer` 类型（`PluginPage.apply_kind("viewer")`）。
-
-## 7. 大型插件：挂页面、复用主程序能力
-
-主程序通过 `app.ui` 扩展接口（`AppUiApi`，源码 `src/app/core/app_ui.py`）把「加导航页」的能力开放给插件：
-
-```python
-def register(api) -> None:
-    ui = api.require("app.ui")
-    ui.add_page(
-        "demo.page",        # 页面 key：小写字母开头，可含数字、下划线、点和连字符，同一插件内唯一
-        "我的工具",          # 导航项标题
-        _build,             # 无参工厂，返回 QWidget；在窗口装配时才被调用
-        icon="HOME",        # FluentIcon 的名字（如 HOME / TILES / DEVELOPER_TOOLS），未知名字回退通用图标
-        bottom=True,        # True 放到侧边导航底部（设置上方），默认顶部
-        plugin_id=api.plugin_id,
-    )
-```
-
-- **生命周期**：页面在插件载入时登记，主程序装配导航时创建控件；插件被禁用 / 删除后页面会自动消失，
-  重新启用又会出现。同一个插件重复登记同一个 key 只会更新，不会出现重复导航项。
-- **错误隔离**：页面工厂抛异常时只会显示一个「插件页面无法显示：…」的提示页，不会影响主界面。
-- **不要做重活**：`add_page` 本身只记一条登记；真正耗时的加载放在页面控件的 `showEvent` 或后台线程里。
-- **复用主程序能力**：插件是普通 Python 模块，可以直接使用主程序的模块，例如
-  `from app.services.item_service import item_service`、`from app.core.signals import signalBus`、
-  `from app.ui.components.xxx import ...`、`from app.core.config import config`。注意这些内部接口**没有稳定
-  版本承诺**，跨版本升级可能变化；用清单的 `manager_version` 声明你需要的版本。
-- **弹出窗口**：需要独立窗口时优先依赖内置的 `dialog` 接口（`api.require("dialog").open_page(...)`），
-  它已经处理好窗口装饰、Esc 退出与生命周期。
-
-## 8. 排错
-
-1. 「插件」页 → 选中插件 → 详情区会显示类型、来源、状态、依赖、扩展接口、入口文件与错误原因。
-2. 载入失败的完整堆栈在日志里（`logs/app-*.log`，设置页可切换日志模式），关键字「插件载入失败」「插件载入异常」。
-3. 启用状态保存在 `config/plugins.json`（`{"version": 1, "plugins": {"<id>": {"enabled": true, ...}}}`）；
-   删掉对应条目等于恢复默认（启用）。
-4. 改了插件代码后点「插件」页的「刷新」；载入使用模块名 `dm_plugin_<id>`，不会与主程序模块冲突，
-   但同一进程内不会重复执行 `register`，所以不要依赖模块级全局状态的持久性。
-5. 「打开插件目录」按钮可以定位当前插件的 `plugin.json`，方便就地编辑。
-
-## 9. 完整示例：一个带页面、接口和自定义类型的插件
+## 6. 目录规范与「别重复声明」
 
 ```
-plugins/demo.hello/
-├─ plugin.json
-└─ plugin.py
+plugins/<id>/
+  plugin.json     参数与配置（名称、版本、依赖、数据文件声明、选项）
+  plugin.py       入口：插件类、入口函数
+  <库模块>.py     libraries 声明的模块
+  data/           具体数据（扩展名表、能力表、文案、模板……）
+  PLUGIN.md       说明文档
 ```
+
+- **清单只放参数与配置，具体数据放 `data/`**：例如查看器的扩展名清单、能力列表都在 `data/viewer.json`，不要在清单里重复一遍（协议已经删掉了 `extensions` / `capabilities` 字段，写了会直接报错）。
+- `plugin.py` 里不要写死「名称 / 说明 / 扩展名」这类常量：从 `ctx.manifest` 或 `ctx.data(...)` 读，改数据不用改代码。
+- 每个插件都要有 `PLUGIN.md`，写清用途、依赖、贡献、`data/` 里各文件是什么。
+
+## 7. 常见错误排查
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| 插件页里根本看不到插件 | 目录不是 `plugins/` 的直接子目录，或目录里没有 `plugin.json`（以 `.` / `_` 开头的目录会被跳过） |
+| 插件标为「异常」，错误是 `插件清单出现未知字段：kind` | 旧协议残留（`kind` / `kinds` / `extensions` / `capabilities` / `kind_label` 等）；删掉这些字段，数据改放 `data/` |
+| `缺少 plugin.json：<目录>` / `插件清单不是合法的 JSON：…` | 清单缺失或 JSON 语法错（多用编辑器校验一次） |
+| `入口文件不存在：plugin.py` | `entry` 写的文件名和实际不一致 |
+| `data 的 viewer 指向的文件不存在：data/viewer.json` | `data` 声明的文件没建好 |
+| `libraries 的库 viewer 的 module 必须是 .py 文件` / `声明的模块是空文件` | 库模块必须是存在的非空 `.py` |
+| 载入失败，日志里是 `插件入口导入失败，详见日志` | 入口脚本导入期抛异常（语法错 / 导入不存在的模块 / 顶层代码出错），看日志里的原始异常 |
+| `ModuleNotFoundError: No module named 'dm_plugin.xxx'` | 忘了在 `depends` 里声明该插件，或模块路径写错 |
+| `取不到插件库：…` / `插件未在 depends 里声明依赖：…` | 取库前没有声明依赖；补 `depends` 或改用静态导入 |
+| `插件初始化失败，详见日志` | `setup(ctx)` 里抛异常（常见：`require()` 的接口不存在、读数据文件时字段缺失） |
+| 贡献的东西没出现在界面上 | 扩展点名写错（用 `ExtensionPoint` 常量）、插件被禁用、或界面没刷新（重新打开该页试试）；回调抛异常只记日志，看日志确认 |
+| 改了插件选项没有生效 | 选项改动会让插件重新载入，重新打开界面即可；如果 `setup()` 里没读 `ctx.option()` 就不会生效 |
+| 想让插件默认不启用 | 「插件」页把它设为「禁用」（状态存在 `config/plugins.json`） |
+
+排查时的几个顺手动作：
+
+```powershell
+.venv\Scripts\python.exe -m compileall plugins      # 语法检查
+# 看日志：程序日志里插件相关的行都带插件名
+```
+
+## 8. 完整示例
+
+想一次看全「界面扩展点 + 事件 + 数据文件 + 选项」的写法，读这两个现成插件：
+
+- `plugins/example.ui_extension/`：往概览卡片、工具栏、右键菜单、详情、导入筛选、设置页各贡献一样东西，并订阅 5 个事件；它的 `PLUGIN.md` 是各插件说明文档的模板。
+- `plugins/builtin.image/`：功能插件的样板——`plugin.py` 只留一个 `create_view()`，扩展名 / 能力 / 宿主都在 `data/viewer.json`，用户可配置项在清单的 `options` 里。
+
+## 9. 速查
+
+**最小清单**
 
 ```json
 {
   "id": "demo.hello",
-  "name": "演示插件",
-  "version": "0.1.0",
-  "kind": "page",
-  "description": "演示页面、扩展接口与主程序能力。",
-  "author": "你的名字",
-  "manager_version": "0.1.0",
-  "entry": "plugin.py",
-  "depends": ["builtin.kind.page", "builtin.dialog"],
-  "provides": ["hello"],
-  "capabilities": ["演示页面", "对外接口", "弹窗"]
+  "name": "打招呼插件",
+  "version": "1.0.0",
+  "entry": "plugin.py"
 }
 ```
 
-```python
-from PyQt6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
-
-
-class HelloApi:
-    def greet(self, name: str) -> str:
-        return f"你好，{name}！"
-
-
-def _build() -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.addWidget(QLabel("这是插件页面。"))
-    button = QPushButton("弹出窗口")
-    button.clicked.connect(_popup)
-    layout.addWidget(button)
-    return page
-
-
-def _popup() -> None:
-    from app.core.extensions import extension_registry
-
-    dialog = extension_registry.provider("dialog")
-    if dialog is not None:
-        dialog.open_page("演示弹窗", lambda parent: QLabel("来自插件的内容"), meta="demo.hello")
-
-
-def register(api) -> None:
-    api.require("dialog")           # 清单里 depends 声明了 builtin.dialog
-    api.provide("hello", HelloApi())
-    api.require("app.ui").add_page("hello", "演示页", _build, icon="HOME", plugin_id=api.plugin_id)
-    # 想登记自定义类型条目（api.add("panorama", ...)）得先 depends 声明该类型的类型插件，见第 6 节
-```
-
-其它插件装了 `demo.hello` 后，只要在清单里写 `"depends": ["demo.hello"]`，就能：
+**最小插件类**
 
 ```python
-hello = api.require("hello")
-print(hello.greet("世界"))
+from app.sdk import Plugin
+
+
+class HelloPlugin(Plugin):
+    def setup(self, ctx):
+        ...
 ```
 
-## 10. 速查
+**常用一行**
 
-| 我想…… | 怎么做 |
-| --- | --- |
-| 让某种文件用我的界面打开 | 清单 `depends: ["builtin.kind.viewer", "builtin.dialog"]` + `kind: "viewer"` + `extensions` + `api.add_viewer(..., factory, host="dialog")` |
-| 在程序里加一个页面 | 依赖主程序的 `app.ui`：`api.require("app.ui").add_page(...)`（第 7 节） |
-| 弹一个独立窗口 | `api.require("dialog").open_page(title, content_factory)` |
-| 给别的插件提供能力 | 清单 `provides` + `api.provide("名字", 对象)` |
-| 用别的插件的能力 | 清单 `depends` + `api.require("名字")` |
-| 造一个新插件类型 | 写一个类型插件（`kind: "kind"` + `depends: ["builtin.kind"]` + `kinds: [{"id": "新名字", ...}]`，可纯数据无 `entry`），用它的插件 `depends` 该类型插件后用 `api.add(kind, ...)` 登记条目（第 6 节） |
-| 让用户配置插件参数 | 清单写 `options`（bool / text / choice），`register` 里用 `api.option("键")` 读回（第 5 节） |
-| 让某种格式固定用我的查看器打开 | `api.require("app.open_with").set_viewer("png", viewer.id)`，或 `use_viewer_for_all(viewer.id)` |
-| 声明最低程序版本 | 清单 `manager_version` |
-| 用主程序的内部能力 | 直接 `import app.*`（无稳定承诺，注意 `manager_version`） |
+```python
+ctx.contribute(ExtensionPoint.HOME_KPI, {"title": "标题", "value": "值"})   # 概览卡片
+ctx.on(Events.ITEM_IMPORTED, self._on_imported)                            # 订阅事件
+data = ctx.data("info")                                                     # 读 data/ 里的文件
+value = ctx.option("zoom_step", 1.25)                                       # 读插件选项
+ctx.add_page("hello", "演示页", self._build, icon="HOME")                    # 加一个页面
+ctx.add_viewer("我的查看器", extensions=["abc"], factory=self._view)         # 注册打开方式
+ctx.require("dialog")                                                       # 用别的插件提供的接口
+```
+
+**相关文档**
+
+- [`plugins/PLUGIN_PROTOCOL.md`](plugins/PLUGIN_PROTOCOL.md)：清单字段、依赖与版本、载入阶段、状态文件
+- [`plugins/EXTENSION_POINTS.md`](plugins/EXTENSION_POINTS.md)：扩展点与事件清单
+- 各插件目录下的 `PLUGIN.md`：每个内置插件的用途与贡献

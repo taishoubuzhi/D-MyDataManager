@@ -1,0 +1,17 @@
+{
+  "about": "示例插件贡献的设置卡片：数据放在 data/info.json，由插件自己读取",
+  "points": [
+    "app.ui.home.kpi",
+    "app.ui.manage.toolbar",
+    "app.ui.manage.item_menu",
+    "app.ui.detail.panel",
+    "app.ui.import.filter",
+    "app.ui.settings.card"
+  ],
+  "events": [
+    "item.imported",
+    "plugin.enabled",
+    "plugin.disabled",
+    "theme.changed"
+  ]
+}

@@ -10,7 +10,7 @@ class HomePage(ScrollPage):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.add_header().add_action(self.user_box)
+        self.header.add_action(self.user_box)
         card, body = self.add_section("概览", "当前用户的数据总量")
         ...
 ```

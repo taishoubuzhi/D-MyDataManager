@@ -2,25 +2,21 @@
   "id": "builtin.image",
   "name": "内置图片查看器",
   "version": "1.0.0",
-  "kind": "viewer",
   "description": "查看 png / jpg / gif 等图片，支持缩放、旋转与适应窗口。",
   "author": "D-MyDataManager",
-  "manager_version": "0.1.0",
   "builtin": true,
   "entry": "plugin.py",
   "depends": [
-    "builtin.kind.viewer",
-    "builtin.dialog"
+    {
+      "id": "builtin.lib.viewer"
+    },
+    {
+      "id": "builtin.lib.dialog"
+    }
   ],
-  "provides": [
-    "viewer"
-  ],
-  "capabilities": [
-    "缩放",
-    "旋转",
-    "适应窗口",
-    "图片信息"
-  ],
+  "data": {
+    "viewer": "data/viewer.json"
+  },
   "options": [
     {
       "key": "fit_on_open",
@@ -48,20 +44,5 @@
       "default": true,
       "description": "缩放时使用平滑插值；关闭后速度更快，但放大后更粗糙。"
     }
-  ],
-  "extensions": [
-    "png",
-    "jpg",
-    "jpeg",
-    "jpe",
-    "bmp",
-    "gif",
-    "webp",
-    "tif",
-    "tiff",
-    "ico",
-    "ppm",
-    "pgm",
-    "jfif"
   ]
 }

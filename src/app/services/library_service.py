@@ -125,6 +125,11 @@ class LibraryService:
         self.ensure_layout(library)
         self.session.flush()
         logger.info("库文件夹已迁移：{} -> {}", old, new)
+        # 广播库目录变化事件：插件可以订阅 library.changed
+        from ..sdk import Events
+        from .plugin_service import plugin_service
+
+        plugin_service.publish(Events.LIBRARY_CHANGED, path=str(new))
         return new
 
     # ---------------------------------------------------------------- 路径

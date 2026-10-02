@@ -1,10 +1,6 @@
-"""程序内查看器的界面实现。
+"""查看器调度层：查看器控件与窗口外壳都在插件里，这里只保留「谁来打开」。"""
 
-每个查看器都是一个 `QWidget`，构造签名为 `(path, parent=None)`，并可选地提供
-`caption` 字符串（显示在弹窗标题栏）。插件通过 `core.viewers.Viewer.factory` 引用这些类，
-并用 `viewer.host` 指定由哪个扩展接口负责显示页面；弹窗外壳见 `window.py`。
-"""
+from .open_flow import open_path, open_system, open_viewer_with
+from .window import DEFAULT_HOST, host_api, open_viewer
 
-from .window import DEFAULT_HOST, ViewerWindow, host_api, open_viewer
-
-__all__ = ["DEFAULT_HOST", "ViewerWindow", "host_api", "open_viewer"]
+__all__ = ["DEFAULT_HOST", "host_api", "open_path", "open_system", "open_viewer", "open_viewer_with"]

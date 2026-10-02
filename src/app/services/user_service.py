@@ -112,6 +112,11 @@ class UserService:
     def set_current(self, user: User) -> None:
         config.set(config.currentUserId, int(user.id))
         logger.info("当前用户切换为 {}", user.name)
+        # 广播用户切换事件：插件可以订阅 user.changed
+        from ..sdk import Events
+        from .plugin_service import plugin_service
+
+        plugin_service.publish(Events.USER_CHANGED, user_id=int(user.id), name=user.name)
 
     def create(self, name: str, password: str = "") -> User | None:
         name = (name or "").strip()

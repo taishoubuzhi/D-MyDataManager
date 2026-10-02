@@ -9,11 +9,18 @@ _check_plugin_pages / _check_image_viewer，只走公开契约（页面属性、
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 from .fixtures import SAMPLE_IMAGE
-from .harness import ROOT, Case, build_window, check, dispose_window, ensure_app
+from .harness import (
+    ROOT,
+    Case,
+    build_window,
+    check,
+    dispose_window,
+    ensure_app,
+    install_builtin_plugins,
+)
 
 #: 仓库里的内置插件目录；自检环境的插件目录是空的，插件相关检查要先把它装进去。
 BUILTIN_PLUGINS = ROOT / "plugins"
@@ -73,29 +80,30 @@ def _drop_widget(widget) -> None:
         app.processEvents()
 
 
-def _install_builtin_plugins() -> None:
-    """把仓库内置插件复制进隔离插件目录，并让插件服务重新载入。"""
-    from app.core import paths
-    from app.services.plugin_service import plugin_service
 
-    target = Path(paths.PLUGIN_DIR)
-    target.mkdir(parents=True, exist_ok=True)
-    for source in sorted(BUILTIN_PLUGINS.iterdir()):
-        if source.is_dir() and (source / "plugin.json").is_file():
-            shutil.copytree(source, target / source.name, dirs_exist_ok=True)
-    plugin_service.load_viewers()
-
-
-def _manifest_kinds() -> dict[str, str]:
-    """读仓库内置插件清单，返回 {插件 id: 类型}（用作独立于服务层的期望值）。"""
-    kinds: dict[str, str] = {}
+def _builtin_plugin_ids() -> list[str]:
+    """读仓库内置插件清单，返回插件 id（用作独立于服务层的期望值）。"""
+    ids: list[str] = []
     for source in sorted(BUILTIN_PLUGINS.iterdir()):
         manifest = source / "plugin.json"
         if not manifest.is_file():
             continue
         data = json.loads(manifest.read_text(encoding="utf-8"))
-        kinds[str(data.get("id"))] = str(data.get("kind") or "")
-    return kinds
+        ids.append(str(data.get("id")))
+    return ids
+
+
+def _point_counts() -> dict[str, int]:
+    """每个扩展点上登记了贡献的插件数（从服务层读回，供贡献筛选断言）。"""
+    from app.sdk import ExtensionPoint
+    from app.services.plugin_service import plugin_service
+
+    counts: dict[str, int] = {}
+    for point in ExtensionPoint.values():
+        ids = {item.plugin_id for item in plugin_service.point_items(point)}
+        if ids:
+            counts[point] = len(ids)
+    return counts
 
 
 def _seed_archives(case: Case) -> tuple[int, int]:
@@ -350,25 +358,25 @@ def open_with_page(case: Case) -> None:
     from pathlib import Path as _Path
 
     from app.core.extensions import extension_registry
-    from app.core.plugin_kinds import KIND_VIEWER
+    from app.sdk import ExtensionPoint
     from app.core.viewers import viewer_registry
     from app.services.open_with_service import MODE_BUILTIN, MODE_CUSTOM, open_with_service
 
-    _install_builtin_plugins()
+    install_builtin_plugins()
     _fixture, window = build_window(case)
     page = window.open_with_page
     problems: list[str] = []
     try:
         with _ToastRecorder(page) as toasts:
             _expect(problems, "md" in viewer_registry.extensions(), "载入内置插件后注册表应包含 md 扩展名")
-            markdown = viewer_registry.by_id("builtin.markdown.1")
-            _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.markdown.1")
+            markdown = viewer_registry.by_id("builtin.markdown")
+            _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.markdown")
             _expect(problems, markdown is not None and markdown.host == "dialog", "内置 markdown 查看器应交由弹窗插件托管")
-            _expect(problems, extension_registry.provider("dialog") is not None, "载入内置插件后应注册 dialog 弹窗页面扩展")
+            _expect(problems, extension_registry.provider("dialog") is not None, "载入内置插件后应注册 dialog 弹窗工具库扩展")
             _expect(
                 problems,
                 bool(viewer_registry.all()) and all(viewer.host == "dialog" for viewer in viewer_registry.all()),
-                "内置查看器都应声明依赖 dialog 弹窗页面插件",
+                "内置查看器都应声明依赖 dialog 弹窗工具库",
             )
             _expect(problems, open_with_service.resolve(_Path("示例.md")).is_builtin, "md 应解析到内置查看器")
 
@@ -392,12 +400,12 @@ def open_with_page(case: Case) -> None:
             _expect(problems, not page.program_edit.isEnabled(), "内置模式应禁用程序路径输入")
             _expect(problems, not page.browse_button.isEnabled(), "内置模式应禁用「浏览」按钮")
 
-            viewer_index = page.viewer_box.findData("builtin.markdown.1")
-            _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.markdown.1")
+            viewer_index = page.viewer_box.findData("builtin.markdown")
+            _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.markdown")
             page.viewer_box.setCurrentIndex(viewer_index)
             page._on_save()
             rule = open_with_service.rule_for("md")
-            _expect(problems, rule is not None and rule.viewer_id == "builtin.markdown.1", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
+            _expect(problems, rule is not None and rule.viewer_id == "builtin.markdown", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
             _expect(problems, toasts.titles("success"), "保存成功应给出提示")
             _select_other_suffix(page, "md")
             _select_suffix(page, "md")
@@ -408,7 +416,11 @@ def open_with_page(case: Case) -> None:
 
             page._on_manage_plugins()
             _expect(problems, window.stackedWidget.currentWidget() is window.plugin_page, "「管理插件」应跳到插件页")
-            _expect(problems, window.plugin_page.kind_box.currentData() == KIND_VIEWER, "跳转后插件页应筛成查看器类型")
+            _expect(
+                problems,
+                window.plugin_page.point_box.currentData() == ExtensionPoint.VIEWER,
+                "跳转后插件页应筛成查看器贡献",
+            )
             window.switchTo(window.open_with_page)
     finally:
         dispose_window(window)
@@ -417,23 +429,24 @@ def open_with_page(case: Case) -> None:
 
 @check("plugin_page_detail", "pages")
 def plugin_page_detail(case: Case) -> None:
-    """插件页：类型 / 来源筛选、详情字段、启停开关与越权拒绝。"""
+    """插件页：贡献 / 来源筛选、详情字段、启停开关与越权拒绝。"""
     from PyQt6.QtCore import Qt
 
-    from app.core.plugin_kinds import KIND_KIND, KIND_PAGE, KIND_VIEWER
+    from app.core.viewers import viewer_registry
+    from app.sdk import ExtensionPoint
     from app.services.plugin_service import SOURCE_BUILTIN, plugin_service
 
-    _install_builtin_plugins()
+    install_builtin_plugins()
     _fixture, window = build_window(case)
     page = window.plugin_page
     problems: list[str] = []
-    kinds = _manifest_kinds()
+    plugin_ids = _builtin_plugin_ids()
     try:
         with _ToastRecorder(page) as toasts:
-            expected_total = len(kinds)
+            expected_total = len(plugin_ids)
             _expect(
                 problems,
-                sorted(_listed_plugin_ids(page)) == sorted(kinds),
+                sorted(_listed_plugin_ids(page)) == sorted(plugin_ids),
                 f"插件列表应列出全部内置插件，实际 {sorted(_listed_plugin_ids(page))}",
             )
             _expect(
@@ -442,22 +455,18 @@ def plugin_page_detail(case: Case) -> None:
                 f"插件计数文案不对：{page.count_label.text()!r}",
             )
 
-            by_kind: dict[str, int] = {}
-            for kind in kinds.values():
-                by_kind[kind] = by_kind.get(kind, 0) + 1
-            by_kind[""] = expected_total
-            for kind, expected in by_kind.items():
-                page.apply_kind(kind)
+            by_point = _point_counts()
+            for point, expected in {**by_point, "": expected_total}.items():
+                page.apply_contribution(point)
                 got = len(_listed_plugin_ids(page))
-                _expect(problems, got == expected, f"类型 {kind or '全部'} 应筛出 {expected} 个插件，实际 {got}")
-            for kind in (KIND_VIEWER, KIND_PAGE, KIND_KIND):
-                _expect(problems, kind in by_kind, f"清单里应有 {kind} 类型的插件")
-            page.apply_kind("没有的类型")
-            _expect(problems, page.kind_box.currentData() in ("", None), "未知类型应回到「全部类型」")
+                _expect(problems, got == expected, f"贡献 {point or '全部'} 应筛出 {expected} 个插件，实际 {got}")
+            _expect(problems, ExtensionPoint.VIEWER in by_point, f"应有登记 {ExtensionPoint.VIEWER} 贡献的插件")
+            page.apply_contribution("app.ui.nonexistent")
+            _expect(problems, page.point_box.currentData() in ("", None), "未知贡献应回到「全部贡献」")
             _expect(
                 problems,
-                page.kind_box.count() == 1 + len(set(kinds.values())),
-                f"类型下拉应是「全部类型」+ {len(set(kinds.values()))} 种插件类型，实际 {page.kind_box.count()} 项",
+                page.point_box.count() == 1 + len(ExtensionPoint.values()),
+                f"贡献下拉应是「全部贡献」+ {len(ExtensionPoint.values())} 个扩展点，实际 {page.point_box.count()} 项",
             )
             _expect(problems, page.order_box.count() >= 5, "排序下拉应有默认顺序 / 名称 / 类型等方案")
             _expect(problems, page.author_box.count() >= 2, "创建者下拉应有「全部创建者」与至少一个创建者")
@@ -486,11 +495,21 @@ def plugin_page_detail(case: Case) -> None:
             info = plugin_service.get("builtin.image")
             _expect(problems, info is not None and info.has_options, "内置图片插件应声明可配置选项")
             protocol = page.detail_protocol.text()
-            for label in ("依赖插件", "扩展接口", "功能", "适用管理器版本", "入口文件"):
+            for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适用管理器版本", "入口文件"):
                 _expect(problems, label in protocol, f"协议行缺少「{label}」：{protocol!r}")
             _expect(problems, f"插件选项（{len(info.options)}）" in page.detail_options.text(), f"选项行不对：{page.detail_options.text()!r}")
             _expect(problems, "plugin.json" in page.detail_path.text(), f"应显示清单路径，实际 {page.detail_path.text()!r}")
-            _expect(problems, "png" in page.detail_ext.text(), f"应列出扩展名，实际 {page.detail_ext.text()!r}")
+            _expect(
+                problems,
+                "data/viewer.json" in page.detail_ext.text(),
+                f"应列出清单数据文件，实际 {page.detail_ext.text()!r}",
+            )
+            _expect(
+                problems,
+                viewer_registry.by_id("builtin.image") is not None
+                and "png" in viewer_registry.by_id("builtin.image").extensions,
+                "内置图片插件应在清单数据里声明 png 扩展名",
+            )
             _expect(problems, page.detail_meta.text().startswith("builtin.image"), f"副标题应以插件 id 开头，实际 {page.detail_meta.text()!r}")
             _expect(problems, page.options_button.text() == "插件选项", "选项按钮文案应为「插件选项」")
             _expect(problems, not page.delete_button.isEnabled(), "内置插件不应可删除")
@@ -533,7 +552,7 @@ def plugin_page_detail(case: Case) -> None:
                 "再点一次应恢复原来的启用状态",
             )
 
-            page.apply_kind("")
+            page.apply_contribution("")
             page.select_all()
             _expect(problems, len(page.checked_infos()) == expected_total, f"全选应勾选 {expected_total} 个插件，实际 {len(page.checked_infos())}")
             _expect(
@@ -565,23 +584,6 @@ def plugin_page_detail(case: Case) -> None:
     finally:
         dispose_window(window)
     assert not problems, "插件页检查未通过：" + "；".join(problems)
-
-
-def _prune_router_history() -> int:
-    """摘掉 qfluentwidgets 全局路由里已被销毁的 StackedWidget。
-
-    库里的 `qrouter` 会把每个窗口的 StackedWidget 一直留在 `stackHistories` 里，
-    窗口销毁后再卸载导航页（qrouter.remove → stacked.findChild）就会抛
-    `RuntimeError: wrapped C/C++ object of type StackedWidget has been deleted`。
-    自检用例反复建销窗口，所以卸载前先清掉失效记录；返回清理条数。
-    """
-    from PyQt6 import sip
-    from qfluentwidgets.common.router import qrouter
-
-    dead = [stacked for stacked in list(qrouter.stackHistories) if sip.isdeleted(stacked)]
-    for stacked in dead:
-        qrouter.stackHistories.pop(stacked, None)
-    return len(dead)
 
 
 @check("plugin_injected_pages", "pages")
@@ -634,7 +636,6 @@ def plugin_injected_pages(case: Case) -> None:
 
         api.remove_page("selfcheck")
         api.remove_page("broken")
-        _prune_router_history()
         window._sync_plugin_pages()
         _expect(problems, not window.plugin_pages(), f"卸载后不应残留插件页面，实际 {window.plugin_pages()}")
         _expect(problems, not api.pages(), "卸载后接口里也不应残留页面登记")
@@ -652,9 +653,8 @@ def image_viewer(case: Case) -> None:
 
     from app.core.viewers import viewer_registry
     from app.services.plugin_service import plugin_service
-    from app.ui.viewers.image_view import ZOOM_STEP, ImageViewer
-
-    _install_builtin_plugins()
+    install_builtin_plugins()
+    from dm_plugin.builtin.image.image_view import ZOOM_STEP, ImageViewer
     _fixture, window = build_window(case)
     problems: list[str] = []
     viewer = None
@@ -663,8 +663,8 @@ def image_viewer(case: Case) -> None:
         _expect(problems, SAMPLE_IMAGE.is_file(), f"自检图片不存在：{SAMPLE_IMAGE}")
         info = plugin_service.get("builtin.image")
         _expect(problems, info is not None and info.enabled, "内置图片插件应已启用")
-        registered = viewer_registry.by_id("builtin.image.1")
-        _expect(problems, registered is not None, "内置图片查看器应注册为 builtin.image.1")
+        registered = viewer_registry.by_id("builtin.image")
+        _expect(problems, registered is not None, "内置图片查看器应注册为 builtin.image")
         _expect(problems, registered is not None and registered.host == "dialog", "内置图片查看器应交由弹窗插件托管")
         _expect(problems, "png" in viewer_registry.extensions(), "查看器注册表应包含 png")
 
@@ -716,3 +716,38 @@ def image_viewer(case: Case) -> None:
         _drop_widget(viewer)
         dispose_window(window)
     assert not problems, "图片查看器检查未通过：" + "；".join(problems)
+
+
+@check("plugin_page_contributions", "pages")
+def plugin_page_contributions(case: Case) -> None:
+    """插件页按贡献分组：界面上没有类型概念，贡献筛选与查看器注册表一致。"""
+    from app.core.viewers import viewer_registry
+    from app.sdk import ExtensionPoint
+
+    install_builtin_plugins()
+    _fixture, window = build_window(case)
+    page = window.plugin_page
+    problems: list[str] = []
+    try:
+        _expect(problems, not hasattr(page, "kind_box"), "插件页不应再保留类型筛选（kind_box）")
+        _expect(
+            problems,
+            page.point_box.count() == 1 + len(ExtensionPoint.values()),
+            f"贡献下拉应是「全部贡献」+ {len(ExtensionPoint.values())} 个扩展点，实际 {page.point_box.count()} 项",
+        )
+        page.apply_contribution(ExtensionPoint.VIEWER)
+        got = set(_listed_plugin_ids(page))
+        expected = set(viewer_registry.plugin_ids())
+        _expect(problems, got == expected, f"「打开方式」筛选应等于查看器注册表的插件：{sorted(got)} != {sorted(expected)}")
+        label = ExtensionPoint.label(ExtensionPoint.VIEWER)
+        rows = {
+            _listed_plugin_ids(page)[index]: page.plugin_list.item(index).text()
+            for index in range(page.plugin_list.count())
+        }
+        row = rows.get("builtin.markdown", "")
+        _expect(problems, label in row, f"插件行应显示贡献「{label}」，实际 {row!r}")
+        page.apply_contribution("")
+        _expect(problems, len(_listed_plugin_ids(page)) == len(_builtin_plugin_ids()), "回到「全部贡献」应列出全部插件")
+    finally:
+        dispose_window(window)
+    assert not problems, "插件贡献检查未通过：" + "；".join(problems)

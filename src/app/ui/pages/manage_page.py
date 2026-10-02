@@ -40,6 +40,7 @@ from ...repositories import (
     ItemRepository,
     TagRepository,
 )
+from ...sdk import ExtensionPoint
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
 from ...services.open_with_service import MODE_ASK, open_with_service
 from ..framework import (
@@ -54,6 +55,7 @@ from ..framework import (
     tri_state,
     type_name,
 )
+from ..framework.contributions import icon_of, items, resolve, value_of
 from ..viewers.open_flow import open_path, open_system, open_viewer_with
 from ..dialogs import (
     CategoryConflictDialog,
@@ -177,6 +179,7 @@ class ManagePage(Page):
         self._total = 0
         self.restore_button: PushButton | None = None
         self._buttons: dict[str, PushButton] = {}
+        self._plugin_buttons: list[PushButton] = []
 
         columns = QHBoxLayout()
         columns.setSpacing(PAGE_SPACING)
@@ -193,6 +196,7 @@ class ManagePage(Page):
             signalBus.tagsChanged,
             signalBus.userChanged,
         )
+        signalBus.pluginsChanged.connect(self._sync_plugin_buttons)
         self.refresh()
 
     # ------------------------------------------------------------------ 构件
@@ -320,12 +324,38 @@ class ManagePage(Page):
             self._buttons[key] = button
         self.restore_button = self._buttons["restore"]
         self.restore_button.setEnabled(False)
+        self._plugin_buttons = self._plugin_button_list(flow, host)
         scroll.setWidget(host)
         clear_scroll_background(scroll)
         self.toolbar_view = scroll
         self.toolbar_layout = flow
         scroll.setFixedHeight(TOOLBAR_BUTTON_HEIGHT + TOOLBAR_ROW_SPACING)
         return scroll
+
+    def _plugin_button_list(self, flow: FlowLayout, host: QWidget) -> list[PushButton]:
+        """按扩展点贡献建工具栏按钮（app.ui.manage.toolbar）。"""
+        buttons: list[PushButton] = []
+        for item in items(ExtensionPoint.MANAGE_TOOLBAR):
+            data = value_of(item)
+            button = PushButton(icon_of(data.get("icon")), str(data.get("text") or item.name), host)
+            button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+            tip = str(data.get("tip") or item.description or "")
+            if tip:
+                button.setToolTip(tip)
+            button.clicked.connect(lambda _checked=False, cb=data.get("callback"): resolve(cb))
+            flow.addWidget(button)
+            buttons.append(button)
+        return buttons
+
+    def _sync_plugin_buttons(self) -> None:
+        """插件载入或卸载后重建工具栏上的插件按钮。"""
+        if self.toolbar_layout is None or self.toolbar_view is None:
+            return
+        for button in self._plugin_buttons:
+            self.toolbar_layout.removeWidget(button)
+            button.deleteLater()
+        self._plugin_buttons = self._plugin_button_list(self.toolbar_layout, self.toolbar_view.widget())
+        self._fit_toolbar()
 
     def _build_selection_bar(self, parent: QWidget) -> QWidget:
         """选择条：三态全选框 + 已选数量 + 批量操作，与列表里的勾选状态双向同步。"""
@@ -763,7 +793,21 @@ class ManagePage(Page):
             f"是否隐藏：{'是' if item.is_hidden else '否'}",
             f"是否在回收站：{'是' if item.is_deleted else '否'}",
         ]
+        lines.extend(self._plugin_detail_lines(item))
         MessageBox("数据详情", "\n".join(lines), self.window()).exec()
+
+    def _plugin_detail_lines(self, item) -> list[str]:
+        """插件贡献的详情行（扩展点 app.ui.detail.panel）。"""
+        lines: list[str] = []
+        for contribution in items(ExtensionPoint.DETAIL_PANEL):
+            data = value_of(contribution)
+            rows = resolve(data.get("lines"), item)
+            if rows is None:
+                continue
+            values = [str(row) for row in rows] if isinstance(rows, (list, tuple)) else [str(rows)]
+            title = str(data.get("title") or contribution.name)
+            lines.append(f"{title}：{'；'.join(values)}" if values else title)
+        return lines
 
     def _build_open_with_menu(self, item) -> RoundMenu:
         """「打开方式」子菜单：系统默认程序 / 各内置查看器 / 交给系统选择。"""
@@ -816,6 +860,18 @@ class ManagePage(Page):
                 menu.addAction(action)
             if key in MENU_SEPARATORS_AFTER:
                 menu.addSeparator()
+        plugin_items = items(ExtensionPoint.MANAGE_ITEM_MENU)
+        if plugin_items:
+            menu.addSeparator()
+        for item in plugin_items:
+            data = value_of(item)
+            menu.addAction(
+                Action(
+                    icon_of(data.get("icon")),
+                    str(data.get("text") or item.name),
+                    triggered=lambda _checked=False, cb=data.get("callback"): resolve(cb, item),
+                )
+            )
         return menu
 
     def _show_menu(self, item, pos) -> None:

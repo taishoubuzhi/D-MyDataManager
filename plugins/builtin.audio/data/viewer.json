@@ -1,0 +1,26 @@
+{
+  "name": "音频播放器",
+  "kind": "viewer",
+  "host": "dialog",
+  "extensions": [
+    "mp3",
+    "wav",
+    "flac",
+    "aac",
+    "ogg",
+    "oga",
+    "m4a",
+    "wma",
+    "opus",
+    "aiff",
+    "ape",
+    "mid"
+  ],
+  "capabilities": [
+    "播放暂停",
+    "进度拖动",
+    "音量"
+  ],
+  "description": "播放 mp3 / wav / flac 等音频，支持播放暂停、进度与音量。",
+  "order": 100
+}

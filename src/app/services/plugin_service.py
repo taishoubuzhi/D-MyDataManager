@@ -1,54 +1,64 @@
-"""插件服务：统一发现、校验、依赖排序、载入与启停。
+"""插件服务：插件目录的发现、状态、载入与诊断。
 
-内置插件与外部插件走同一条路径 —— 都在插件目录（`paths.PLUGIN_DIR`）下，
-每个插件是一个子目录，含 `plugin.json`（协议见 core.plugins）与清单声明的入口文件。
-内置标志由清单里的 `builtin: true` 决定：内置插件不能删除，但同样可以禁用。
-
-载入顺序由 `depends` 决定：被依赖的插件先注册，声明依赖的插件才能在
-`register(api)` 里用 `api.require("接口名")` 取到对方提供的扩展接口。
-缺依赖或循环依赖的插件会带上 error，不参与载入。
+协议与校验在 `app.core.plugin_core`，插件作者用的接口在 `app.sdk`：
+插件就是继承 `app.sdk.Plugin` 的一个类，核心负责清单解析、依赖排序、
+命名空间注册与按阶段载入（manifest → dependency → import → construct → setup）。
+本服务只做「发现 + 状态 + 编排 + 诊断」四件事，插件失败只标记该插件。
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import re
 import shutil
 import sys
+import time
 import uuid
 import zipfile
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from loguru import logger
 
 from ..core import paths
+from ..core.app_ui import APP_UI_EXTENSION, AppUiApi
 from ..core.extensions import ExtensionRegistry, extension_registry
-from ..core.plugin_kinds import (
-    KIND_EXTENSION,
-    KIND_PLUGIN_ID,
-    KIND_VIEWER,
-    plugin_kinds,
-    register_builtin_kinds,
-    valid_kind_name,
-)
-from ..core.plugin_options import coerce_option, defaults
-from ..core.plugins import (
+from ..core.plugin_core import (
+    DM_PACKAGE,
     MANIFEST_NAME,
+    PHASES,
     SOURCE_BUILTIN,
     SOURCE_EXTERNAL,
     PluginError,
     PluginInfo,
+    import_entry,
+    import_library,
     load_manifest,
-    sort_by_dependency,
-    validate_kind,
+    plugin_class,
+    register_plugin_namespace,
+    reset_namespace,
+    resolve_dependencies,
 )
+from ..core.plugin_options import coerce_option, defaults
 from ..core.viewers import Viewer, viewer_registry
+from ..sdk import (
+    Contribution,
+    Events,
+    ExtensionPoint,
+    Plugin,
+    PluginContext,
+    SdkError,
+    register_dependency_lookup,
+    register_library_resolver,
+)
 
 STATE_VERSION = 1
-STATE_FILTERS = (("", "全部状态"), ("enabled", "已启用"), ("disabled", "已禁用"), ("error", "异常"))
+
+STATE_FILTERS = (
+    ("", "全部状态"),
+    ("enabled", "已启用"),
+    ("disabled", "已禁用"),
+    ("error", "载入失败"),
+)
 
 SOURCE_FILTERS = (("", "全部来源"), (SOURCE_BUILTIN, "内置"), (SOURCE_EXTERNAL, "外部"))
 
@@ -56,151 +66,92 @@ SOURCE_FILTERS = (("", "全部来源"), (SOURCE_BUILTIN, "内置"), (SOURCE_EXTE
 PLUGIN_ORDERS = (
     ("default", "默认顺序"),
     ("name", "名称"),
-    ("kind", "类型"),
     ("source", "来源"),
     ("author", "创建者"),
     ("state", "状态"),
     ("version", "版本"),
+    ("contribution", "贡献"),
+)
+
+#: 插件列表按扩展点筛选：(扩展点, 显示名)
+CONTRIBUTION_FILTERS = (("", "全部贡献"),) + tuple(
+    (point, ExtensionPoint.label(point)) for point in ExtensionPoint.values()
 )
 
 
-@dataclass(frozen=True)
-class PluginContribution:
-    """自定义类型插件的登记条目：`payload` 的含义只有声明该类型的插件自己知道。"""
+class PluginHost:
+    """交给插件的程序服务句柄（`ctx.host`）：只暴露读数据与少量动作。"""
 
-    kind: str
-    plugin_id: str
-    name: str = ""
-    args: tuple[object, ...] = ()
-    fields: dict[str, object] = field(default_factory=dict)
+    def __init__(self, service: "PluginService") -> None:
+        self._service = service
 
+    def viewers(self) -> tuple[Viewer, ...]:
+        """当前登记的打开方式（含其他插件注册的）。"""
+        return tuple(viewer_registry.all())
 
-class PluginApi:
-    """交给插件的注册接口：登记条目、声明与使用扩展接口。"""
+    def open_path(self, path: str | Path) -> bool:
+        """用系统默认程序打开文件。"""
+        from ..core.shell import open_default
 
-    def __init__(
-        self,
-        plugin_id: str,
-        plugin_name: str = "",
-        default_extensions: Sequence[str] = (),
-        registry: ExtensionRegistry | None = None,
-        options: dict | None = None,
-    ) -> None:
-        self.plugin_id = plugin_id
-        self.plugin_name = plugin_name
-        self.default_extensions = tuple(default_extensions)
-        self.registry = registry if registry is not None else extension_registry
-        self.options: dict = dict(options or {})
-        self.registered: list[Viewer] = []
-        self.provided: list[str] = []
-        self.contributions: dict[str, list[PluginContribution]] = {}
+        return open_default(Path(path))
 
-    def option(self, key: str, default: object = None) -> object:
-        """读取用户在「插件选项」页里为本插件设置的值（没设置过返回选项声明的默认值）。"""
-        return self.options.get(key, default)
+    def reveal_path(self, path: str | Path) -> bool:
+        """在系统文件管理器里定位文件。"""
+        from ..core.shell import reveal
 
-    # ------------------------------------------------------------ 按类型登记
-    def add(self, kind: str, name: str = "", *args: object, **fields: object) -> object:
-        """按插件类型登记条目：类型有登记方法（查看器为 add_viewer）就路由过去。
+        return reveal(Path(path))
 
-        类型由类型插件声明，所以插件可以自定义新类型：这类类型的条目会记成
-        `PluginContribution`，其他插件用 `api.entries(kind)` 读取。
-        """
-        if not valid_kind_name(kind):
-            raise PluginError(f"插件类型不合法：{kind}")
-        spec = plugin_kinds.get(kind)
-        contributor = spec.contributor if spec is not None else ""
-        if contributor:
-            method = getattr(self, contributor, None)
-            if not callable(method):
-                raise PluginError(f"插件类型 {kind} 的登记方法不存在：{contributor}")
-            return method(name, *args, **fields)  # type: ignore[operator]
-        item = PluginContribution(
-            kind=kind,
-            plugin_id=self.plugin_id,
-            name=str(name),
-            args=tuple(args),
-            fields=dict(fields),
-        )
-        self.contributions.setdefault(kind, []).append(item)
-        return item
+    def current_user(self) -> str:
+        """当前用户 id（没有数据库或用户时返回空串）。"""
+        try:
+            from ..db.database import new_session
 
-    def entries(self, kind: str = "") -> tuple[PluginContribution, ...]:
-        """按类型读取本插件登记的条目（不传 kind 返回全部）。"""
-        if kind:
-            return tuple(self.contributions.get(kind, ()))
-        return tuple(item for items in self.contributions.values() for item in items)
+            with new_session() as session:
+                from .user_service import UserService
 
-    # ------------------------------------------------------------ 查看器
-    def add_viewer(
-        self,
-        name: str,
-        extensions: Iterable[str] = (),
-        factory: Callable[[Path, object], object] | None = None,
-        kind: str = "text",
-        description: str = "",
-        capabilities: Sequence[str] = (),
-        viewer_id: str = "",
-        host: str = "",
-    ) -> Viewer:
-        if factory is not None and not callable(factory):
-            raise PluginError(f"查看器「{name}」没有可用的控件工厂（插件需自行创建视图）")
-        clean: list[str] = []
-        for item in extensions or self.default_extensions:
-            suffix = str(item).strip().lstrip(".").lower()
-            if suffix and suffix not in clean:
-                clean.append(suffix)
-        if not viewer_id:
-            viewer_id = f"{self.plugin_id}.{len(self.registered) + 1}"
-        if host:
-            self.require(host)  # 显示窗口由该扩展接口提供，缺了就注册失败
-        viewer = Viewer(
-            id=viewer_id,
-            name=name,
-            extensions=tuple(clean),
-            kind=kind,
-            plugin_id=self.plugin_id,
-            factory=factory,
-            host=host,
-            description=description,
-            capabilities=tuple(capabilities),
-        )
-        viewer_registry.register(viewer)
-        self.registered.append(viewer)
-        return viewer
+                return str(UserService(session).current_id())
+        except Exception:
+            logger.warning("读取当前用户失败，插件看到的是空值")
+            return ""
 
-    # ------------------------------------------------------ 扩展接口
-    def provide(self, name: str, provider: object) -> None:
-        """向其他插件暴露一个扩展接口。"""
-        self.registry.provide(name, provider, self.plugin_id)
-        if name not in self.provided:
-            self.provided.append(name)
+    def toast(self, title: str, content: str = "") -> None:
+        """弹一条界面提示；没有窗口（自检、命令行）时只写日志。"""
+        try:
+            from PyQt6.QtWidgets import QApplication
 
-    def require(self, name: str) -> object:
-        """取其他插件提供的扩展接口，缺失时报 PluginError。"""
-        provider = self.registry.provider(name)
-        if provider is None:
-            raise PluginError(f"缺少扩展接口：{name}（请检查依赖插件是否已安装并启用）")
-        return provider
-
-    def has(self, name: str) -> bool:
-        return name in self.registry
-
-    def extensions(self) -> tuple[str, ...]:
-        return self.registry.names()
+            from ..ui.framework.feedback import toast_info
+        except Exception:  # 没有界面环境
+            logger.info("插件提示：{} {}", title, content)
+            return
+        parent = QApplication.activeWindow()
+        if parent is None:
+            logger.info("插件提示：{} {}", title, content)
+            return
+        toast_info(parent, title, content)
 
 
 class PluginService:
-    """插件目录的发现、状态与载入。"""
+    """插件目录的发现、状态、载入与诊断（实现 `ContextServices` 协议）。"""
 
-    def __init__(self, plugin_dir: Path | str | None = None, state_file: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        plugin_dir: Path | str | None = None,
+        state_file: Path | str | None = None,
+    ) -> None:
         self._plugin_dir = Path(plugin_dir) if plugin_dir else None
         self._state_file = Path(state_file) if state_file else None
-        self._viewers: dict[str, list[Viewer]] = {}
-        self._apis: dict[str, PluginApi] = {}
-        self._errors: dict[str, str] = {}
+        self._errors: dict[str, tuple[str, str]] = {}
         self._bootstrap: dict[str, object] = {}
-        self._loaded_plugins: list[PluginInfo] = []
+        self._settings: dict[str, dict[str, Any]] = {}
+        self._plugins: dict[str, Plugin] = {}
+        self._contexts: dict[str, PluginContext] = {}
+        self._contributions: dict[str, list[Contribution]] = {}
+        self._handlers: dict[str, list[tuple[str, Callable[..., None]]]] = {}
+        self._report: list[tuple[str, str, bool, str, float]] = []
+        self._infos: dict[str, PluginInfo] = {}
+        self._loaded: list[PluginInfo] = []
+        self._pages: AppUiApi | None = None
+        self.host = PluginHost(self)
 
     # ------------------------------------------------------------ 路径
     @property
@@ -245,7 +196,7 @@ class PluginService:
         for folder in sorted(root.iterdir(), key=lambda item: item.name.lower()):
             if not folder.is_dir() or folder.name.startswith((".", "_")):
                 continue
-            if not (folder / MANIFEST_NAME).exists():
+            if not (folder / MANIFEST_NAME).is_file():
                 continue
             try:
                 found.append(load_manifest(folder))
@@ -257,31 +208,30 @@ class PluginService:
                         path=folder,
                         enabled=False,
                         error=str(exc),
+                        error_phase=PHASES[0],
                     )
                 )
         return found
 
     def discover(self) -> list[PluginInfo]:
-        """扫描 + 套用状态 + 依赖排序；缺依赖 / 循环依赖 / 依赖未启用的插件带 error。"""
+        """扫描 + 套用状态 + 依赖排序；缺依赖 / 循环 / 依赖未启用的插件带 error。"""
         raw = self.scan()
         state = self._read_state()
-        order, dep_errors = sort_by_dependency(raw)
-        self._errors = dict(dep_errors)
+        order, dep_errors = resolve_dependencies(raw)
         base_enabled: dict[str, bool] = {}
         for info in raw:
             entry = state.get(info.id) or {}
             base_enabled[info.id] = bool(entry.get("enabled", info.enabled)) and not info.error
         # 依赖在前，逐级传播「依赖不可用」
         available: dict[str, bool] = {}
-        blocked: dict[str, str] = {}
+        blocked: dict[str, tuple[str, str]] = {}
         for info in order:
-            missing = [dep for dep in info.depends if not available.get(dep, False)]
+            missing = [dep for dep in info.depends_ids if not available.get(dep, False)]
             if missing:
-                blocked[info.id] = "依赖插件未启用：" + "、".join(missing)
+                blocked[info.id] = (PHASES[1], "依赖插件未启用：" + "、".join(missing))
                 available[info.id] = False
             else:
                 available[info.id] = base_enabled[info.id]
-        self._errors.update(blocked)
         result: list[PluginInfo] = []
         for info in sorted(raw, key=lambda item: (0 if item.builtin else 1, item.id)):
             entry = state.get(info.id) or {}
@@ -297,18 +247,23 @@ class PluginService:
                     if spec.key in values:
                         settings[spec.key] = coerce_option(spec, values[spec.key])
             fields["settings"] = settings
-            error = info.error or dep_errors.get(info.id, "") or blocked.get(info.id, "")
+            phase, message = dep_errors.get(info.id) or blocked.get(info.id) or ("", "")
+            error = info.error or message
             if error:
                 fields["error"] = error
+                fields["error_phase"] = info.error_phase or phase
             fields["enabled"] = base_enabled[info.id] and not error and available.get(info.id, True)
+            fields["contributions"] = self._contribution_labels(info.id)
             result.append(info.clone(**fields))
         position = {info.id: index for index, info in enumerate(order)}
         result.sort(key=lambda item: (position.get(item.id, len(order)), item.id))
+        self._infos = {info.id: info for info in result}
+        self._errors = {info.id: (info.error_phase, info.error) for info in result if info.error}
         return result
 
     def errors(self) -> dict[str, str]:
-        """最近一次 discover() 得到的依赖错误。"""
-        return dict(self._errors)
+        """最近一次 discover() 得到的错误（`插件 id → [阶段] 说明`）。"""
+        return {plugin_id: info.error_text for plugin_id, info in self._infos.items() if info.error}
 
     def builtin(self) -> list[PluginInfo]:
         return [info for info in self.discover() if info.builtin]
@@ -324,19 +279,19 @@ class PluginService:
 
     def all(
         self,
-        kind: str = "",
         query: str = "",
         state: str = "",
         source: str = "",
         author: str = "",
+        contribution: str = "",
         order: str = "default",
         reverse: bool = False,
     ) -> list[PluginInfo]:
-        """按类型 / 来源 / 创建者 / 状态 / 关键词筛选插件，并按指定方案排序。"""
+        """按贡献 / 来源 / 创建者 / 状态 / 关键词筛选插件，并按指定方案排序。"""
         keyword = str(query or "").strip().lower()
         result: list[PluginInfo] = []
         for info in self.discover():
-            if kind and info.kind != kind:
+            if contribution and contribution not in self._points_of(info.id):
                 continue
             if source and info.source != source:
                 continue
@@ -361,8 +316,6 @@ class PluginService:
     def _order_value(info: PluginInfo, order: str) -> tuple:
         if order == "name":
             return (info.name.lower(), info.id)
-        if order == "kind":
-            return (info.kind_label.lower(), info.name.lower())
         if order == "source":
             return (info.source_label, info.name.lower())
         if order == "author":
@@ -371,6 +324,8 @@ class PluginService:
             return (info.state_label, info.name.lower())
         if order == "version":
             return (info.version_text, info.name.lower())
+        if order == "contribution":
+            return (info.contributions_text, info.name.lower())
         return (info.name.lower(), info.id)
 
     def authors(self) -> tuple[str, ...]:
@@ -378,10 +333,45 @@ class PluginService:
         found = {info.author_text for info in self.discover()}
         return tuple(sorted(found, key=str.lower))
 
+    @staticmethod
+    def _search_text(info: PluginInfo) -> str:
+        return " ".join(
+            [
+                info.name,
+                info.id,
+                info.description,
+                info.author,
+                info.note,
+                info.source_label,
+                info.contributions_text,
+                info.libraries_text,
+                " ".join(info.depends_ids),
+                " ".join(info.provides),
+                " ".join(info.data),
+            ]
+        )
+
+    def _points_of(self, plugin_id: str) -> tuple[str, ...]:
+        return tuple(sorted({item.point for item in self._contributions.get(plugin_id, ())}))
+
+    def _contribution_labels(self, plugin_id: str) -> tuple[str, ...]:
+        return tuple(sorted({ExtensionPoint.label(item.point) for item in self._contributions.get(plugin_id, ())}))
+
+    # ------------------------------------------------------------ 选项
     def options_of(self, plugin_id: str) -> dict[str, object]:
         """该插件当前的选项值（含未设置项），未知插件返回空字典。"""
+        if plugin_id in self._settings:
+            return dict(self._settings[plugin_id])
         info = self.get(plugin_id)
         return dict(info.settings) if info is not None else {}
+
+    def options(self, plugin_id: str) -> dict[str, Any]:
+        """`ContextServices`：插件读自己的全部选项值。"""
+        return self.options_of(plugin_id)
+
+    def option(self, plugin_id: str, key: str, default: Any = None) -> Any:
+        """`ContextServices`：插件读自己的一个选项值。"""
+        return self.options_of(plugin_id).get(key, default)
 
     def set_option(self, plugin_id: str, key: str, value: object) -> object:
         """保存一个插件选项的值，返回规范化后的值。"""
@@ -394,13 +384,15 @@ class PluginService:
         normalized = coerce_option(spec, value)
         plugins = self._read_state()
         entry = plugins.get(plugin_id) or {}
-        options = entry.get("options")
-        if not isinstance(options, dict):
-            options = {}
-        options[key] = normalized
-        entry["options"] = options
+        values = entry.get("options")
+        if not isinstance(values, dict):
+            values = {}
+        values[key] = normalized
+        entry["options"] = values
         plugins[plugin_id] = entry
         self._write_state(plugins)
+        if plugin_id in self._settings:
+            self._settings[plugin_id][key] = normalized
         return normalized
 
     def reset_options(self, plugin_id: str) -> bool:
@@ -415,34 +407,21 @@ class PluginService:
         else:
             plugins.pop(plugin_id, None)
         self._write_state(plugins)
+        info = self.get(plugin_id)
+        if plugin_id in self._settings and info is not None:
+            self._settings[plugin_id] = defaults(info.options)
         return True
-
-    @staticmethod
-    def _search_text(info: PluginInfo) -> str:
-        return " ".join(
-            [
-                info.name,
-                info.id,
-                info.description,
-                info.author,
-                info.note,
-                info.kind_label,
-                info.source_label,
-                " ".join(info.extensions),
-                " ".join(info.capabilities),
-                " ".join(info.depends),
-                " ".join(info.provides),
-            ]
-        )
 
     # ------------------------------------------------------ 程序本体接口
     def bootstrap(self, name: str, provider: object) -> None:
-        """登记程序本体提供的扩展接口（如 `app.ui`）：每次载入插件后都会重新提供，插件可直接依赖。
+        """登记程序本体提供的扩展接口（如 `app.ui`）：每次载入插件后都会重新提供。
 
-        提供者可以实现 `sync_plugins(plugin_ids)`，每次载入插件后会被调用一次，
+        提供者可以实现 `sync_plugins(plugin_ids)`，每次载入插件后被调用一次，
         用来把自身持有的插件产物（例如界面页面）与当前载入的插件集合对齐。
         """
         self._bootstrap[name] = provider
+        if name == APP_UI_EXTENSION and isinstance(provider, AppUiApi):
+            self._pages = provider
         extension_registry.provide(name, provider, "")
 
     def bootstrap_names(self) -> tuple[str, ...]:
@@ -454,7 +433,7 @@ class PluginService:
             extension_registry.provide(name, provider, "")
 
     def _sync_bootstrap(self) -> None:
-        loaded = tuple(self._apis)
+        loaded = tuple(self._plugins)
         for provider in self._bootstrap.values():
             sync = getattr(provider, "sync_plugins", None)
             if not callable(sync):
@@ -464,131 +443,363 @@ class PluginService:
             except Exception:  # 界面同步失败不应该影响插件载入
                 logger.exception("程序本体接口同步失败：{}", type(provider).__name__)
 
+    # ------------------------------------------------ ContextServices 实现
+    def provide(self, plugin_id: str, name: str, obj: object) -> None:
+        """向其他插件暴露一个扩展接口。"""
+        extension_registry.provide(name, obj, plugin_id)
+
+    def require(self, plugin_id: str, name: str) -> object:
+        """取其他插件提供的扩展接口，缺失时报 PluginError。"""
+        provider = extension_registry.provider(name)
+        if provider is None:
+            raise PluginError(f"缺少扩展接口：{name}（请检查依赖插件是否已安装并启用）")
+        return provider
+
+    def has(self, plugin_id: str, name: str) -> bool:
+        """某个扩展接口是否可用。"""
+        return name in extension_registry
+
+    def contribute(
+        self,
+        plugin_id: str,
+        point: str,
+        value: object,
+        *,
+        key: str = "",
+        order: int = 100,
+        description: str = "",
+        **extra: object,
+    ) -> Contribution:
+        """登记一条扩展点贡献；插件卸载时自动撤销。"""
+        if point not in ExtensionPoint.values():
+            raise PluginError(f"未知扩展点：{point}（可用：{'、'.join(ExtensionPoint.values())}）")
+        item = Contribution(
+            point=point,
+            plugin_id=plugin_id,
+            value=value,
+            key=str(key),
+            order=int(order),
+            description=str(description),
+            extra=dict(extra),
+        )
+        self._contributions.setdefault(plugin_id, []).append(item)
+        return item
+
+    def contributions(self, plugin_id: str = "", point: str = "") -> tuple[Contribution, ...]:
+        """已载入插件登记的贡献（可按插件与扩展点过滤）。"""
+        if plugin_id:
+            items = tuple(self._contributions.get(plugin_id, ()))
+        else:
+            items = tuple(item for group in self._contributions.values() for item in group)
+        if point:
+            items = tuple(item for item in items if item.point == point)
+        return items
+
+    def point_items(self, point: str) -> tuple[Contribution, ...]:
+        """某个扩展点上的全部贡献，按 order、插件 id、键排序（界面用）。"""
+        items = [item for item in self.contributions(point=point)]
+        items.sort(key=lambda item: (item.order, item.plugin_id, item.key))
+        return tuple(items)
+
+    def on(self, plugin_id: str, event: str, handler: Callable[..., None]) -> None:
+        """订阅一个事件。"""
+        if event not in Events.values():
+            raise PluginError(f"未知事件：{event}（可用：{'、'.join(Events.values())}）")
+        if not callable(handler):
+            raise PluginError(f"事件 {event} 的处理函数不可调用")
+        self._handlers.setdefault(event, []).append((plugin_id, handler))
+
+    def emit(self, event: str, payload: dict[str, Any]) -> None:
+        """`ContextServices`：插件广播一个事件。"""
+        self.publish(event, **payload)
+
+    def publish(self, event: str, **payload: Any) -> int:
+        """把事件发给订阅了它的插件，返回成功处理的个数（程序内部也用它广播）。"""
+        handlers = list(self._handlers.get(event, ()))
+        done = 0
+        for plugin_id, handler in handlers:
+            try:
+                handler(**payload)
+                done += 1
+            except Exception:
+                logger.exception("插件 {} 处理事件 {} 失败", plugin_id, event)
+        return done
+
+    def add_viewer(
+        self,
+        plugin_id: str,
+        name: str,
+        *,
+        extensions: Iterable[str] = (),
+        factory: Callable[[Path, object], object] | None = None,
+        opener: Callable[[Path], tuple[bool, str]] | None = None,
+        kind: str = "text",
+        description: str = "",
+        capabilities: Sequence[str] = (),
+        viewer_id: str = "",
+        host: str = "",
+        order: int = 100,
+    ) -> Contribution:
+        """注册一个打开方式，并记下对应贡献。"""
+        if factory is not None and not callable(factory):
+            raise PluginError(f"查看器「{name}」没有可用的控件工厂（插件需自行创建视图）")
+        clean: list[str] = []
+        for item in extensions:
+            suffix = str(item).strip().lstrip(".").lower()
+            if suffix and suffix not in clean:
+                clean.append(suffix)
+        if not clean:
+            raise PluginError(f"查看器「{name}」没有声明任何扩展名")
+        if not viewer_id:
+            viewer_id = f"{plugin_id}.{len(self._contributions.get(plugin_id, ())) + 1}"
+        if host:
+            self.require(plugin_id, host)  # 显示窗口由该扩展接口提供，缺了就注册失败
+        viewer = Viewer(
+            id=viewer_id,
+            name=name,
+            extensions=tuple(clean),
+            kind=kind,
+            plugin_id=plugin_id,
+            factory=factory,
+            opener=opener,
+            host=host,
+            description=description,
+            capabilities=tuple(capabilities),
+        )
+        viewer_registry.register(viewer)
+        return self.contribute(
+            plugin_id,
+            ExtensionPoint.VIEWER,
+            viewer,
+            key=viewer_id,
+            order=order,
+            description=description,
+        )
+
+    def add_page(
+        self,
+        plugin_id: str,
+        key: str,
+        title: str,
+        factory: Callable[[], object],
+        *,
+        icon: str = "",
+        bottom: bool = False,
+        order: int = 100,
+    ) -> Contribution:
+        """往主窗口加一个页面（需要程序提供 `app.ui` 接口）。"""
+        api = self._pages
+        if api is None:
+            raise PluginError("程序没有提供界面接口 app.ui，无法注册页面")
+        spec = api.add_page(key, title, factory, icon=icon, bottom=bottom, plugin_id=plugin_id)
+        return self.contribute(
+            plugin_id,
+            ExtensionPoint.PAGE,
+            spec,
+            key=spec.key,
+            order=order,
+            title=title,
+        )
+
+    def _resolve_library(self, plugin_id: str, module: str = "") -> object:
+        if plugin_id not in self._plugins:
+            raise SdkError(f"插件未载入，取不到它的库：{plugin_id}")
+        try:
+            return import_library(plugin_id, module)
+        except PluginError as exc:
+            raise SdkError(str(exc)) from exc
+
+    def _dependency_lookup(self, plugin_id: str) -> bool:
+        return plugin_id in self._plugins
+
     # ---------------------------------------------------------- 载入
-    def load_viewers(self) -> int:
+    def load(self) -> int:
         """按依赖顺序载入所有启用的插件，返回注册的查看器数量。"""
+        self.teardown_all()
         viewer_registry.clear()
         extension_registry.clear()
-        plugin_kinds.clear()
-        register_builtin_kinds()
         self._provide_bootstrap()
-        self._viewers = {}
-        self._apis = {}
-        self._loaded_plugins = []
-        order, dep_errors = sort_by_dependency(self.scan())
-        infos = {info.id: info for info in self.discover()}
-        ordered: list[PluginInfo] = []
-        for info in order:
-            current = infos.get(info.id, info)
-            if current.error:
-                continue
-            ordered.append(current)
+        register_library_resolver(self._resolve_library)
+        register_dependency_lookup(self._dependency_lookup)
+        self._report = []
+        self._loaded = []
         count = 0
-        for info in ordered:
-            if not info.enabled:
-                continue  # 非查看器类型的插件同样要载入：它们为别的插件提供扩展接口
-            try:
-                self._declare_kinds(info)
-                validate_kind(info)
-                viewers = self._load_plugin(info) if info.entry else []
-                self._viewers[info.id] = viewers
-                self._loaded_plugins.append(info)
-                count += len(viewers)
-            except PluginError as exc:
-                extension_registry.drop_plugin(info.id)
-                self._errors[info.id] = str(exc)
-                logger.warning("插件载入失败：{}（{}）", info.id, exc)
-            except Exception:
-                extension_registry.drop_plugin(info.id)
-                self._errors[info.id] = "插件载入时发生未预期的错误，详见日志"
-                logger.exception("插件载入异常：{}", info.id)
+        for info in self.discover():
+            if info.error or not info.enabled:
+                continue
+            if info.id in self._plugins:  # 同一轮里重复出现（清单 id 重复）由 core 拦下
+                continue
+            ok = self._load_one(info)
+            if ok:
+                self._loaded.append(info)
+                count += len(self.viewers_of(info.id))
         self._sync_bootstrap()
         return count
 
+    def load_viewers(self) -> int:
+        """载入入口的别名（历史命名，界面与启动流程仍用它）。"""
+        return self.load()
+
+    def _load_one(self, info: PluginInfo) -> bool:
+        start = time.perf_counter()
+        try:
+            register_plugin_namespace(info)
+        except PluginError as exc:
+            return self._fail(info, PHASES[2], str(exc), start)
+        try:
+            module = import_entry(info)
+        except PluginError as exc:
+            return self._fail(info, PHASES[2], str(exc), start)
+        except Exception:
+            logger.exception("插件入口导入异常：{}", info.id)
+            return self._fail(info, PHASES[2], "插件入口导入失败，详见日志", start)
+        try:
+            cls = plugin_class(info, module)
+            plugin = cls()
+            plugin.attach(
+                id=info.id,
+                name=info.name,
+                version=info.version,
+                description=info.description,
+                author=info.author,
+                path=Path(info.path) if info.path is not None else None,
+                manifest=dict(info.manifest),
+            )
+            self._plugins[info.id] = plugin
+        except PluginError as exc:
+            return self._fail(info, PHASES[3], str(exc), start)
+        except Exception:
+            logger.exception("插件构造异常：{}", info.id)
+            return self._fail(info, PHASES[3], "插件构造失败，详见日志", start)
+        context = PluginContext(plugin, self)
+        self._contexts[info.id] = context
+        self._settings[info.id] = dict(info.settings)
+        try:
+            plugin.setup(context)
+        except PluginError as exc:
+            return self._fail(info, PHASES[4], str(exc), start)
+        except Exception:
+            logger.exception("插件 setup 异常：{}", info.id)
+            return self._fail(info, PHASES[4], "插件初始化失败，详见日志", start)
+        seconds = time.perf_counter() - start
+        self._errors.pop(info.id, None)
+        self._report.append((info.id, PHASES[4], True, "", seconds))
+        return True
+
+    def _fail(self, info: PluginInfo, phase: str, message: str, start: float) -> bool:
+        seconds = time.perf_counter() - start
+        self._drop_plugin_state(info.id)
+        self._errors[info.id] = (phase, message)
+        self._report.append((info.id, phase, False, message, seconds))
+        logger.warning("插件载入失败：{}（{}）", info.id, message)
+        return False
+
+    def _drop_plugin_state(self, plugin_id: str) -> None:
+        """撤销该插件的一切运行期痕迹（贡献、接口、页面、模块）。"""
+        self._contributions.pop(plugin_id, None)
+        self._settings.pop(plugin_id, None)
+        self._contexts.pop(plugin_id, None)
+        self._plugins.pop(plugin_id, None)
+        extension_registry.drop_plugin(plugin_id)
+        viewer_registry.unregister_plugin(plugin_id)
+        for event, handlers in list(self._handlers.items()):
+            kept = [(owner, fn) for owner, fn in handlers if owner != plugin_id]
+            if kept:
+                self._handlers[event] = kept
+            else:
+                self._handlers.pop(event, None)
+        if self._pages is not None:
+            for key in [item.key for item in self._pages.pages() if item.plugin_id == plugin_id]:
+                self._pages.remove_page(key)
+        prefix = f"{DM_PACKAGE}.{plugin_id}"
+        for name in [name for name in sys.modules if name == prefix or name.startswith(prefix + ".")]:
+            sys.modules.pop(name, None)
+
+    def teardown(self, plugin_id: str) -> bool:
+        """卸载一个插件（调用它的 `teardown()` 并撤销全部贡献）。"""
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            return False
+        try:
+            plugin.teardown()
+        except Exception:
+            logger.exception("插件退出异常：{}", plugin_id)
+        self._drop_plugin_state(plugin_id)
+        self._loaded = [info for info in self._loaded if info.id != plugin_id]
+        return True
+
+    def teardown_all(self) -> None:
+        """卸载全部已载入的插件（倒序，先卸载依赖方）。"""
+        for plugin_id in reversed(list(self._plugins)):
+            plugin = self._plugins.get(plugin_id)
+            if plugin is None:
+                continue
+            try:
+                plugin.teardown()
+            except Exception:
+                logger.exception("插件退出异常：{}", plugin_id)
+        for plugin_id in reversed(list(self._plugins)):
+            self._drop_plugin_state(plugin_id)
+        self._plugins.clear()
+        self._contexts.clear()
+        self._contributions.clear()
+        self._handlers.clear()
+        self._settings.clear()
+        self._loaded = []
+        reset_namespace()
+
     def loaded_plugins(self) -> list[PluginInfo]:
-        """上一次载入成功的插件（按依赖顺序，含只声明类型的插件）。"""
-        return list(self._loaded_plugins)
+        """上一次载入成功的插件（按依赖顺序）。"""
+        return list(self._loaded)
+
+    def load_report(self) -> list[tuple[str, str, bool, str, float]]:
+        """最近一次载入的分阶段报告：`(插件 id, 阶段, 是否成功, 说明, 用时秒)`。"""
+        return list(self._report)
 
     def loaded_summary(self, viewers: int = 0) -> str:
-        """把这次载入的插件汇总成一句启动日志：总数、来源、各插件类型的数量。"""
-        plugins = self._loaded_plugins
+        """把这次载入的插件汇总成一句启动日志：总数、来源、各扩展点的贡献数量。"""
+        plugins = self._loaded
         if not plugins:
+            failures = sum(1 for info in self._infos.values() if info.error)
+            if failures:
+                return f"本次没有载入任何插件（{failures} 个插件载入失败，详见插件页）"
             return "本次没有载入任何插件"
         builtin = sum(1 for info in plugins if info.builtin)
-        kinds: dict[str, int] = {}
+        counts: dict[str, int] = {}
         for info in plugins:
-            label = plugin_kinds.label(info.kind) if info.kind else "未分类"
-            kinds[label] = kinds.get(label, 0) + 1
-        kind_text = "、".join(
-            f"{label} {amount} 个"
-            for label, amount in sorted(kinds.items(), key=lambda item: (-item[1], item[0]))
-        )
-        text = (
-            f"共载入 {len(plugins)} 个插件"
-            f"（内置 {builtin} 个、外部 {len(plugins) - builtin} 个）：{kind_text}"
-        )
+            for point in self._points_of(info.id):
+                label = ExtensionPoint.label(point)
+                counts[label] = counts.get(label, 0) + 1
+        text = f"共载入 {len(plugins)} 个插件（内置 {builtin} 个、外部 {len(plugins) - builtin} 个）"
+        if counts:
+            parts = "、".join(
+                f"{label} {amount} 个"
+                for label, amount in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+            )
+            text += f"：{parts}"
         if viewers:
             text += f"；共注册 {viewers} 个查看器"
+        failures = sum(1 for info in self._infos.values() if info.error)
+        if failures:
+            text += f"；{failures} 个插件载入失败（见插件页）"
         return text
 
-    def _declare_kinds(self, info: PluginInfo) -> None:
-        """把类型插件声明的插件类型登记进全局类型表（类型插件是纯数据插件）。"""
-        if not info.kinds:
-            return
-        provider = extension_registry.provider(KIND_EXTENSION)
-        declare = getattr(provider, "declare", None)
-        if not callable(declare):
-            raise PluginError(
-                f"缺少插件类型接口「{KIND_EXTENSION}」：请先启用插件类型插件 {KIND_PLUGIN_ID}"
-            )
-        for spec in info.kinds:
-            if spec.contributor and not hasattr(PluginApi, spec.contributor):
-                raise PluginError(f"插件类型 {spec.id} 的登记方法不存在：{spec.contributor}")
-            declare(spec, info.id)
-
-    def load(self) -> int:
-        """统一载入入口：重建注册表并返查看器数量。"""
-        return self.load_viewers()
-
-    def _load_plugin(self, info: PluginInfo) -> list[Viewer]:
-        register = self._resolve_register(info)
-        api = PluginApi(
-            plugin_id=info.id,
-            plugin_name=info.name,
-            default_extensions=info.extensions,
-            registry=extension_registry,
-            options=info.settings,
-        )
-        register(api)
-        self._apis[info.id] = api
-        return api.registered
-
-    def _resolve_register(self, info: PluginInfo) -> Callable[[PluginApi], None]:
-        if not info.entry or info.path is None:
-            raise PluginError(f"插件缺少入口文件：{info.id}")
-        entry = Path(info.path) / info.entry
-        if not entry.exists():
-            raise PluginError(f"入口文件不存在：{info.entry}")
-        module_name = "dm_plugin_" + re.sub(r"\W", "_", info.id)
-        spec = importlib.util.spec_from_file_location(module_name, entry)
-        if spec is None or spec.loader is None:
-            raise PluginError(f"无法载入插件模块：{info.entry}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-        register = getattr(module, "register", None)
-        if not callable(register):
-            raise PluginError(f"插件入口缺少 register(api)：{info.entry}")
-        return register
-
     def viewers_of(self, plugin_id: str) -> list[Viewer]:
-        if not self._viewers:
-            self.load_viewers()
-        return list(self._viewers.get(plugin_id, []))
+        """该插件注册的打开方式（未载入时先按需载入）。"""
+        if not self._plugins and not self._loaded:
+            self.load()
+        return [item.value for item in self._contributions.get(plugin_id, ()) if item.point == ExtensionPoint.VIEWER]
 
-    def contributions(self, kind: str = "") -> tuple[PluginContribution, ...]:
-        """所有已载入插件登记的自定义类型条目（不传 kind 返回全部）。"""
-        return tuple(item for api in self._apis.values() for item in api.entries(kind))
+    def describe(self, plugin_id: str) -> list[tuple[str, str]]:
+        """插件自报的运行期信息（键值行），未载入返回空列表。"""
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            return []
+        try:
+            return list(plugin.describe())
+        except Exception:
+            logger.exception("插件自检信息读取失败：{}", plugin_id)
+            return []
 
     # ---------------------------------------------------------- 操作
     def set_enabled(self, plugin_id: str, enabled: bool) -> bool:
@@ -599,6 +810,7 @@ class PluginService:
             logger.warning("插件处于异常状态，无法启用：{}（{}）", plugin_id, info.error)
             return False
         self._save_state_for(plugin_id, enabled=bool(enabled))
+        self.publish(Events.PLUGIN_ENABLED if enabled else Events.PLUGIN_DISABLED, plugin_id=plugin_id)
         return True
 
     def update(
@@ -628,7 +840,7 @@ class PluginService:
         plugins = self._read_state()
         plugins.pop(plugin_id, None)
         self._write_state(plugins)
-        self.load_viewers()
+        self.load()
         return True
 
     def import_plugin(self, source: str | Path, overwrite: bool = False) -> PluginInfo:
@@ -656,7 +868,7 @@ class PluginService:
                 shutil.rmtree(target, ignore_errors=True)
             shutil.copytree(folder, target)
             self._mark_external(target)
-            self.load_viewers()
+            self.load()
             return load_manifest(target)
         finally:
             if cleanup is not None:
@@ -676,10 +888,10 @@ class PluginService:
 
     @staticmethod
     def _find_plugin_root(root: Path) -> Path:
-        if (root / MANIFEST_NAME).exists():
+        if (root / MANIFEST_NAME).is_file():
             return root
         for folder in sorted(root.iterdir()):
-            if folder.is_dir() and (folder / MANIFEST_NAME).exists():
+            if folder.is_dir() and (folder / MANIFEST_NAME).is_file():
                 return folder
         raise PluginError(f"找不到 {MANIFEST_NAME}：{root.name}")
 
@@ -700,16 +912,15 @@ class PluginService:
 plugin_service = PluginService()
 
 __all__ = [
+    "CONTRIBUTION_FILTERS",
     "PLUGIN_ORDERS",
     "SOURCE_FILTERS",
     "STATE_FILTERS",
     "STATE_VERSION",
-    "PluginApi",
-    "PluginContribution",
     "PluginError",
+    "PluginHost",
     "PluginInfo",
     "PluginService",
-    "plugin_kinds",
     "SOURCE_BUILTIN",
     "SOURCE_EXTERNAL",
     "plugin_service",

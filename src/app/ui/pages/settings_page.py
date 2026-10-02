@@ -27,8 +27,10 @@ from ...core.config import config, export_dir, resources_root, set_resource_root
 from ...core.signals import signalBus
 from ...core.version import APP_VERSION
 from ...db import database
+from ...sdk import Events, ExtensionPoint
 from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
+from ...services.plugin_service import plugin_service
 from ...services.privacy_service import privacy
 from ..framework import (
     ScrollPage,
@@ -37,6 +39,7 @@ from ..framework import (
     release_widget,
     restart_application,
 )
+from ..framework.contributions import items, resolve, value_of
 
 
 class ComboSettingCard(SettingCard):
@@ -79,7 +82,7 @@ class SettingsPage(ScrollPage):
         self.users = UserService(self.session)
         self._is_admin = self.users.is_admin()
 
-        for group in (
+        groups = [
             self._appearance_group(),
             self._import_group(),
             self._storage_group(),
@@ -89,12 +92,30 @@ class SettingsPage(ScrollPage):
             self._log_group(),
             self._maintenance_group(),
             self._about_group(),
-        ):
+        ]
+        plugin_group = self._plugin_group()
+        if plugin_group is not None:
+            groups.append(plugin_group)
+        for group in groups:
             self.add_widget(group)
         self.add_stretch()
 
         signalBus.userChanged.connect(self._sync_admin)
         self._apply_permissions()
+
+    def _plugin_group(self) -> SettingCardGroup | None:
+        """插件贡献的设置卡片（扩展点 app.ui.settings.card）；没有贡献时整组不出现。"""
+        contributions = items(ExtensionPoint.SETTINGS_CARD)
+        if not contributions:
+            return None
+        group = SettingCardGroup("插件", self)
+        added = 0
+        for item in contributions:
+            card = resolve(value_of(item).get("factory"), group)
+            if isinstance(card, QWidget):
+                group.addSettingCard(card)
+                added += 1
+        return group if added else None
 
     # ------------------------------------------------------------------ 分组
     def _appearance_group(self) -> SettingCardGroup:
@@ -347,6 +368,7 @@ class SettingsPage(ScrollPage):
         mapping = {"light": Theme.LIGHT, "dark": Theme.DARK, "auto": Theme.AUTO}
         setTheme(mapping.get(value, Theme.AUTO))
         config.set(config.theme, value)
+        plugin_service.publish(Events.THEME_CHANGED, theme=value)
         self.toast_success("主题已切换", {"light": "浅色", "dark": "深色"}.get(value, "跟随系统"))
 
     def _open_path(self, path) -> None:

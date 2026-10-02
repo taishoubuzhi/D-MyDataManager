@@ -28,7 +28,7 @@ from qfluentwidgets import (
 
 from ..core.extensions import extension_registry
 from ..core.plugin_options import OPTION_BOOL, OPTION_CHOICE
-from ..core.plugins import PluginInfo
+from ..services import PluginInfo
 from ..core.signals import signalBus
 from ..services.open_with_service import OPEN_WITH_EXTENSION, open_with_api
 from ..services.plugin_service import plugin_service
@@ -51,7 +51,7 @@ class PluginOptionsDialog(MessageBoxBase):
         self.widget.setMinimumWidth(560)
         self.titleLabel = SubtitleLabel(info.options_label, self)
         self.viewLayout.addWidget(self.titleLabel)
-        self.viewLayout.addWidget(CaptionLabel(f"{info.name} · {info.id} · {info.kind_label}", self))
+        self.viewLayout.addWidget(CaptionLabel(f"{info.name} · {info.id} · {info.contributions_text}", self))
 
         area = QScrollArea(self)
         area.setWidgetResizable(True)

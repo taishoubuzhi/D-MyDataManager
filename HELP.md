@@ -351,123 +351,131 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 自定义程序与参数，另有「保存」「恢复默认」「测试打开」。当前状态直接写在列表项上（如 `.png — 使用插件（图片查看器）· 库中 12 项`）。
 
 主程序在 `src/main.py` 里用 `plugin_service.bootstrap("app.open_with", open_with_api)` 把 `OpenWithApi` 登记为扩展接口，插件可以据此查询 /
-修改打开方式（`set_viewer` / `use_viewer_for_all` / `reset_viewer` 等），详见 [PLUGIN.md](PLUGIN.md)；执行外部程序、交给系统选择、
-在资源管理器中定位分别是 `shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
+修改打开方式（`set_viewer` / `use_viewer_for_all` / `reset_viewer` 等）；执行外部程序、交给系统选择、在资源管理器中定位分别是
+`shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
 
-内置插件也放在 `plugins/` 下（`builtin.dialog` 弹窗页面插件，以及七个查看器插件：图片 / 视频 / 音频 / 文本 / Markdown /
-压缩包 / 表格），与外部插件走同一条载入路径：`PluginService.load_viewers()` 扫描 `plugins/<id>/plugin.json`，用
-`importlib.util.spec_from_file_location()` 加载入口脚本并调用其中的 `register(api)`。查看器控件是普通 `QWidget`，构造签名
-`(path, parent=None)`，可提供 `caption` 属性作为补充说明；控件模块在真正打开文件时才导入 Qt。
+### 插件协议（v4）
 
-查看器不自己建窗口，而是在注册时声明 `host="dialog"` 并依赖内置弹窗页面插件（`api.require("dialog")`）：`src/app/ui/viewers/window.py`
-的 `open_viewer()` 从 `src/app/core/extensions.py` 的 `extension_registry` 取出 `dialog` 扩展，调 `DialogApi.open_page()` 在程序本体
-之外弹出独立顶层窗口（Esc 或标题栏关闭按钮退出），查看器内容作为内容页嵌在其中；缺少该插件时返回「缺少弹窗页面插件（dialog），请到
-「插件」页启用后重试」。数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出
-`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开；右键「打开方式」里的
-点名查看器与「系统默认程序 / 交给系统选择…」分别走同模块的 `open_viewer_with()` 与 `open_system()`。
-
-查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），`PluginService.load_viewers()` 在启动时
-（`src/main.py`）清空 `ViewerRegistry` 与 `ExtensionRegistry`，按依赖顺序载入所有已启用插件（非查看器插件也要载入，它们负责
-`api.provide()` 扩展接口），单个插件出错只把错误记在该插件上。插件之间的依赖由 `src/app/core/plugins.py` 的 `sort_by_dependency()`
-拓扑排序，缺依赖、依赖未启用或循环依赖都会让插件标为「异常」并强制禁用。启动日志由 `PluginService.loaded_summary()` 汇总
-（`src/main.py` 的 `logger.info(plugin_service.loaded_summary(viewers))`），形如「共载入 11 个插件（内置 11 个、外部 0 个）：打开方式 7 个、
-插件类型 3 个、弹窗页面 1 个；共注册 7 个查看器」——总数、内置 / 外部来源与各插件类型的数量一眼可见。`src/app/core/viewer_data.py` 提供查看器共用的纯函数：
-文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
-
-插件协议（`plugins/<id>/plugin.json`）：
+插件都放在 `plugins/<id>/` 下，内置插件与外部插件走同一条载入路径。每个插件目录有 `plugin.json`（必需）、入口脚本与 `data/`；
+插件类继承 `src/app/sdk/` 的 `Plugin`，在 `setup(ctx)` 里用 `PluginContext` 注册东西、在 `teardown()` 里收尾。清单示例：
 
 ```json
 {
   "id": "sample.viewer",
   "name": "示例查看器",
   "version": "1.0.0",
-  "kind": "viewer",
   "description": "说明文字",
   "author": "作者",
-  "manager_version": "0.1.0",
+  "manager_version": ">=0.1.0",
+  "api_version": ">=1.0",
   "entry": "sample_plugin.py",
-  "depends": ["builtin.kind.viewer", "builtin.dialog"],
-  "provides": ["viewer"],
-  "capabilities": ["图片查看"],
-  "extensions": ["dmx"],
+  "class": "SampleViewerPlugin",
+  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.dialog"}],
+  "data": {"viewer": "data/viewer.json"},
   "builtin": false
 }
 ```
 
-类型插件（`plugins/builtin.kind.viewer/plugin.json`，纯数据、没有 `entry`）用 `kinds` 声明插件类型：
+- 必需字段只有 `id`（匹配 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`）与 `name`；`entry` 对**外部插件**必填且文件必须存在，
+  内置插件可以省略（因此纯库插件、纯数据插件不必写入口脚本）；`class` 用来点名入口脚本里的插件类。
+- **协议不再区分插件类型**：清单里没有 `kind` / `kinds`（写了会报「插件清单已取消类型字段」）；`extensions` / `capabilities`
+  这类数据字段也不再放清单（写了会提示放进 `data/`），扩展名、显示名、能力说明这些数据由提供相应能力的库插件读取。
+- `libraries` 声明插件对外提供的库模块，例如 `builtin.lib.viewer` 提供 `viewer` → `plugin.py`；别的插件 `depends` 它之后
+  可以用 `from dm_plugin.<插件 id>.plugin import ...` 静态导入（`app.sdk.library("<id>", "plugin")` 是兜底写法），
+  `libraries` 里声明的模块必须存在且非空，并且**约定固定写成入口 `plugin.py`**：一个插件对其他插件的公开面只有它。
+- `depends` 支持简写（`"builtin.lib.dialog"`）与对象（`{"id": ..., "version": ">=1.0", "optional": true}`）两种写法；
+  `optional` 的依赖缺失只跳过、不算失败；`incompatible` 声明互斥插件，`load_after` 只调整载入顺序、不建立依赖关系。
+  缺依赖、版本不满足、互斥、重复声明、循环依赖都会让插件载入失败（个别失败不影响其它插件与程序启动）。
+- `data` 把数据文件的**路径**写进清单，插件用 `ctx.data("viewer")` / `ctx.data_path("viewer")` 读回来：清单里只放参数，不放数据。
+- `manager_version` / `api_version` 是版本范围（`1.2`、`>=1.0 <2`、`1.2.*`、`^1.2`、`~1.2.3`、`||` 或、空格 / 逗号表示「且」，
+  见 [插件协议](plugins/PLUGIN_PROTOCOL.md)），要求高于当前程序 / SDK 版本会让插件载入失败；`version` 是插件自己的版本。
+- `options` 声明用户可配置项（`bool` / `text` / `choice`，`choice` 必须有 `choices` 且默认值在其中的），插件用 `ctx.option("键")`
+  读回，详见下面的「插件选项与插件页」。
 
-```json
-{
-  "id": "builtin.kind.viewer",
-  "name": "打开方式插件类型",
-  "kind": "kind",
-  "depends": ["builtin.kind"],
-  "kinds": [
-    {
-      "id": "viewer",
-      "label": "打开方式",
-      "description": "按扩展名显示文件内容的查看器",
-      "requires_extensions": true,
-      "contributor": "add_viewer",
-      "order": 10
-    }
-  ]
-}
-```
+载入时程序按 `(内置优先, id 字典序)` 排序，依次走五个阶段：`manifest`（读清单）→ `dependency`（依赖、互斥、版本）→
+`import`（建 `dm_plugin.<id>` 命名空间并导入入口脚本）→ `construct`（实例化插件类并 `attach()`）→ `setup`（调用 `setup(ctx)`）。
+任何阶段失败都只把错误记在那个插件上（「插件」页标「异常」并强制禁用），不影响其它插件与程序启动。
+插件脚本**只能** import 标准库、Qt、`app.sdk`，以及自己 `depends` 过的插件（而且只能取对方的 `plugin.py`：
+`from dm_plugin.<id>.plugin import ...`）；`app` 下除 `app.sdk` 之外的**任何**模块（`app.core` / `app.services` / `app.ui.*` …）
+都会被自检 `plugin_imports` 直接拦下 —— 需要什么能力，通过 SDK、扩展点、事件或插件库来拿。
 
-- `id` 必须匹配 `^[A-Za-z0-9][A-Za-z0-9_.\-]{1,63}$`。
-- `kind` 是插件类型，**不使用枚举**：类型由**类型插件**声明（清单里的 `kinds`），其他插件只要 `depends` 该类型插件
-  就能使用这个类型，插件自己也可以创造新类型。类型表（`src/app/core/plugin_kinds.py`）在每次载入插件时重建：
-  先登记引导类型 `kind`（插件类型本身），再按依赖顺序把每个类型插件声明的类型登记进去。内置类型插件是
-  `builtin.kind`（提供 `plugin.kind` 接口）、`builtin.kind.viewer`（`viewer` 打开方式，必须声明 `extensions`）与
-  `builtin.kind.page`（`page` 弹窗页面，只提供扩展接口）。`kinds` 每项支持 `id`（必填，匹配
-  `^[a-z][a-z0-9_.\-]{1,63}$`）、`label`（显示名）、`description`（说明）、`requires_extensions`（该类型是否必须声明扩展名）、
-  `contributor`（登记方法名，如 `add_viewer`）与 `order`（下拉排序）。多个类型插件声明同一个类型**不会报错**：
-  已有的非空字段优先，`plugins` 记录声明过它的插件；某个类型插件被禁用 / 删除后，它声明的类型也随之从表里消失。
-  插件页的类型下拉读的就是这张表，无需改动。清单里写 `kind_label` / `kind_description` / `kind_requires_extensions`
-  会直接报错（旧写法，请改由类型插件的 `kinds` 声明）。
-- `manager_version` 是插件要求的管理器版本，由 `src/app/core/version.py` 的 `is_compatible()` 比较，要求过高直接报错。
-- `entry` 是入口脚本（外部插件必填且文件必须存在，内置插件可省略；纯数据的类型插件也可以不写），载入时用
-  `importlib.util.spec_from_file_location()` 加载并调用其中的 `register(api)`。
-- `depends` / `provides` 分别是依赖的插件 id 与对外提供的扩展接口名（扩展接口名匹配 `^[a-z][a-z0-9_.\-]{1,63}$`）；
-  `capabilities` 是功能说明文字。
-- `extensions` 只有需要扩展名的类型（如 `viewer`）才要写；`builtin` 只由内置插件声明，导入的插件会被强制改回 `false`。
+`dm_plugin.<id>` 是载入期在内存里合成的包，磁盘上不存在，编辑器会把 `from dm_plugin...` 标成找不到模块：
+仓库里由 `scripts/plugin_stubs.py` 按清单生成 `stubs/dm_plugin/**` 的 `.pyi` 桩，把 `stubs` 标成源码根即可
+（仓库自带 `.idea/D-MyDataManager.iml` 已配好），改了清单或库的 `__all__` 后重跑脚本，自检 `plugin_stubs_current` 保证同步。
 
-入口脚本的 `register(api)` 收到 `src/app/services/plugin_service.py` 的 `PluginApi`：`api.plugin_id` / `api.plugin_name` /
-`api.default_extensions` 是插件信息；`api.add_viewer(name, extensions, factory, kind, description, capabilities, host)` 注册控件工厂
-（`factory(path, parent)` 返回 `QWidget`，`host` 指定负责显示它的扩展接口）；`api.add(kind, name, *args, **fields)` 是按类型注册的通用入口：
-类型声明了 `contributor`（如 `viewer` → `add_viewer`）就路由到对应的方法；没有 `contributor` 的类型**不会报错**，
-这次调用会被记成一条 `PluginContribution`（用 `api.entries(kind)` 读自己的条目，
-`PluginService.contributions(kind)` 可汇总所有已载入插件的条目）；`api.provide(name, provider)` 对外暴露扩展接口，
-`api.require(name)` / `api.has(name)` 使用别的插件提供的接口（缺失时 `require` 直接报错）。
-插件可以用清单里的 `options` 声明用户可配置项（`src/app/core/plugin_options.py` 的 `parse_options()`：`bool` / `text` / `choice` 三种，
-`key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，`choice` 必须有 `choices` 且默认值必须在其中）。插件页的「插件选项」按钮弹出
-`src/app/ui/plugin_options_dialog.py` 的 `PluginOptionsDialog`，按声明生成控件并把改动写进 `config/plugins.json` 的 `options` 字段
-（`PluginService.set_option()` / `reset_options()` / `options_of()`）；插件在 `register(api)` 里用 `api.option("键")` 读回（取值经
-`coerce_option()` 规范化，无法识别时回退默认值），选项改动后插件会整体重新载入，因此工厂闭包里的参数立即生效。若插件注册了查看器，
+### 查看器
+
+内置的查看器是一套「工具库 + 七个具体插件」：`builtin.lib.viewer`（`plugin.py` 提供 `ViewerPlugin` 基类、`ViewerWindow`
+窗口外壳与 `MediaViewer` 媒体播放页）、`builtin.lib.dialog`（`provides: dialog`，提供弹窗外壳），以及
+`builtin.image` / `builtin.text` / `builtin.markdown` / `builtin.spreadsheet` / `builtin.archive` / `builtin.audio` / `builtin.video`
+（图片 / 文本 / Markdown / 表格 / 压缩包 / 音频 / 视频）—— 每个查看器的视图代码就放在**自己的插件目录**里
+（例如 `plugins/builtin.image/image_view.py`），程序里没有任何查看器界面代码。
+每个查看器把显示名、`kind`、宿主、扩展名、能力写在自己的 `data/viewer.json` 里；基类的 `setup()` 读它、`ctx.require("dialog")`
+之后调 `ctx.add_viewer(...)` 登记，子类只实现 `create_view(path, parent=None)` 返回视图控件。查看器控件是普通 `QWidget`，
+构造签名 `(path, parent=None)`，可提供 `caption` 属性作为补充说明。
+
+弹窗由插件自己完成：基类在登记查看器时同时登记 `opener`（`ViewerPlugin.open_view()`），它用自己目录里的视图配上
+`ViewerWindow` 外壳，再向 `dialog` 扩展接口（`builtin.lib.dialog` 用 `ctx.provide("dialog", DialogApi())` 登记）要一个独立顶层
+窗口（Esc 或标题栏关闭按钮退出）；缺少该插件时提示「缺少弹窗工具库（dialog），请到「插件」页启用后重试」。
+程序侧只剩调度：`src/app/ui/viewers/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把
+`factory` 控件包一层兜底。数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出
+`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开；右键「打开方式」里的
+点名查看器与「系统默认程序 / 交给系统选择…」分别走同模块的 `open_viewer_with()` 与 `open_system()`。
+
+查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者）。`PluginService.load_viewers()`
+（`src/main.py` 启动时调用；历史命名，实际就是 `load()`）先清空 `ViewerRegistry` 与 `ExtensionRegistry`，再按上面的顺序载入所有
+已启用插件，单个插件出错只把错误记在该插件上。禁用「打开方式」插件后，对应格式会退回系统默认程序。启动日志由
+`PluginService.loaded_summary()` 汇总（`src/main.py` 的 `logger.info(plugin_service.loaded_summary(viewers))`），形如
+「共载入 10 个插件（内置 10 个、外部 0 个）：打开方式 7 个、页面 1 个；共注册 7 个查看器；1 个插件载入失败（见插件页）」——
+总数、内置 / 外部来源与各扩展点的贡献数量一眼可见。查看器共用的纯函数在 SDK 里（`app.sdk.data`，插件可直接 import）：
+文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
+
+### 插件选项与「插件」页
+
+插件用清单里的 `options` 声明用户可配置项（`src/app/core/plugin_options.py` 的 `parse_options()`：`bool` / `text` / `choice` 三种，
+`key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，`choice` 必须有 `choices` 且默认值必须在其中）。「插件」页的「插件选项」按钮弹出
+`src/app/ui/plugin_options_dialog.py` 的 `PluginOptionsDialog`，按声明生成控件并把改动写进 `config/plugins.json` 里该插件的 `settings`
+（`PluginService.set_option()` / `reset_options()` / `options_of()`）；插件在 `setup(ctx)` 里用 `ctx.option("键")` 读回（取值经
+`coerce_option()` 规范化，无法识别时回退默认值），选项改动后插件会整体重新载入，因此读到的值立即生效。若插件注册了查看器，
 该对话框还会列出其扩展名的勾选框，勾选即调用 `app.open_with` 的 `set_viewer()`，用户不必去「打开方式」页逐个设置。
-「插件」页按类型 / 来源（内置 / 外部）/ 创建者 / 状态与关键词筛选，支持按默认顺序 / 名称 / 类型 / 来源 / 创建者 / 状态 / 版本排序并切换正序、逆序
-（`PluginService.all(kind, query, state, source, author, order, reverse)` 与 `PLUGIN_ORDERS`）。列表项显示启用标记与「类型 · 来源」徽标，
-全部类型下**所有插件都会出现**；详情区显示版本 / 创建者 / 类型 / 来源 / 状态、扩展名、协议字段、插件选项摘要与清单路径。
+「插件」页按贡献（按扩展点分组）/ 来源（内置 / 外部）/ 创建者 / 状态与关键词筛选，支持按默认顺序 / 名称 / 来源 / 创建者 / 状态 / 版本 / 贡献
+排序并切换正序、逆序（`PluginService.all(query, state, source, author, contribution, order, reverse)` 与 `PLUGIN_ORDERS`）。
+列表项显示启用标记与「贡献 · 来源」徽标，「全部贡献」下**所有插件都会出现**（包括纯库插件）；详情区显示版本 / 创建者 / 状态、
+贡献（按扩展点分组）、清单数据、协议信息（贡献 / 依赖插件 / 扩展接口 / 提供库 / 适用管理器版本 / 入口文件）、插件选项摘要与清单路径。
 操作包括导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名 / 说明 / 备注、打开插件目录（内置插件同样可以打开）、
-「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`。内置插件不能删除；载入失败的插件在列表里标为「异常」
-并强制禁用，不影响程序启动。
+「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`（`{"version": 1, "plugins": {...}}`）。内置插件不能删除；
+载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。
 列表项可以勾选，选择条上是一个三态全选框（空 = 全不选、横杠 = 部分选中、勾 = 全选当前列出的插件，点一下在全选 / 全不选之间切换），
 勾选后可以「批量启用 / 批量禁用 / 批量删除」
 （已处于目标状态的插件会被跳过，内置插件不可删除，删除前有确认框）；右侧的功能按钮改用
 `AdaptiveFlowLayout`（`needAni=False`、`isTight=True`，按钮最小宽 96 px），窄窗口下自动换行，不再被裁掉。
 
-插件不仅可以提供查看器与扩展接口，还能直接往主界面加页面：程序本体在 `src/main.py` 里用
+### 扩展点、事件与插件页面
+
+插件除了提供查看器与扩展接口，还能往界面上加东西。程序定义了 10 个扩展点（`src/app/sdk/points.py` 的 `ExtensionPoint`）：
+概览卡片（`app.ui.home.kpi`）、设置卡片（`app.ui.settings.card`）、数据管理工具栏（`app.ui.manage.toolbar`）、条目右键菜单
+（`app.ui.manage.item_menu`）、详情面板行（`app.ui.detail.panel`）、导入筛选器（`app.ui.import.filter`）、打开方式（`app.viewer`）、
+页面（`app.ui.page`）；另有 `app.data.import.hook` 与 `app.item.open.resolver` 是**协议预留**、程序侧尚未接线。
+界面上的扩展点由 `src/app/ui/framework/contributions.py` 统一读取，插件用 `ctx.contribute(扩展点, {...})` 贡献，
+插件被禁用时贡献随之撤销；某个回调抛异常只记日志，不会影响页面。
+
+程序另外广播 7 个事件（`src/app/sdk/points.py` 的 `Events`）：`item.imported`（导入或扫描登记成功）、`item.deleted`、
+`user.changed`、`library.changed`（库文件夹迁移）、`theme.changed`、`plugin.enabled` / `plugin.disabled`。
+插件用 `ctx.on(事件, 处理函数)` 订阅，处理函数必须写成 `def _on_x(self, **payload)`（载荷见
+[扩展点与事件](plugins/EXTENSION_POINTS.md)）。
+
+插件加页面用 `ctx.add_page(key, title, factory, icon=..., bottom=...)`：程序本体在 `src/main.py` 里用
 `plugin_service.bootstrap("app.ui", AppUiApi())`（`src/app/core/app_ui.py`）把 `app.ui` 接口登记进 `extension_registry`，
-插件在 `register(api)` 里写 `api.require("app.ui").add_page("hello", "演示页", _build, icon="HOME", plugin_id=api.plugin_id)`
-即可登记一个导航页 —— 主窗口（`src/app/ui/main_window.py` 的 `_sync_plugin_pages()`）会按 `PageSpec.route`（`plugin.<key>`）
-装配 / 移除导航项与堆叠页，页面工厂抛异常时退化成一条提示页而不影响其它页面；`load_viewers()` 每次重载都会重新提供 `app.ui`
-并调用它的 `sync_plugins(已载入插件 id)`，因此**插件的页面会随启用 / 禁用自动出现与消失**。`app.ui` 之外，插件还可以
-`api.provide(name, provider)` 暴露自己的扩展接口供其它插件 `api.require(name)` 使用，用 `api.add(kind, ...)` 往自定义类型里
-登记条目（`PluginService.contributions(kind)` 汇总）。类型插件（`plugins/builtin.kind*`）本身也是普通插件：
-它 `provides` `plugin.kind` 接口，其他插件 `depends` 它之后在清单里写 `kinds` 即可创造新类型。
-**写插件的完整说明（清单字段、`PluginApi` 全部接口、查看器约定、
-大型插件示例、排错）见仓库根目录的 [PLUGIN.md](PLUGIN.md)。**
+插件登记后主窗口（`src/app/ui/main_window.py` 的 `_sync_plugin_pages()`）会按 `PageSpec.route`（`plugin.<key>`）装配 / 移除导航项与堆叠页，
+页面工厂抛异常时退化成一条提示页而不影响其它页面；`load()` 每次重载都会重新提供 `app.ui` 并调用它的 `sync_plugins(已载入插件 id)`，
+因此**插件的页面会随启用 / 禁用自动出现与消失**。左侧导航的顺序固定：内置页面按内置顺序
+（设置恒在最下面），插件页面按载入顺序追加；追加不下的插件页面只出现在内置的「页面管理」页里
+（在那一页里仍可打开），「页面管理」只读、不改布局。`app.ui` 之外，插件还可以
+`ctx.provide(name, provider)` 暴露自己的扩展接口供其它插件 `ctx.require(name)` 使用。
+
+**写插件的完整说明（最小插件、SDK 全部接口、库插件、目录规范、排错）见仓库根目录的 [PLUGIN.md](PLUGIN.md)；
+清单字段与错误码见 [plugins/PLUGIN_PROTOCOL.md](plugins/PLUGIN_PROTOCOL.md)；扩展点与事件见
+[plugins/EXTENSION_POINTS.md](plugins/EXTENSION_POINTS.md)。**
 
 ## 日志与保留策略
 
