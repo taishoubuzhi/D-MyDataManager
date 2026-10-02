@@ -191,7 +191,17 @@ class TaxonomyService:
         self.session.flush()
         return tag
 
-    def rename_tag(self, tag: Tag, new_name: str, user_id: int | None = None) -> bool:
+    def rename_tag(
+        self,
+        tag: Tag,
+        new_name: str,
+        user_id: int | None = None,
+        is_admin: bool = False,
+    ) -> bool:
+        """重命名标签；默认用户（管理员）或创建者才能改，且不得与可见标签重名。"""
+        if not self.tags.can_manage(tag, user_id, is_admin):
+            logger.warning("只有默认用户或创建者可以重命名标签：{}", tag.name)
+            return False
         new_name = (new_name or "").strip()
         if not new_name or new_name == tag.name:
             return False
@@ -201,17 +211,25 @@ class TaxonomyService:
         self.tags.rename(tag, new_name)
         return True
 
-    def set_tag_global(self, tag: Tag, is_global: bool, user_id: int | None = None) -> bool:
-        """在全局标签与个人标签之间切换；只有创建者可以操作，且不得与已有全局标签重名。"""
-        if not self.tags.is_creator(tag, user_id):
-            logger.warning("只有创建者可以切换标签归属：{}", tag.name)
+    def set_tag_global(
+        self, tag: Tag, is_global: bool, user_id: int | None = None, is_admin: bool = False
+    ) -> bool:
+        """在全局标签与个人标签之间切换；默认用户或创建者可以操作，且不得与已有全局标签重名。"""
+        if not self.tags.can_manage(tag, user_id, is_admin):
+            logger.warning("只有默认用户或创建者可以切换标签归属：{}", tag.name)
             return False
         if not self.tags.set_global(tag, is_global):
             logger.warning("已存在同名全局标签：{}", tag.name)
             return False
         return True
 
-    def delete_tag(self, tag: Tag) -> int:
+    def delete_tag(
+        self, tag: Tag, user_id: int | None = None, is_admin: bool = False
+    ) -> int:
+        """删除标签；默认用户或创建者才能删，无权时返回 -1 且不做任何修改。"""
+        if not self.tags.can_manage(tag, user_id, is_admin):
+            logger.warning("只有默认用户或创建者可以删除标签：{}", tag.name)
+            return -1
         count = self.tags.item_count(tag)
         for item in list(tag.items):
             item.tags.remove(tag)
@@ -222,12 +240,12 @@ class TaxonomyService:
     def merge_tags(self, source: Tag, target: Tag) -> Tag:
         return self.tags.merge(source, target)
 
-    def cleanup_unused(self, user_id: int | None = None) -> int:
-        """清理未使用标签；他人创建的全局标签保留。"""
+    def cleanup_unused(self, user_id: int | None = None, is_admin: bool = False) -> int:
+        """清理未使用标签；他人创建的标签保留（默认用户可全部清理）。"""
         tags = [
             tag
             for tag in self.tags.unused(user_id)
-            if not tag.is_global or self.tags.is_creator(tag, user_id)
+            if not tag.is_global or self.tags.can_manage(tag, user_id, is_admin)
         ]
         for tag in tags:
             self.session.delete(tag)

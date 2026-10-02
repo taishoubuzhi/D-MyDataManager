@@ -53,10 +53,14 @@ class TagRepository(Repository[Tag]):
         return [tag.name for tag in self.session.scalars(stmt)]
 
     def is_creator(self, tag: Tag, user_id: int | None) -> bool:
-        """创建者（或历史遗留标签）才能切换归属、改名与删除。"""
+        """是否为标签的创建者（历史遗留标签按 user_id 判定）。"""
         if user_id is None:
             return True
         return tag.created_by == user_id or (tag.created_by is None and tag.user_id == user_id)
+
+    def can_manage(self, tag: Tag, user_id: int | None, is_admin: bool = False) -> bool:
+        """默认用户（管理员）可以管理任意标签，其他用户只能管理自己创建的标签。"""
+        return bool(is_admin) or self.is_creator(tag, user_id)
 
     def set_global(self, tag: Tag, is_global: bool) -> bool:
         """切换全局 / 个人归属；转为全局前检查是否已有同名全局标签。"""

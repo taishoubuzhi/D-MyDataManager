@@ -32,18 +32,16 @@ from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
 from ...services.privacy_service import privacy
 from ..common import (
-    DETAIL_MARGINS,
     BusyTip,
     confirm,
     clear_scroll_background,
-    page_background,
     page_header,
     page_layout,
-    panel_card,
     release_widget,
     restart_application,
     toast_success,
     toast_warning,
+    section_card,
 )
 
 APP_VERSION = "0.1.0"
@@ -83,11 +81,13 @@ class SettingsPage(ScrollArea):
         super().__init__(parent)
         self.setObjectName("settingsPage")
         self.session = database.new_session()
+        self.users = UserService(self.session)
+        self._is_admin = self.users.is_admin()
 
         host = QWidget(self)
-        page_background(host, "settingsHost")
+        host.setObjectName("settingsHost")
         layout = page_layout(host)
-        page_header(layout, host, "设置")
+        page_header(layout, host, "设置", "外观、导入、存储与隐私选项，改动会立即生效")
 
         layout.addWidget(self._appearance_group(host))
         layout.addWidget(self._import_group(host))
@@ -101,8 +101,11 @@ class SettingsPage(ScrollArea):
         layout.addStretch(1)
 
         self.setWidget(host)
-        clear_scroll_background(self, inner=False)
+        clear_scroll_background(self)
         self.setWidgetResizable(True)
+
+        signalBus.userChanged.connect(self._sync_admin)
+        self._apply_permissions()
 
     # ------------------------------------------------------------------ 分组
     def _appearance_group(self, parent: QWidget) -> SettingCardGroup:
@@ -325,15 +328,23 @@ class SettingsPage(ScrollArea):
 
     def _maintenance_group(self, parent: QWidget) -> SettingCardGroup:
         group = SettingCardGroup("维护", parent)
-        reset_card = ActionCard(
+        self._reset_card = ActionCard(
             "恢复初始化",
             FluentIcon.DELETE,
             "恢复初始化",
             "清空全部数据与设置，回到首次运行的状态",
             group,
         )
-        reset_card.clicked.connect(self._reset_to_defaults)
-        group.addSettingCard(reset_card)
+        self._reset_card.clicked.connect(self._reset_to_defaults)
+        group.addSettingCard(self._reset_card)
+
+        self._maintenance_permission_card = SettingCard(
+            FluentIcon.INFO,
+            "仅默认用户可用",
+            "恢复初始化会清空所有用户的数据与设置",
+            group,
+        )
+        group.addSettingCard(self._maintenance_permission_card)
         return group
 
     def _about_group(self, parent: QWidget) -> SettingCardGroup:
@@ -363,8 +374,30 @@ class SettingsPage(ScrollArea):
         except Exception:  # noqa: BLE001
             pass
         self.session = database.new_session()
+        self.users = UserService(self.session)
+
+    # ------------------------------------------------------------------ 权限
+    def _sync_admin(self) -> None:
+        """切换用户后重新判定权限：系统级设置只有默认用户可改。"""
+        self._is_admin = UserService(self.session).is_admin()
+        self._apply_permissions()
+
+    def _apply_permissions(self) -> None:
+        for card in (self._path_card, self._scan_card, self._rebuild_card, self._reset_card):
+            card.setEnabled(self._is_admin)
+        for hint in (self._library_permission_card, self._maintenance_permission_card):
+            hint.setVisible(not self._is_admin)
+
+    def _require_admin(self, action: str) -> bool:
+        """系统级设置只有默认用户（管理员）可以改动。"""
+        if self._is_admin:
+            return True
+        toast_warning(self, "无权操作", f"只有默认用户可以{action}")
+        return False
 
     def _reset_to_defaults(self) -> None:
+        if not self._require_admin("恢复初始化"):
+            return
         if not confirm(
             self,
             "恢复初始化",
@@ -436,25 +469,25 @@ class SettingsPage(ScrollArea):
         self._path_card.clicked.connect(self._change_resource_root)
         group.addSettingCard(self._path_card)
 
-        scan_card = ActionCard(
+        self._scan_card = ActionCard(
             "扫描并登记",
             FluentIcon.SYNC,
             "扫描库文件夹",
             "把各用户名文件夹中已有的文件登记为数据项",
             group,
         )
-        scan_card.clicked.connect(self._scan_library)
-        group.addSettingCard(scan_card)
+        self._scan_card.clicked.connect(self._scan_library)
+        group.addSettingCard(self._scan_card)
 
-        rebuild_card = ActionCard(
+        self._rebuild_card = ActionCard(
             "重建目录结构",
             FluentIcon.FOLDER_ADD,
             "重建目录结构",
             "补齐“全局”文件夹与每个用户的用户名文件夹",
             group,
         )
-        rebuild_card.clicked.connect(self._rebuild_layout)
-        group.addSettingCard(rebuild_card)
+        self._rebuild_card.clicked.connect(self._rebuild_layout)
+        group.addSettingCard(self._rebuild_card)
 
         open_card = ActionCard(
             "打开文件夹",
@@ -465,6 +498,14 @@ class SettingsPage(ScrollArea):
         )
         open_card.clicked.connect(self._open_resource_dir)
         group.addSettingCard(open_card)
+
+        self._library_permission_card = SettingCard(
+            FluentIcon.INFO,
+            "仅默认用户可用",
+            "更改位置、扫描并登记、重建目录结构属于全库操作",
+            group,
+        )
+        group.addSettingCard(self._library_permission_card)
         return group
 
     def _privacy_group(self, parent: QWidget) -> SettingCardGroup:
@@ -533,9 +574,7 @@ class SettingsPage(ScrollArea):
         self._refresh_privacy()
 
     def _library_card(self, parent: QWidget) -> CardWidget:
-        card, layout = panel_card(parent, DETAIL_MARGINS)
-        layout.setSpacing(8)
-        layout.addWidget(StrongBodyLabel("库内容", card))
+        card, layout = section_card(parent, "库内容", "各用户的数据文件夹与全局资源目录")
         self._library_layout = QVBoxLayout()
         self._library_layout.setContentsMargins(0, 0, 0, 0)
         self._library_layout.setSpacing(6)
@@ -589,6 +628,8 @@ class SettingsPage(ScrollArea):
         self._open_path(resources_root())
 
     def _change_resource_root(self) -> None:
+        if not self._require_admin("更改资源文件夹位置"):
+            return
         current = resources_root()
         directory = QFileDialog.getExistingDirectory(self, "选择新的资源文件夹位置", str(current))
         if not directory or Path(directory).resolve() == current.resolve():
@@ -612,6 +653,8 @@ class SettingsPage(ScrollArea):
         restart_application()
 
     def _scan_library(self) -> None:
+        if not self._require_admin("扫描并登记库文件夹"):
+            return
         busy = BusyTip(self, "正在扫描库文件夹", "扫描完成后文件才会登记为数据项")
         try:
             service = LibraryService(self.session)
@@ -629,6 +672,8 @@ class SettingsPage(ScrollArea):
         toast_success(self, "扫描完成", result.summary())
 
     def _rebuild_layout(self) -> None:
+        if not self._require_admin("重建目录结构"):
+            return
         try:
             created = LibraryService(self.session).rebuild_layout()
             self.session.commit()

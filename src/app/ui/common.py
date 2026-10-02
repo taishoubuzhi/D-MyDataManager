@@ -20,6 +20,7 @@ from qfluentwidgets import (
     isDarkTheme,
     qconfig,
     themeColor,
+    StrongBodyLabel,
 )
 from qfluentwidgets.common.style_sheet import CustomStyleSheet, setStyleSheet
 
@@ -73,6 +74,15 @@ def format_datetime(value: dt.datetime | None, fmt: str = "%Y-%m-%d %H:%M") -> s
 def elide(text: str, limit: int = 60) -> str:
     text = (text or "").replace("\n", " ").strip()
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def tri_state(checked: int, total: int) -> Qt.CheckState:
+    """全选框的三态：空 = 全不选，横杠 = 部分选中，勾 = 全选。"""
+    if total <= 0 or checked <= 0:
+        return Qt.CheckState.Unchecked
+    if checked >= total:
+        return Qt.CheckState.Checked
+    return Qt.CheckState.PartiallyChecked
 
 
 def toast_success(parent, title: str, content: str = "") -> None:
@@ -199,6 +209,25 @@ def panel_card(parent=None, margins: tuple[int, int, int, int] = PANEL_MARGINS, 
     return card, layout
 
 
+def section_card(
+    parent=None,
+    title: str = "",
+    description: str = "",
+    *,
+    margins: tuple[int, int, int, int] = DETAIL_MARGINS,
+    spacing: int = 10,
+):
+    """统一样式的分区卡片：标题 + 可选说明 + 内容区（与数据管理页面板一致）。"""
+    card, layout = panel_card(parent, margins, spacing)
+    if title:
+        layout.addWidget(StrongBodyLabel(title, card))
+    if description:
+        caption = CaptionLabel(description, card)
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
+    return card, layout
+
+
 def clear_background(widget) -> None:
     """让控件不按调色板实绘底色（透明），露出父级或主题背景。
 
@@ -298,22 +327,3 @@ def install_app_theme() -> None:
     if not _theme_hooked:
         qconfig.themeChangedFinished.connect(apply_app_palette)
         _theme_hooked = True
-
-
-def page_background(widget, name: str = "") -> None:
-    """给页面（或滚动内容容器）铺一层跟随主题的不透明底色。
-
-    纯 QWidget 页面本身是透明的，露出的是窗口背面（云母材质）；显式画上
-    主题底色后，浅色 / 深色模式都不会出现发黑的分块。
-
-    注意必须走 `setStyleSheet` 而不是 `setCustomStyleSheet`：后者只写动态
-    属性，未注册的控件没有样式监听器，等同于什么都没做。
-    """
-    widget.setAutoFillBackground(False)
-    object_name = name or widget.objectName() or f"{widget.__class__.__name__.lower()}Bg"
-    widget.setObjectName(object_name)
-    style = CustomStyleSheet(widget).setCustomStyleSheet(
-        f"#{object_name} {{ background-color: {PAGE_BG_LIGHT.name()}; }}",
-        f"#{object_name} {{ background-color: {PAGE_BG_DARK.name()}; }}",
-    )
-    setStyleSheet(widget, style)

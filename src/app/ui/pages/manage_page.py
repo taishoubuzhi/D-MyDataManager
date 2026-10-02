@@ -50,11 +50,11 @@ from ..common import (
     clear_scroll_background,
     confirm,
     format_size,
-    page_background,
     release_widget,
     toast_error,
     toast_success,
     toast_warning,
+    tri_state,
     type_name,
 )
 from ..viewers.open_flow import open_path, open_system, open_viewer_with
@@ -82,15 +82,6 @@ def range_ids(order: list[int], anchor: int, target: int) -> set[int]:
         return {target}
     start, end = sorted((order.index(anchor), order.index(target)))
     return set(order[start : end + 1])
-
-
-def tri_state(checked: int, total: int) -> Qt.CheckState:
-    """全选框的三态：空 = 全不选，横杠 = 部分选中，勾 = 全选（与筛选面板一致）。"""
-    if total <= 0 or checked <= 0:
-        return Qt.CheckState.Unchecked
-    if checked >= total:
-        return Qt.CheckState.Checked
-    return Qt.CheckState.PartiallyChecked
 
 
 #: 右键菜单条目：标识 → (单选文本, 多选文本)；多选文本里的 {count} 会替换成选中数量。
@@ -165,8 +156,9 @@ class ManagePage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("managePage")
-        page_background(self)
         self.session = database.new_session()
+        self._checked_categories: set[int] = set()
+        self._syncing_tree = False
         self.item_service = ItemService(self.session)
         self.taxonomy = TaxonomyService(self.session)
         self.item_repo = ItemRepository(self.session)
@@ -190,9 +182,11 @@ class ManagePage(QWidget):
         root = QHBoxLayout(self)
         root.setContentsMargins(*PAGE_MARGINS)
         root.setSpacing(PAGE_SPACING)
-        root.addWidget(self._build_tree_panel(), 0)
+        self.tree_card = self._build_tree_panel()
+        self.filter_card = self._build_filter_panel()
+        root.addWidget(self.tree_card, 0)
         root.addWidget(self._build_center(), 1)
-        root.addWidget(self._build_filter_panel(), 0)
+        root.addWidget(self.filter_card, 0)
 
         signalBus.itemsChanged.connect(self.refresh)
         signalBus.categoriesChanged.connect(self.refresh)
@@ -212,8 +206,27 @@ class ManagePage(QWidget):
 
         self.tree = CategoryTree(card)
         self.tree.categorySelected.connect(self._on_category_selected)
+        self.tree.checkedChanged.connect(self._on_category_checked)
         self.tree.actionRequested.connect(self._on_tree_action)
         layout.addWidget(self.tree, 1)
+        self.category_hint = CaptionLabel("勾选分类可批量移动或删除", card)
+        layout.addWidget(self.category_hint)
+        self.category_move_button = PushButton(FluentIcon.MOVE, "批量移动", card)
+        self.category_move_button.setToolTip(
+            "把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）；根分类不能移动"
+        )
+        self.category_move_button.setEnabled(False)
+        self.category_move_button.clicked.connect(self._on_category_batch_move)
+        self.category_delete_button = PushButton(FluentIcon.DELETE, "批量删除", card)
+        self.category_delete_button.setToolTip("删除勾选的分类，其中的数据会变成未分类；根分类与「未分类」不能删除")
+        self.category_delete_button.setEnabled(False)
+        self.category_delete_button.clicked.connect(self._on_category_batch_delete)
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(6)
+        batch_row.addWidget(self.category_move_button)
+        batch_row.addWidget(self.category_delete_button)
+        batch_row.addStretch(1)
+        layout.addLayout(batch_row)
 
         add_button = PushButton(FluentIcon.ADD, "新建分类", card)
         add_button.clicked.connect(lambda: self._on_tree_action("add", None))
@@ -221,9 +234,12 @@ class ManagePage(QWidget):
         return card
 
     def _build_center(self) -> QWidget:
-        host = QWidget(self)
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # 与左侧「分类」卡片保持同一套外观：卡片 + 统一内边距。
+        card = CardWidget(self)
+        card.setMinimumHeight(420)
+        host = card
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(10)
 
         header = QHBoxLayout()
@@ -234,6 +250,19 @@ class ManagePage(QWidget):
         self.view_switch.addItem("card", "卡片", onClick=lambda: self._set_mode("card"))
         self.view_switch.setCurrentItem("list")
         header.addWidget(self.view_switch)
+        header.addSpacing(12)
+        self.tree_toggle_button = PushButton(FluentIcon.MENU, "分类栏", host)
+        self.tree_toggle_button.setCheckable(True)
+        self.tree_toggle_button.setChecked(True)
+        self.tree_toggle_button.setToolTip("显示/隐藏左侧分类栏")
+        self.tree_toggle_button.toggled.connect(self.tree_card.setVisible)
+        self.filter_toggle_button = PushButton(FluentIcon.FILTER, "筛选栏", host)
+        self.filter_toggle_button.setCheckable(True)
+        self.filter_toggle_button.setChecked(True)
+        self.filter_toggle_button.setToolTip("显示/隐藏右侧筛选栏")
+        self.filter_toggle_button.toggled.connect(self.filter_card.setVisible)
+        header.addWidget(self.tree_toggle_button)
+        header.addWidget(self.filter_toggle_button)
         header.addStretch(1)
         header.addWidget(CaptionLabel("用户", host))
         self.user_box = ComboBox(host)
@@ -328,27 +357,31 @@ class ManagePage(QWidget):
         return bar
 
     def _build_filter_panel(self) -> QWidget:
-        scroll = QScrollArea(self)
+        # 与左侧「分类」卡片保持同一套外观：卡片 + 统一内边距，标题同级别。
+        card = CardWidget(self)
+        card.setFixedWidth(288)
+        card.setMinimumHeight(420)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(*PANEL_MARGINS)
+        layout.setSpacing(8)
+        layout.addWidget(StrongBodyLabel("筛选", card))
+        layout.addWidget(CaptionLabel("按类型、标签、关键词与分类组合过滤", card))
+
+        scroll = QScrollArea(card)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setFixedWidth(288)
-
         host = QWidget(scroll)
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(6, 6, 10, 6)
-        layout.setSpacing(10)
-        layout.addWidget(StrongBodyLabel("筛选", host))
-        layout.addWidget(CaptionLabel("按类型、标签、关键词与分类组合过滤", host))
-
+        inner = QVBoxLayout(host)
+        inner.setContentsMargins(0, 0, 0, 0)
+        inner.setSpacing(10)
         self.filter_panel = FilterPanel(host)
         self.filter_panel.changed.connect(self._on_filter_changed)
-        layout.addWidget(self.filter_panel)
-        layout.addStretch(1)
+        inner.addWidget(self.filter_panel)
+        inner.addStretch(1)
         scroll.setWidget(host)
-        page_background(scroll, "manageFilterScroll")
-        page_background(host, "manageFilterHost")
-        clear_scroll_background(scroll, inner=False)
-        return scroll
+        clear_scroll_background(scroll)
+        layout.addWidget(scroll, 1)
+        return card
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -400,10 +433,14 @@ class ManagePage(QWidget):
         user_id = self.user_service.current_id()
         nodes = self.taxonomy.tree(user_id=user_id)
         total = self.item_repo.count(ItemFilter(include_hidden=True, user_ids={user_id}))
-        self.tree.set_nodes(nodes, total=total, selected=self._category_id)
+        self._syncing_tree = True
+        self.tree.set_nodes(
+            nodes, total=total, selected=self._category_id, checked=self._checked_categories
+        )
+        self._syncing_tree = False
+        self._sync_category_buttons()
         self.filter_panel.set_options(
             tags=self.tag_repo.names(user_id=user_id),
-            categories=[(node.category.id, "　" * node.depth + node.category.name) for node in nodes],
             keywords=self.tag_repo.distinct_keywords(user_id=user_id),
             global_tags=set(self.tag_repo.global_names()),
         )
@@ -424,8 +461,8 @@ class ManagePage(QWidget):
     def _load_items(self) -> None:
         sort_by, descending = self.filter_panel.sort_option()
         text = self.filter_panel.text()
-        category_ids = set(self.filter_panel.selected_categories())
-        if self._category_id:
+        category_ids = set(self._checked_categories)
+        if not category_ids and self._category_id is not None:
             category_ids.add(self._category_id)
         filters = ItemFilter(
             text_ids=self.item_repo.search_ids(text) if text else None,
@@ -631,6 +668,9 @@ class ManagePage(QWidget):
         if item.is_hidden:
             self.filter_panel.hidden_box.setChecked(True)
         self._category_id = item.category_id
+        self._checked_categories.clear()
+        self.tree.set_checked_categories(set())
+        self._sync_category_buttons()
         self._selected = {item.id}
         self._anchor = item.id
         self._page = 0
@@ -961,8 +1001,126 @@ class ManagePage(QWidget):
         toast_success(self, "已清理重复项", f"{count} 项")
 
     # ------------------------------------------------------------------ 分类
+    def _on_category_checked(self) -> None:
+        """左侧分类树的勾选：勾选集合优先作为中间列表的分类过滤条件。"""
+        self._checked_categories = self.tree.checked_categories()
+        self._sync_category_buttons()
+        self._page = 0
+        self._load_items()
+
+    def _category_name(self, category_id: int) -> str:
+        category = self.category_repo.get(category_id)
+        return category.name if category is not None else str(category_id)
+
+    def _eligible_category_ids(self) -> list[int]:
+        """可批量移动/删除的勾选分类：根分类与固定分类受保护。"""
+        eligible: list[int] = []
+        for category_id in sorted(self._checked_categories):
+            category = self.category_repo.get(category_id)
+            if category is None or is_uncategorized(category) or category.parent_id is None:
+                continue
+            eligible.append(category_id)
+        return eligible
+
+    def _sync_category_buttons(self) -> None:
+        eligible = bool(self._eligible_category_ids())
+        self.category_move_button.setEnabled(eligible)
+        self.category_delete_button.setEnabled(eligible)
+
+    def _descendant_category_ids(self, category_ids: set[int]) -> set[int]:
+        """勾选分类的全部子孙分类 id，用于拒绝非法的移动目标。"""
+        children: dict[int | None, list[int]] = {}
+        for node in self.taxonomy.tree(user_id=self.user_service.current_id()):
+            children.setdefault(node.category.parent_id, []).append(node.category.id)
+        found: set[int] = set()
+        stack = list(category_ids)
+        while stack:
+            for child_id in children.get(stack.pop(), ()):
+                if child_id not in found:
+                    found.add(child_id)
+                    stack.append(child_id)
+        return found
+
+    def _on_category_batch_move(self) -> None:
+        """把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）。"""
+        ids = self._eligible_category_ids()
+        if not ids:
+            toast_warning(self, "无法移动", "根分类与「未分类」不能移动，请先勾选普通分类")
+            return
+        target_id = self.tree.current_category()
+        if target_id in set(ids) | self._descendant_category_ids(set(ids)):
+            toast_warning(self, "无法移动", "目标分类是所选分类本身或它的子分类")
+            return
+        target = self.category_repo.get(target_id) if target_id is not None else None
+        target_name = target.name if target is not None else "顶层"
+        names = "、".join(self._category_name(category_id) for category_id in ids)
+        if not confirm(
+            self,
+            "批量移动分类",
+            f"将 {len(ids)} 个分类（{names}）移动到「{target_name}」下吗？",
+        ):
+            return
+        moved = 0
+        failed = 0
+        for category_id in ids:
+            category = self.category_repo.get(category_id)
+            if category is None:
+                continue
+            if self.taxonomy.move_category(category, target_id):
+                moved += 1
+            else:
+                failed += 1
+        self.session.commit()
+        signalBus.categoriesChanged.emit()
+        if failed:
+            toast_warning(self, "已移动分类", f"{moved} 个分类已移动；{failed} 个与目标下的分类重名")
+        else:
+            toast_success(self, "已移动分类", f"{moved} 个分类已移动到「{target_name}」")
+
+    def _on_category_batch_delete(self) -> None:
+        """批量删除勾选的分类；其中的数据变成未分类，根分类与固定分类受保护。"""
+        ids = self._eligible_category_ids()
+        if not ids:
+            toast_warning(self, "无法删除", "根分类与「未分类」不能删除，请先勾选普通分类")
+            return
+        names = "、".join(self._category_name(category_id) for category_id in ids)
+        if not confirm(
+            self,
+            "批量删除分类",
+            f"确定删除勾选的 {len(ids)} 个分类（{names}）吗？其中的数据会变成未分类。",
+        ):
+            return
+        removed = 0
+        skipped = 0
+        affected = 0
+        for category_id in ids:
+            category = self.category_repo.get(category_id)
+            if category is None:
+                continue
+            if self.taxonomy.promotion_conflicts(category):
+                skipped += 1
+                continue
+            affected += self.taxonomy.delete_category(category)
+            removed += 1
+        self.session.commit()
+        signalBus.categoriesChanged.emit()
+        signalBus.itemsChanged.emit()
+        message = f"已删除 {removed} 个分类，{affected} 项数据已变为未分类"
+        if skipped:
+            message += f"；{skipped} 个分类有重名子分类，请单独删除"
+            toast_warning(self, "已删除分类", message)
+        else:
+            toast_success(self, "已删除分类", message)
+        self._checked_categories.clear()
+        self.refresh()
+
     def _on_category_selected(self, category_id) -> None:
+        if self._syncing_tree:
+            return
         self._category_id = category_id
+        self._checked_categories.clear()
+        self.tree.set_checked_categories(set())
+        self._sync_category_buttons()
         self._page = 0
         self._load_items()
 
@@ -1056,9 +1214,8 @@ def _make_scroll(parent: QWidget, adaptive: bool = False):
         layout.addStretch(1)
     layout.setContentsMargins(0, 0, 6, 0)
     scroll.setWidget(host)
-    page_background(scroll, f"manageScroll{'Card' if adaptive else 'List'}")
-    page_background(host, f"manageScrollHost{'Card' if adaptive else 'List'}")
-    clear_scroll_background(scroll, inner=False)
+    # 内容区现在是卡片，滚动区保持透明露出卡片背景，避免多层底色叠加。
+    clear_scroll_background(scroll)
     return scroll, layout
 
 

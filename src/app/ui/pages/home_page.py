@@ -7,25 +7,27 @@ from collections.abc import Iterable, Mapping
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
-    AdaptiveFlowLayout,
     BodyLabel,
     CaptionLabel,
     CardWidget,
+    ComboBox,
     FluentIcon,
     PrimaryPushButton,
     ProgressBar,
     PushButton,
     ScrollArea,
     StrongBodyLabel,
-    SubtitleLabel,
     TitleLabel,
 )
 
+from ...core.config import resources_root
+from ..dialogs import TextInputDialog
 from ...core.shell import reveal
 from ...core.signals import signalBus
 from ...db import database
 from ...repositories import ArchiveRepository
-from ...services import ArchiveService, LibraryService, UserService, overview, recent
+from ...services import ArchiveService, UserService, overview, recent
+from ..widgets.flow_area import FlowArea
 from ..common import (
     DETAIL_MARGINS,
     BusyTip as BusyTipWidget,
@@ -33,7 +35,6 @@ from ..common import (
     format_datetime,
     format_size,
     clear_scroll_background,
-    page_background,
     page_header,
     page_layout,
     release_widget,
@@ -41,6 +42,8 @@ from ..common import (
     toast_success,
     type_icon,
     type_name,
+    toast_warning,
+    section_card,
 )
 
 KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数")
@@ -182,59 +185,62 @@ class HomePage(ScrollArea):
 
         host = QWidget(self)
         host.setObjectName("homeHost")
-        page_background(host)
         layout = page_layout(host)
 
-        page_header(layout, host, "数据概览", "所有数据都保存在本机，导入时会自动去重并记录特征")
+        header = page_header(layout, host, "数据概览", "所有数据都保存在本机，导入时会自动去重并记录特征")
+        self.user_box = ComboBox(host)
+        self.user_box.setMinimumWidth(150)
+        self.user_box.setToolTip("切换当前用户；数据管理、标签、存档等页面会随之切换")
+        self.user_box.currentIndexChanged.connect(self._on_user_changed)
+        header.addWidget(CaptionLabel("当前用户", host))
+        header.addWidget(self.user_box)
 
-        cards_host = QWidget(host)
-        self._cards_layout = AdaptiveFlowLayout(cards_host, needAni=False, isTight=True)
-        self._cards_layout.setWidgetMinimumWidth(180)
-        self._cards_layout.setContentsMargins(0, 0, 0, 0)
-        self._cards_layout.setHorizontalSpacing(12)
-        self._cards_layout.setVerticalSpacing(12)
-        layout.addWidget(cards_host)
+        self.cards_host = FlowArea(
+            host, adaptive=True, minimum_width=180, horizontal_spacing=12, vertical_spacing=12
+        )
+        cards_card, cards_body = section_card(host, "概览", "当前用户的数据总量、占用空间与今日导入情况")
+        cards_body.addWidget(self.cards_host)
+        layout.addWidget(cards_card)
 
-        layout.addWidget(SubtitleLabel("快捷操作", host))
-        actions_host = QWidget(host)
-        actions = AdaptiveFlowLayout(actions_host, needAni=False, isTight=True)
-        actions.setWidgetMinimumWidth(120)
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setHorizontalSpacing(8)
-        actions.setVerticalSpacing(8)
-        import_button = PrimaryPushButton(FluentIcon.ADD, "导入数据", actions_host)
+        self.actions_host = FlowArea(
+            host, adaptive=True, minimum_width=120, horizontal_spacing=8, vertical_spacing=8
+        )
+        import_button = PrimaryPushButton(FluentIcon.ADD, "导入数据", self.actions_host)
         import_button.setToolTip("导入文件或文件夹，自动去重并记录特征")
         import_button.clicked.connect(lambda: signalBus.requestImport.emit())
-        manage_button = PushButton(FluentIcon.FOLDER, "数据管理", actions_host)
+        manage_button = PushButton(FluentIcon.FOLDER, "数据管理", self.actions_host)
         manage_button.setToolTip("打开数据管理页，筛选、编辑与批量操作")
         manage_button.clicked.connect(lambda: signalBus.requestManage.emit())
-        folder_button = PushButton(FluentIcon.FOLDER_ADD, "打开库文件夹", actions_host)
-        folder_button.setToolTip("在资源管理器中打开默认库文件夹")
-        folder_button.clicked.connect(self._open_library_folder)
-        archive_button = PushButton(FluentIcon.HISTORY, "新建存档", actions_host)
+        folder_button = PushButton(FluentIcon.FOLDER_ADD, "打开资源文件夹", self.actions_host)
+        folder_button.setToolTip("在资源管理器中打开资源文件夹（库内容与数据库文件都在这里）")
+        folder_button.clicked.connect(self._open_resource_folder)
+        archive_button = PushButton(FluentIcon.HISTORY, "新建存档", self.actions_host)
         archive_button.setToolTip("为当前数据创建一份存档快照")
         archive_button.clicked.connect(self._create_archive)
-        for button in (import_button, manage_button, folder_button, archive_button):
-            actions.addWidget(button)
-        layout.addWidget(actions_host)
+        self.actions_host.add_widgets((import_button, manage_button, folder_button, archive_button))
+        actions_card, actions_body = section_card(host, "快捷操作", "常用入口：导入数据、管理数据、打开资源文件夹与新建存档")
+        actions_body.addWidget(self.actions_host)
+        layout.addWidget(actions_card)
 
-        layout.addWidget(SubtitleLabel("最近导入", host))
         self._recent_host = QWidget(host)
         self._recent_layout = QVBoxLayout(self._recent_host)
         self._recent_layout.setContentsMargins(0, 0, 0, 0)
         self._recent_layout.setSpacing(6)
-        layout.addWidget(self._recent_host)
+        recent_card, recent_body = section_card(host, "最近导入", "最近导入的数据，点击一行可直接定位到数据管理页")
+        recent_body.addWidget(self._recent_host)
+        layout.addWidget(recent_card)
 
-        layout.addWidget(SubtitleLabel("类型分布", host))
         self._type_host = QWidget(host)
         self._type_layout = QVBoxLayout(self._type_host)
         self._type_layout.setContentsMargins(0, 0, 0, 0)
         self._type_layout.setSpacing(6)
-        layout.addWidget(self._type_host)
+        type_card, type_body = section_card(host, "类型分布", "按文件类型统计当前用户的数据占比")
+        type_body.addWidget(self._type_host)
+        layout.addWidget(type_card)
 
         layout.addStretch(1)
         self.setWidget(host)
-        clear_scroll_background(self, inner=False)
+        clear_scroll_background(self)
         self.setWidgetResizable(True)
 
         signalBus.itemsChanged.connect(self.refresh)
@@ -246,6 +252,7 @@ class HomePage(ScrollArea):
 
     # ------------------------------------------------------------------ 刷新
     def refresh(self) -> None:
+        self._reload_users()
         user_id = UserService(self.session).current_id()
         stats = overview(self.session, user_id=user_id)
         users = len(UserService(self.session).list_users())
@@ -265,13 +272,12 @@ class HomePage(ScrollArea):
         self._rebuild_type_bars(type_distribution(stats["by_type"], stats["total"]))
 
     def _rebuild_cards(self, entries: list[tuple[str, str, str]]) -> None:
-        self._clear(self._cards_layout)
+        self._clear(self.cards_host)
         self.kpi_cards = []
-        host = self._cards_layout.parentWidget()
         for title, value, sub in entries:
-            card = StatCard(title, KPI_ICONS.get(title, FluentIcon.LABEL), host)
+            card = StatCard(title, KPI_ICONS.get(title, FluentIcon.LABEL), self.cards_host)
             card.set_value(value, sub)
-            self._cards_layout.addWidget(card)
+            self.cards_host.add_widget(card)
             self.kpi_cards.append(card)
 
     def _sync_card_refs(self, entries: list[tuple[str, str, str]]) -> None:
@@ -297,10 +303,43 @@ class HomePage(ScrollArea):
             self._type_bars.append(bar)
 
     # ------------------------------------------------------------------ 快捷操作
-    def _open_library_folder(self) -> None:
-        path = LibraryService(self.session).ensure_default().path
+    def _reload_users(self) -> None:
+        """按当前用户刷新右上角下拉（blockSignals 防止与 userChanged 形成回环）。"""
+        service = UserService(self.session)
+        current = service.current_id()
+        self.user_box.blockSignals(True)
+        self.user_box.clear()
+        for info in service.list_users():
+            self.user_box.addItem(info.name, userData=info.user.id)
+        index = self.user_box.findData(current)
+        self.user_box.setCurrentIndex(index if index >= 0 else 0)
+        self.user_box.blockSignals(False)
+
+    def _on_user_changed(self, index: int) -> None:
+        service = UserService(self.session)
+        user_id = self.user_box.itemData(index)
+        if not user_id or user_id == service.current_id():
+            return
+        user = service.by_id(user_id)
+        if user is None:
+            return
+        if user.password_hash:
+            dialog = TextInputDialog(
+                "切换用户", f"请输入 {user.name} 的口令", parent=self.window(), hint="留空以取消"
+            )
+            if not dialog.exec() or not service.verify(user, dialog.value()):
+                toast_warning(self, "口令错误", f"无法切换到 {user.name}")
+                self._reload_users()
+                return
+        service.set_current(user)
+        self.session.commit()
+        signalBus.userChanged.emit()
+        toast_success(self, "已切换用户", user.name)
+
+    def _open_resource_folder(self) -> None:
+        path = resources_root()
         if not reveal(path):
-            toast_error(self, "无法打开库文件夹", str(path))
+            toast_error(self, "无法打开资源文件夹", str(path))
 
     def _create_archive(self) -> None:
         if not confirm(self, "新建存档", "将为当前数据创建一份存档快照，是否继续？"):
@@ -319,10 +358,16 @@ class HomePage(ScrollArea):
         signalBus.archivesChanged.emit()
         self.refresh()
 
-    def _clear(self, layout) -> None:
-        while layout.count():
-            entry = layout.takeAt(0)
-            widget = entry.widget() if hasattr(entry, "widget") else entry
+    def _clear(self, container) -> None:
+        """清空普通布局或 FlowArea 中的控件，并交回 Qt 释放。"""
+        if isinstance(container, FlowArea):
+            widgets = container.take_widgets()
+        else:
+            widgets = []
+            while container.count():
+                entry = container.takeAt(0)
+                widgets.append(entry.widget() if hasattr(entry, "widget") else entry)
+        for widget in widgets:
             if widget is not None:
                 release_widget(widget)
 

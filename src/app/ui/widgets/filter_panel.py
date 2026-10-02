@@ -217,14 +217,12 @@ class FilterPanel(QWidget):
         self.type_section = FilterSection("类型", self)
         self.tag_section = FilterSection("标签", self)
         self.keyword_section = FilterSection("关键词", self)
-        self.category_section = FilterSection("分类", self)
         for section in self.sections():
             section.changed.connect(self.changed.emit)
 
         self._type_boxes = self.type_section.boxes
         self._tag_boxes = self.tag_section.boxes
         self._keyword_boxes = self.keyword_section.boxes
-        self._category_boxes = self.category_section.boxes
 
         self.search = SearchLineEdit(self)
         self.search.setPlaceholderText("全文检索：名称、内容、关键词（空格分隔多个词）")
@@ -282,13 +280,11 @@ class FilterPanel(QWidget):
             self.type_section,
             self.tag_section,
             self.keyword_section,
-            self.category_section,
         )
 
     def set_options(
         self,
         tags: list[str] | None = None,
-        categories: list[tuple[int, str]] | None = None,
         keywords: list[str] | None = None,
         global_tags: set[str] | None = None,
     ) -> None:
@@ -301,9 +297,6 @@ class FilterPanel(QWidget):
             ]
         )
         self.keyword_section.set_items([(name, str(name)) for name in sorted(keywords or [])])
-        self.category_section.set_items(
-            [(int(category_id), label) for category_id, label in (categories or [])]
-        )
 
     def _fill_types(self) -> None:
         if self._type_boxes:
@@ -325,8 +318,6 @@ class FilterPanel(QWidget):
     def selected_keywords(self) -> set[str]:
         return self.keyword_section.checked_keys()
 
-    def selected_categories(self) -> set[int]:
-        return self.category_section.checked_keys()
 
     def show_hidden(self) -> bool:
         return self.hidden_box.isChecked()

@@ -387,5 +387,10 @@ class ArchiveService:
         logger.info("存档「{}」{}", archive.name, "已标记" if archive.pinned else "已取消标记")
         return archive.pinned
 
-    def delete(self, archive: Archive) -> None:
+    def delete(self, archive: Archive) -> bool:
+        """删除存档；已标记的存档受保护，必须先取消标记（返回 False 表示没有删除）。"""
+        if archive.pinned:
+            logger.warning("存档「{}」已标记，需要先取消标记才能删除", archive.name)
+            return False
         self.archives.delete_archive(archive)
+        return True

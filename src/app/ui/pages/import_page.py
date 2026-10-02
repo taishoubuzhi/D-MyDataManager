@@ -6,7 +6,7 @@ import datetime as dt
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -19,7 +19,6 @@ from qfluentwidgets import (
     PushButton,
     ScrollArea,
     SegmentedWidget,
-    StrongBodyLabel,
     SwitchButton,
     TableWidget,
     TextEdit,
@@ -34,20 +33,20 @@ from ...db.models import guess_type
 from ...repositories import ItemRepository, TagRepository
 from ...services import ArchiveService, ImportService, LibraryService, TaxonomyService, UserService
 from ...services.blob_store import sha256_of
+from ..widgets.flow_area import FlowArea
 from ..common import (
-    DETAIL_MARGINS,
     BusyTip,
     elide,
     format_datetime,
     format_size,
     clear_scroll_background,
-    page_background,
     page_header,
     page_layout,
     toast_error,
     toast_success,
     toast_warning,
     type_name,
+    section_card,
 )
 from ..widgets.data_table import fit_columns, prepare_table
 from ..widgets.drop_area import DropArea
@@ -112,10 +111,11 @@ class ImportPage(ScrollArea):
         self._directory: str | None = None
         self._tree_files: list[tuple[Path, str]] = []
         self._worker: _ImportWorker | None = None
+        self.selected_label_text = "尚未选择文件"
+        self._started_at: dt.datetime | None = None
 
         host = QWidget(self)
         host.setObjectName("importHost")
-        page_background(host)
         layout = page_layout(host)
 
         page_header(
@@ -131,7 +131,7 @@ class ImportPage(ScrollArea):
         layout.addWidget(self._build_progress_card(host))
         layout.addStretch(1)
         self.setWidget(host)
-        clear_scroll_background(self, inner=False)
+        clear_scroll_background(self)
         self.setWidgetResizable(True)
 
         self._reload_users()
@@ -145,11 +145,12 @@ class ImportPage(ScrollArea):
 
     # ------------------------------------------------------------------ 界面
     def _build_mode_card(self, parent: QWidget) -> CardWidget:
-        card = CardWidget(parent)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(*DETAIL_MARGINS)
-        layout.setSpacing(12)
-        layout.addWidget(StrongBodyLabel("数据来源", card))
+        card, layout = section_card(parent, "数据来源", "文本内容或文件 / 文件夹，可随时切换", spacing=12)
+
+        # 已选摘要：先建好——构造期 setCurrentItem 就会触发 _set_mode。
+        self.selected_label = CaptionLabel(self.selected_label_text, card)
+        self.selected_label.setWordWrap(True)
+        self.selected_label.hide()
 
         self.mode = SegmentedWidget(card)
         self.mode.addItem("text", "文本", onClick=lambda: self._set_mode("text"))
@@ -172,30 +173,28 @@ class ImportPage(ScrollArea):
         layout.addWidget(self.text_edit)
         layout.addWidget(self.drop_area)
 
-        self._file_buttons = QWidget(card)
-        buttons = QHBoxLayout(self._file_buttons)
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.setSpacing(8)
+        # 来源按钮用流式布局：窄窗口下换行，不再被裁掉，也不会在隐藏时塌成 0 高。
+        self._file_buttons = FlowArea(
+            card, adaptive=True, minimum_width=96, horizontal_spacing=8, vertical_spacing=8
+        )
         pick_files = PushButton(FluentIcon.FOLDER_ADD, "选择多个文件", self._file_buttons)
         pick_files.clicked.connect(self.drop_area.browse)
         pick_folder = PushButton(FluentIcon.FOLDER, "选择文件夹", self._file_buttons)
         pick_folder.clicked.connect(self.drop_area.browse_directory)
         clear = PushButton("清空选择", self._file_buttons)
         clear.clicked.connect(self._clear_sources)
-        buttons.addWidget(pick_files)
-        buttons.addWidget(pick_folder)
-        buttons.addWidget(clear)
-        buttons.addStretch(1)
+        self._file_buttons.add_widgets((pick_files, pick_folder, clear))
         self._file_buttons.hide()
         layout.addWidget(self._file_buttons)
+
+        # 已选摘要：此前只写进 selected_label_text 属性，界面上看不到。
+        layout.addWidget(self.selected_label)
         return card
 
     def _build_target_card(self, parent: QWidget) -> CardWidget:
-        card = CardWidget(parent)
-        outer = QVBoxLayout(card)
-        outer.setContentsMargins(*DETAIL_MARGINS)
-        outer.setSpacing(12)
-        outer.addWidget(StrongBodyLabel("导入目标与数据信息", card))
+        card, outer = section_card(
+            parent, "导入目标与数据信息", "选择导入到哪个用户与分类，并按需补充名称、标签与关键词", spacing=12
+        )
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
@@ -247,11 +246,7 @@ class ImportPage(ScrollArea):
         return card
 
     def _build_details_card(self, parent: QWidget) -> CardWidget:
-        card = CardWidget(parent)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(*DETAIL_MARGINS)
-        layout.setSpacing(10)
-        layout.addWidget(StrongBodyLabel("待导入文件信息", card))
+        card, layout = section_card(parent, "待导入文件信息", "先做重复检查，已在库中的文件会标记为跳过")
         self.details_summary = CaptionLabel("尚未选择文件", card)
         layout.addWidget(self.details_summary)
 
@@ -269,11 +264,7 @@ class ImportPage(ScrollArea):
         return card
 
     def _build_progress_card(self, parent: QWidget) -> CardWidget:
-        card = CardWidget(parent)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(*DETAIL_MARGINS)
-        layout.setSpacing(10)
-        layout.addWidget(StrongBodyLabel("导入进度", card))
+        card, layout = section_card(parent, "导入进度", "逐个文件显示结果，失败的条目会给出原因")
 
         self.progress_bar = ProgressBar(card)
         self.progress_bar.setRange(0, 100)
@@ -305,6 +296,7 @@ class ImportPage(ScrollArea):
             if is_text
             else "当前为批量导入：可选择多个文件，或选择一个文件夹（文件夹会作为一个新分类整体导入）"
         )
+        self.selected_label.setVisible(not is_text)
         if not is_text:
             self._refresh_sources()
 
@@ -329,13 +321,17 @@ class ImportPage(ScrollArea):
 
     def _refresh_sources(self) -> None:
         if self._directory:
-            self.selected_label_text = f"已选择文件夹：{self._directory}"
+            self.selected_label_text = f"已选择文件夹：{elide(self._directory, 60)}"
         elif self._files:
             names = "，".join(Path(p).name for p in self._files[:3])
             more = f" 等 {len(self._files)} 个文件" if len(self._files) > 3 else ""
             self.selected_label_text = f"已选择：{elide(names, 50)}{more}"
         else:
             self.selected_label_text = "尚未选择文件"
+        self.selected_label.setText(self.selected_label_text)
+        self.selected_label.setToolTip(
+            self._directory or "\n".join(self._files) or self.selected_label_text
+        )
         is_folder = bool(self._directory)
         self.category_box.setEnabled(not is_folder)
         self.category_hint.setText(
@@ -553,6 +549,7 @@ class ImportPage(ScrollArea):
         self.progress_card.show()
         self.result_table.setRowCount(0)
         self.progress_bar.setValue(0)
+        self._started_at = dt.datetime.now()
         self.progress_label.setText(f"准备导入 {len(sources) if kind == 'files' else len(self._tree_files)} 个文件…")
 
         worker = _ImportWorker(kind, sources, options)
@@ -584,6 +581,10 @@ class ImportPage(ScrollArea):
         summary = f"成功 {payload.get('ok', 0)}，跳过 {payload.get('skipped', 0)}，失败 {len(failed)}"
         if payload.get("category"):
             summary += f"；新分类「{payload['category']}」"
+        if self._started_at is not None:
+            elapsed = (dt.datetime.now() - self._started_at).total_seconds()
+            summary += f"；耗时 {elapsed:.1f} 秒"
+            self._started_at = None
         self.progress_label.setText(summary)
         if self._worker is not None:
             self._worker.deleteLater()

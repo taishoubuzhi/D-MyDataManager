@@ -27,7 +27,6 @@ from qfluentwidgets import (
     PushButton,
     ScrollArea,
     StrongBodyLabel,
-    TitleLabel,
 )
 
 from ...core.signals import signalBus
@@ -40,11 +39,12 @@ from ..common import (
     confirm,
     format_datetime,
     clear_scroll_background,
-    page_background,
     page_layout,
     release_widget,
     toast_success,
     toast_warning,
+    page_header,
+    section_card,
 )
 from ..dialogs import TextInputDialog
 
@@ -211,7 +211,6 @@ class UserPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("userPage")
-        page_background(self, "userPage")
         self.session = database.new_session()
         self.service = UserService(self.session)
         self._user_id = 0
@@ -221,19 +220,23 @@ class UserPage(QWidget):
 
         root = page_layout(self)
 
-        header = QHBoxLayout()
-        header.addWidget(TitleLabel("用户", self))
-        header.addStretch(1)
+        header = page_header(
+            root, self, "用户", "每位用户拥有独立的数据、标签与存档，切换用户即可查看各自内容"
+        )
         self.create_button = PrimaryPushButton(FluentIcon.ADD, "新建用户", self)
+        self.create_button.setToolTip("新建一个独立用户，数据与其他用户互不影响")
         self.create_button.clicked.connect(self._create_user)
         header.addWidget(self.create_button)
-        root.addLayout(header)
 
         self.caption = CaptionLabel("", self)
         self.caption.setWordWrap(True)
         root.addWidget(self.caption)
 
-        self.scroll = ScrollArea(self)
+        card, card_layout = section_card(
+            self, "全部用户", "卡片上可直接切换用户、重命名、设置口令或删除；每人的数据互不影响", spacing=10
+        )
+        card.setMinimumHeight(420)
+        self.scroll = ScrollArea(card)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.grid_host = QWidget(self.scroll)
@@ -242,11 +245,12 @@ class UserPage(QWidget):
         self.grid.setHorizontalSpacing(CARD_SPACING)
         self.grid.setVerticalSpacing(CARD_SPACING)
         self.scroll.setWidget(self.grid_host)
-        clear_scroll_background(self.scroll, inner=False)
-        page_background(self.scroll, "userScroll")
-        page_background(self.grid_host, "userGridHost")
+        clear_scroll_background(self.scroll)
+        self.scroll.setObjectName("userScroll")
+        self.grid_host.setObjectName("userGridHost")
         self.scroll.viewport().installEventFilter(self)
-        root.addWidget(self.scroll, 1)
+        card_layout.addWidget(self.scroll, 1)
+        root.addWidget(card, 1)
 
         signalBus.userChanged.connect(self.refresh)
         self.refresh()
@@ -313,6 +317,13 @@ class UserPage(QWidget):
         self.grid.setColumnStretch(columns, 1)
         for column in range(columns + 1, CARD_MAX_COLUMNS + 2):
             self.grid.setColumnStretch(column, 0)
+        # 行不伸缩：多余高度全部给末行占位，卡片始终从左上角开始排列。
+        rows = (len(self._cards) + columns - 1) // columns
+        for row in range(rows):
+            self.grid.setRowStretch(row, 0)
+        self.grid.setRowStretch(rows, 1)
+        for row in range(rows + 1, CARD_MAX_COLUMNS + 2):
+            self.grid.setRowStretch(row, 0)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt 命名
         """视口尺寸变化时重排卡片，保证卡片始终随可用宽度自适应。"""

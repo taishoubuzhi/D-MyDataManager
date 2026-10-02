@@ -37,6 +37,7 @@ class CategoryTree(TreeWidget):
 
     categorySelected = pyqtSignal(object)
     actionRequested = pyqtSignal(str, object)
+    checkedChanged = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -44,10 +45,18 @@ class CategoryTree(TreeWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_menu)
         self.itemSelectionChanged.connect(self._on_selection)
+        self.itemChanged.connect(self._on_item_changed)
 
     # ------------------------------------------------------------------ 数据
-    def set_nodes(self, nodes: list[CategoryNode], total: int = 0, selected: int | None = None) -> None:
+    def set_nodes(
+        self,
+        nodes,
+        total: int = 0,
+        selected: int | None = None,
+        checked: set[int] | None = None,
+    ) -> None:
         self.blockSignals(True)
+        checked_ids = set(checked or ())
         self.clear()
         root = QTreeWidgetItem([f"全部数据 ({total})"])
         root.setData(0, Qt.ItemDataRole.UserRole, ALL_ID)
@@ -59,6 +68,10 @@ class CategoryTree(TreeWidget):
             item = QTreeWidgetItem([category_label(node, fixed=fixed)])
             item.setData(0, Qt.ItemDataRole.UserRole, node.category.id)
             item.setData(0, FIXED_ROLE, fixed)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            category_id = item.data(0, Qt.ItemDataRole.UserRole)
+            state = Qt.CheckState.Checked if category_id in checked_ids else Qt.CheckState.Unchecked
+            item.setCheckState(0, state)
             if fixed:
                 item.setToolTip(0, FIXED_TIP)
             parent = items.get(node.category.parent_id) if node.category.parent_id else root
@@ -72,6 +85,35 @@ class CategoryTree(TreeWidget):
         root.setExpanded(True)
         self.blockSignals(False)
         self.select_category(selected)
+
+    def checked_categories(self) -> set[int]:
+        """当前勾选的分类 id 集合（不含「全部数据」根节点）。"""
+        return {
+            int(item.data(0, Qt.ItemDataRole.UserRole))
+            for item in self._iter_items()
+            if item.checkState(0) == Qt.CheckState.Checked
+            and isinstance(item.data(0, Qt.ItemDataRole.UserRole), int)
+        }
+
+    def set_checked_categories(self, category_ids: set[int] | None) -> None:
+        """按 id 集合设置勾选状态，不触发 checkedChanged。"""
+        wanted = set(category_ids or ())
+        self.blockSignals(True)
+        try:
+            for item in self._iter_items():
+                category_id = item.data(0, Qt.ItemDataRole.UserRole)
+                if not isinstance(category_id, int):
+                    continue
+                state = (
+                    Qt.CheckState.Checked if category_id in wanted else Qt.CheckState.Unchecked
+                )
+                item.setCheckState(0, state)
+        finally:
+            self.blockSignals(False)
+
+    def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if column == 0 and isinstance(item.data(0, Qt.ItemDataRole.UserRole), int):
+            self.checkedChanged.emit()
 
     def select_category(self, category_id: int | None) -> None:
         for item in self._iter_items():

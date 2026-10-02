@@ -106,11 +106,16 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 标签分两类（`src/app/db/models.py` 的 `Tag`）：`is_global` 为真时对所有用户可见，`user_id` 记录归属用户，
 `created_by` 记录创建者。可见性由 `src/app/repositories/tags.py` 的 `_scope()` 决定：全局标签 + 自己创建或归属自己的个人标签（默认用户传 None 表示不限制，因此能看到全部标签）；
 `by_name()` 优先返回全局标签，因此新建个人标签不会与已有全局标签重名，转全局时若已有同名全局标签会被拒绝。
-只有创建者可以在「标签」页把标签在全局 / 个人之间切换（`TaxonomyService.set_tag_global()`）。
+默认用户（管理员）可以管理任意标签，其他用户只能管理自己创建的标签：重命名、切换全局 / 个人归属、删除都由
+`TagRepository.can_manage(tag, user_id, is_admin)` 判定（管理员或创建者），越权时在状态栏给出提示；
+批量操作只处理有权限的标签，其余计入「跳过」（`TaxonomyService.set_tag_global()` / `rename_tag()` / `delete_tag()` / `cleanup_unused()`）。
 
 「标签」页（`src/app/ui/pages/tag_page.py`）用表格展示：`prepare_table(self.table, movable=True)` 让表头可拖动，
 `fit_columns(min_width=64, max_width=220)` 按内容自适应列宽；表头的 `TableFilterBar` 提供名称 / 归属 / 创建者 / 数据项数四列筛选，
 `_apply_filters()` 用 `match_filters()` + `setRowHidden()` 处理，结果由「显示 X / Y 个标签」标注，被隐藏行的选中会被忽略。
+表格首列是勾选框（`TAG_CHECK_COLUMN = 0`，名称 / 归属等列整体右移一列），选择条上的三态框与「全选 / 全不选 / 反选」按钮同步勾选状态
+（全选只作用于当前显示的行）；勾选后可以「批量转为全局 / 批量转为个人 / 批量删除」——只有当前用户创建的标签会被处理，
+其余会在提示里说明跳过数量，`TaxonomyService` 的权限校验（`TagRepository.can_manage()`：默认用户或创建者）仍然是最终依据。
 
 数据库结构版本在 `src/app/db/database.py` 的 `SCHEMA_VERSION`：低版本库启动时按 `_upgrade_schema()` 原地补列并回填
 （历史 `user_id IS NULL` 的标签视为全局），重名的历史全局标签会被重命名为「名称（N）」后再建唯一索引；
@@ -120,15 +125,24 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 `users` 表的 `is_default` 标记默认用户（管理员）：结构升级到 `SCHEMA_VERSION` 4 时把 `MIN(id)` 置位，种子数据建的第一个用户即管理员
 （`src/app/db/seed.py` 的 `User(name=DEFAULT_USER, is_default=True)`，`UserRepository.default()` / `ensure_default()` 优先取它）。
-`UserService.is_admin()` 决定界面权限：默认用户能在「用户」页新建 / 重命名 / 删除任意用户并设置或清除其口令，也才能用存档页的「还原整个存档」；
+`UserService.is_admin()` 决定界面权限：默认用户能在「用户」页新建 / 重命名 / 删除任意用户并设置或清除其口令，也才能用存档页的「还原整个存档」，也才能执行设置页与插件页的系统级操作（见下）；
 普通用户可以改自己或清除自己的口令并删除自己。口令按用户独立保存（`src/app/core/security.py`），切换用户与解锁隐藏数据都用当前用户口令。
 「清除口令」按钮只对已设口令的用户显示（`UserPage._clear_password()`）：默认用户可以清除任何用户的口令，其他用户只能清除自己的，越权时给出提示。
 
+系统级操作只对默认用户开放（`src/app/ui/pages/settings_page.py` / `plugin_page.py`）：设置页的「恢复初始化」与资源文件夹的
+「更改位置 / 扫描并登记 / 重建目录结构」、插件页的「导入插件包 / 导入插件目录 / 启用 / 插件选项（启用时） / 重命名 /
+编辑说明 / 编辑备注 / 删除 / 批量启用 / 批量禁用 / 批量删除」在普通用户下被禁用，并由页面上的「仅默认用户可用」
+SettingCard（设置页）或说明文字（插件页）标注原因；处理器入口还有 `_require_admin()` 兜底，误调时提示「无权操作」。
+切换用户时 `signalBus.userChanged` 触发 `_sync_admin()` → `_apply_permissions()`，立即刷新按钮可用状态与提示显隐。
+「打开文件夹」（资源文件夹）与隐私保护分组（资源文件夹 / 隐藏文件两个开关）对所有用户可用，不受此限制。
+
+「用户」页的头部是统一的标题行（`page_header()`，右侧是「新建用户」主按钮），卡片网格整体装在一张分区卡片（`section_card(self, "全部用户", "…", spacing=10)`）里：
 「用户」页（`src/app/ui/pages/user_page.py`）把用户排成卡片网格：卡片是**固定宽度** `CARD_WIDTH`（320 px，`setFixedWidth()` +
 水平 `QSizePolicy.Fixed`），`grid_columns(available_width, card_width=CARD_WIDTH)` 按窗口宽度决定列数，`_layout_cards()` 在每个
 卡片列后追加占位伸缩列（`setColumnStretch(columns, 1)`），所以窗口变宽只增加列数、卡片本身不会被拉宽；
 滚动区内部控件跟随视口宽度重排（`setWidgetResizable(True)` + `viewport()` 事件过滤器），窗口变窄时网格仍保证卡片完整可见。
-`refresh()` 重建 `UserCard` 并高亮当前用户（`set_highlighted()` / `current_card()`），同时用 `_equalize_card_heights()` 统一各卡片高度。
+`refresh()` 重建 `UserCard` 并高亮当前用户（`set_highlighted()` / `current_card()`），同时用 `_equalize_card_heights()` 统一各卡片高度；
+`_layout_cards()` 把每行的行伸缩设为 0、只让末行下方的占位行伸缩（`setRowStretch(rows, 1)`），多余高度全部落在网格底部，卡片始终从左上角开始逐个排列。
 每张卡片都是自洽的对象单元（`UserPage._user_card()`）：三段式布局 = ①首字头像（`_avatar()`，当前用户蓝底 / 其他灰底）+ 用户名 + 徽标（`card_badges()`：当前用户 / 默认用户 / 已设口令）；
 ②摘要（`card_summary()`：数据项数、分类数、创建时间）；③两列按钮网格（`CARD_BUTTON_COLUMNS = 2`，按 `card_permissions()` 显隐）——
 切换为当前用户（当前用户卡片上是禁用态的「当前用户」）、重命名、口令、清除口令、删除，因此所有针对该用户的操作都在卡片内完成，按钮不会被裁出卡片。
@@ -142,8 +156,13 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 ## 数据概览页
 
 首页（`src/app/ui/pages/home_page.py`）是仪表盘：7 张 KPI 卡（数据总量 / 占用空间 / 今日导入 / 用户数 / 分类 / 标签数 / 存档数）由模块级
-`format_summary(overview(), users=, archives=)` 生成，卡片装在 `AdaptiveFlowLayout` 里、窄窗口自动换行；下方是快捷操作（导入数据 /
-数据管理 / 打开库文件夹 / 新建存档）、最近导入（点击发 `focusItem`）与类型分布条（`type_distribution()` → `ProgressBar`）。
+`format_summary(overview(), users=, archives=)` 生成。整页由四张分区卡片组织（`common.section_card()`：概览 / 快捷操作 / 最近导入 / 类型分布），
+每张卡片都带标题与一句话说明：概览卡装 KPI 卡、快捷操作卡装「导入数据 / 数据管理 / 打开资源文件夹 / 新建存档」四个按钮、
+最近导入卡装最近条目（点击发 `focusItem`）、类型分布卡装 `type_distribution()` 生成的 `ProgressBar` 条。
+标题行右侧是「当前用户」下拉：切换即 `UserService.set_current()` + `signalBus.userChanged`，设了口令的用户会先弹口令框，口令错误则回退到原用户。
+KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowArea`（`adaptive=True`，KPI 卡最小宽 180 px、按钮 120 px）：
+它按当前宽度自算高度（`heightForWidth`）、增删控件后立刻重排，所以切换用户 / 刷新后新卡片不会再停在默认位置盖住第一张卡；
+页面不可见时经历 resize（例如最大化）也不会被压成 0 高，重新显示时会再量一次高度，KPI 卡不会集体消失。
 页面订阅 `itemsChanged` / `categoriesChanged` / `tagsChanged` / `userChanged` / `archivesChanged` 自动刷新。
 
 ## 数据管理页
@@ -156,7 +175,8 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 箭头或标题行控制折叠（`_toggle_body()`），选项区固定 `SECTION_BODY_HEIGHT`（116 px）高度、超出时自己滚动；
 搜索框按显示名过滤选项（无匹配时显示「没有匹配的选项」），三态全选框由 `_sync_all()` / `_on_all_state()` 与分组内的勾选状态双向同步
 （空 = 全不选、横杠 = 部分选中、勾 = 全选，点击空框即全选、点击勾框即全不选），`_syncing` 守卫避免信号回环。
-`FilterPanel` 保留 `_type_boxes` / `_tag_boxes` / `_keyword_boxes` / `_category_boxes` 别名指向各分组的同一份 `boxes` 字典。
+`FilterPanel` 只有类型 / 标签 / 关键词三个分组——原来的「分类」分组已移除，分类过滤改由左侧分类树的复选框承担；
+`_type_boxes` / `_tag_boxes` / `_keyword_boxes` 别名指向各分组的同一份 `boxes` 字典。
 
 列表 / 卡片项（`src/app/ui/widgets/item_card.py` 的 `ItemListRow` / `ItemCard`）左侧是复选框：左键单击只选中这一项（不再直接打开），
 双击左键才打开（`opened` → `ManagePage._on_open()`）；复选框用于多选，Ctrl + 左键逐个切换、Shift + 左键从锚点选到点击项（Windows 规则，
@@ -164,6 +184,10 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 `CardWidget`，它的 `mouseReleaseEvent` 无条件发出 `clicked`，所以页面用 `_press_button` 只认左键，右键不会破坏多选。
 工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
 勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」与「清空选择」，没有选中项时批量按钮禁用。
+
+左栏分类树（`src/app/ui/widgets/category_tree.py`）的每个分类节点都带复选框（「全部数据」根节点没有）：勾选集合由 `checked_categories()` 读出、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
+勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）。
+中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**打开方式**（系统默认程序 /
 点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
@@ -186,6 +210,11 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 用户点选一条存档会自动切到「存档内条目」页签，也可以随时手动切回去；程序化刷新（恢复选中行、重载列表）时用 `blockSignals`
 屏蔽信号，不会强行抢走页签。`tab_keys()` / `current_tab()` / `switch_tab(route_key)` 是给外部（如跳转逻辑）用的接口。
 
+存档列表首列是勾选框，选择条上是一个三态全选框（空 = 全不选、横杠 = 部分选中、勾 = 全选本页，点一下在全选 / 全不选之间切换；只作用于当前页），
+可以「批量标记 / 批量取消标记 / 批量删除」。**已标记的存档不能直接删除**：单条删除会提示先取消标记，
+批量删除会跳过它们并在确认框与结果提示里说明跳过数量；服务层 `ArchiveService.delete()` 对已标记的存档返回 `False`
+（自动清理策略同样跳过已标记的存档）。
+
 ## 导入页与批量导入
 
 导入页（`src/app/ui/pages/import_page.py`）有三部分：数据来源（文本 / 批量导入）、导入目标与数据信息、待导入文件信息与导入进度。
@@ -195,6 +224,8 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 切换用户会重建分类与标签候选（`_reload_categories()` / `_reload_tags()`）。
 「未分类」是每个用户的固定根分类（新建用户自动获得）：分类下拉直接列出 `TaxonomyService.tree(user_id=...)` 的真实分类（没有占位项），
 默认选中「未分类」，所以没单独选分类的文本 / 文件都会落在 `<用户名>/未分类/` 目录（服务层 `ImportService._category_for()` 兜底）。
+模式卡片上会实时显示当前选中的文件 / 文件夹摘要（文本模式隐藏该行，文件夹只显示省略后的路径），
+导入完成后在结果摘要里追加本次耗时；来源按钮同样是流式布局，窄窗口自动换行。
 分类的改名与删除规则：`TaxonomyService.rename_category()` 拒绝同级重名（界面提示「无法重命名」）；`delete_category()` 删除分类时把子分类上移到
 被删分类的父级，若与同级已有分类重名，界面先弹 `CategoryConflictDialog` 让用户选「自动编号」（`unique_sibling_name()` 依次尝试 `名字-1`、`名字-2`）
 或逐个填写新名字，保证同一级下不会出现两个同名分类。
@@ -229,7 +260,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 动态重建列表时，摘掉旧控件必须走 `src/app/ui/common.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
 PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘掉的条目都会变成一闪而过的小顶层窗口（`ManagePage._clear_layout()`、
-`HomePage._clear()`、`FilterSection.set_items()`、`UserPage.refresh()` 的旧卡片、`SettingsPage._refresh_libraries()` 的旧行、
+`HomePage._clear()`（`FlowArea.take_widgets()`）、`FilterSection.set_items()`、`UserPage.refresh()` 的旧卡片、`SettingsPage._refresh_libraries()` 的旧行、
 `TableFilterBar.configure()` 的旧筛选控件、`ItemCard.set_tags()` 的旧标签块均已改用）。只 `deleteLater()` 的旧控件会作为子控件继续留在界面上
 （且 Python 侧的类身份会丢失），所以「先隐藏、再断父级」这一步不能省。
 
@@ -240,6 +271,7 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 - `PAGE_MARGINS = (24, 20, 24, 20)`、`PAGE_SPACING = 12`：所有页面的外层边距与间距（`page_layout(page)` 直接建好这个 `QVBoxLayout`）；
 - `PANEL_MARGINS = (12, 12, 12, 12)`：列表面板卡片；`DETAIL_MARGINS = (16, 14, 16, 14)`：详情 / 表单卡片；
   `panel_card(parent, margins=..., spacing=...)` 返回 `(CardWidget, 卡内竖直布局)`；
+  `section_card(parent, 标题, 说明, ...)` 在它上面再叠一层标题（`StrongBodyLabel`）与说明（`CaptionLabel`），概览 / 导入 / 用户 / 设置四页的面板都改用它；
 - `page_header(root, page, 标题, 说明)`：统一的标题行（`TitleLabel` + 弹簧，右侧留给主操作按钮）与下方说明文字；
 - `accent_color()` / `accent_name()`：主题强调色（包 `qfluentwidgets.themeColor()`，默认 `#009faa`），
   禁止在 QSS 里写死强调色——自定义控件（用户卡片头像与徽标、选中指示条、拖放框、关键词块）都改成按主题取色。
@@ -247,6 +279,25 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 按钮一律用 qfluentwidgets 的 `PrimaryPushButton`（主操作）与 `PushButton`（次操作），不要用原生 `QPushButton`：
 设置页的 `PushSettingCard` 自带原生按钮，已用 `SettingsPage` 里的 `ActionCard`（继承它并换成 `PushButton`）替换。
 `scripts/dev_check_ui.py` 的 `style_uniformity` 检查会逐页断言边距 / 间距、面板卡片边距、没有原生 `QPushButton`、QSS 里没有写死的强调色。
+数据管理页的左（分类）/ 中（列表与卡片）/ 右（筛选）三个面板现在都是 `CardWidget` + `PANEL_MARGINS`，标题用 `StrongBodyLabel`，
+面板内的滚动区用 `clear_scroll_background()` 透明化。
+概览 / 导入 / 用户 / 设置四页也统一成同一套分区卡片（`section_card()`，标题 + 一句话说明），不再用裸 `SubtitleLabel` 或光板 `CardWidget`。
+页面底色统一由 `install_app_theme()` 装到 `QApplication` 的调色板提供，**页面自己不再铺底色**（`common.page_background()` 已删除）：
+概览 / 导入 / 设置 / 用户四页此前各自调 `page_background(...)` 写死一对浅 / 深 QSS，又用 `clear_scroll_background(self, inner=False)` 只清了滚动区、没清视口，
+所以切到浅色后这些页仍按旧调色板实绘深色块、看起来像混进了原生 Qt 控件；现在它们与其余页面一致：
+只留 `setObjectName(...)` 供样式定位、滚动区一律 `clear_scroll_background(self)`。
+
+### 自适应高度的流式容器（FlowArea）
+
+`src/app/ui/widgets/flow_area.py` 的 `FlowArea(QWidget)` 把「按宽度自算高度」的流式容器抽成一个控件（范式最早来自 `keyword_input.py` 的 `ChipArea`、`pager.py` 与数据管理页的工具栏）：
+构造时建 `FlowLayout`（`adaptive=True` 时改用 `AdaptiveFlowLayout` + `setWidgetMinimumWidth(minimum_width)`），`setSizePolicy(Preferred, Fixed)` 并 `setFixedHeight(0)`；
+`add_widget()` 后立刻 `sync_height()`，并用 `QTimer.singleShot(0, …)` 再同步一次；`sync_height()` 前有两道守卫——不在显示状态或宽度 ≤ 0 时直接返回，
+否则 `height = flow.heightForWidth(width)`（为 0 时回落 `flow.sizeHint().height()`）→ `setFixedHeight()` + `flow.setGeometry(QRect(0, 0, width, max(height, 1)))` + `updateGeometry()`；
+`showEvent` / `resizeEvent` / `LayoutRequest` 都会触发同步，`_syncing` 标志防重入。
+
+这两道守卫对应的正是两个真实缺陷：① `FlowLayout.addItem()` 不会 `invalidate()`，父布局尺寸没变也不会重跑，所以**新建的控件会停在默认几何 `0,0:100x96` 盖住第一个**（概览页切换用户后两张卡片重叠）；
+② `AdaptiveFlowLayout(isTight=True)` 在 `_doLayout()` 里会跳过不可见控件，容器不可见时 `heightForWidth()` 返回 0（只剩上下边距），外层布局就把卡片区高度压成 0 且之后不再恢复（概览页最大化后 KPI 卡全部不可见）。
+`FlowArea` 增删控件后主动重排、并拒绝在不可见 / 零宽时改高度，两个问题都不会再出现。`HomePage` 的 KPI 卡与快捷按钮、`ImportPage` 的文件按钮行都改用它；取下旧控件用 `take_widgets()` 交给 `release_widget()` 释放。
 
 ### 主题底色（浅色 / 深色跟随）
 
@@ -255,11 +306,11 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 - `install_app_theme()`：`src/main.py` 在 `_apply_theme()` 之后调用，把 `theme_palette()` 装到 `QApplication` 并挂在 `qconfig.themeChangedFinished` 上，
   切主题时同步换调色板（启动时就装好，之后新建的控件才会拿到正确调色板）；
-- `page_background(widget, name)`：页面级底色，写一对 `#f0f4f9` / `#202020` 的 QSS（随主题自动切换），宿主控件不再依赖调色板；
 - `clear_background(widget)`：卡片内部的容器保持透明；`clear_scroll_background(area, inner=True)`：滚动区域连视口一起透明化
-  （`qt_scrollarea_viewport` 默认 `autoFillBackground=True`，不清就会漏出一整块深色）；页面级滚动条的宿主已经有 `page_background` 时传 `inner=False`，只清视口；
+  （`qt_scrollarea_viewport` 默认 `autoFillBackground=True`，不清就会漏出一整块深色）；
 - `setCustomStyleSheet(widget, light, dark)` 只设属性，没注册过的控件等于没做；必须走
-  `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`page_background` / `clear_background` 内部就是这么写的）。
+  `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`clear_background` 内部就是这么写的）。
+  页面底色不走 QSS：由 `install_app_theme()` 装的调色板（`theme_palette()`，浅色 `window` = `#f0f4f9`、深色 = `#202020`）提供，页面与滚动视口保持透明。
 `scripts/dev_check_ui.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」，`privacy_group` 会断言设置页的
 「资源文件夹 / 隐藏文件」两个开关、资源加密时隐藏开关置灰并自动收起，以及分组里不再出现多余的「立即锁定 / 立即放行」按钮。
 
@@ -383,6 +434,10 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 操作包括导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名 / 说明 / 备注、打开插件目录（内置插件同样可以打开）、
 「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`。内置插件不能删除；载入失败的插件在列表里标为「异常」
 并强制禁用，不影响程序启动。
+列表项可以勾选，选择条上是一个三态全选框（空 = 全不选、横杠 = 部分选中、勾 = 全选当前列出的插件，点一下在全选 / 全不选之间切换），
+勾选后可以「批量启用 / 批量禁用 / 批量删除」
+（已处于目标状态的插件会被跳过，内置插件不可删除，删除前有确认框）；右侧的功能按钮改用
+`AdaptiveFlowLayout`（`needAni=False`、`isTight=True`，按钮最小宽 96 px），窄窗口下自动换行，不再被裁掉。
 
 插件不仅可以提供查看器与扩展接口，还能直接往主界面加页面：程序本体在 `src/main.py` 里用
 `plugin_service.bootstrap("app.ui", AppUiApi())`（`src/app/core/app_ui.py`）把 `app.ui` 接口登记进 `extension_registry`，

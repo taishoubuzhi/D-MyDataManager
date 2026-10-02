@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
+    CheckBox,
     FluentIcon,
     PrimaryPushButton,
     PushButton,
@@ -39,10 +40,11 @@ from ..common import (
     toast_error,
     toast_success,
     toast_warning,
+    tri_state,
     type_name,
 )
 from ..dialogs import TextInputDialog
-from ..widgets.data_table import TableFilterBar, fit_columns, prepare_table
+from ..widgets.data_table import TableFilterBar, check_cell, fit_columns, prepare_table
 from ..widgets.pager import Pager
 
 ENTRY_STATE_LABELS = {
@@ -62,6 +64,10 @@ ARCHIVE_COLUMNS = (
     ("pinned", "标记", "choice"),
 )
 ARCHIVE_PIN_OPTIONS = ("已标记", "未标记")
+
+#: 表格第一列是批量操作用的勾选框，其余列依次对应 ARCHIVE_COLUMNS（整体右移一位）。
+ARCHIVE_CHECK_COLUMN = 0
+ARCHIVE_HEADERS = ("选择",) + tuple(label for _key, label, _kind in ARCHIVE_COLUMNS)
 
 ARCHIVE_PAGE_SIZE = 50
 ARCHIVE_FETCH_LIMIT = 1000
@@ -155,6 +161,7 @@ class ArchivePage(QWidget):
         self._page_items: list = []
         self._archive_texts: list[dict[str, str]] = []
         self._selected_id: int | None = None
+        self._checked: set[int] = set()
         self._entries: list = []
         self._states: list = []
 
@@ -207,6 +214,7 @@ class ArchivePage(QWidget):
         self.archive_stats = CaptionLabel("", archive_card)
         archive_head.addWidget(self.archive_stats)
         archive_layout.addLayout(archive_head)
+        archive_layout.addLayout(self._build_selection_bar(archive_card))
 
         self.filter_bar = TableFilterBar(archive_card)
         self.filter_bar.configure(ARCHIVE_COLUMNS)
@@ -216,13 +224,14 @@ class ArchivePage(QWidget):
 
         self.archive_list = _ArchiveTable(archive_card)
         self.archive_table = self.archive_list
-        self.archive_list.setColumnCount(len(ARCHIVE_COLUMNS))
-        self.archive_list.setHorizontalHeaderLabels([label for _, label, _ in ARCHIVE_COLUMNS])
+        self.archive_list.setColumnCount(len(ARCHIVE_HEADERS))
+        self.archive_list.setHorizontalHeaderLabels(list(ARCHIVE_HEADERS))
         prepare_table(self.archive_list, movable=True)
         self.archive_list.setBorderVisible(True)
         self.archive_list.setBorderRadius(8)
         self.archive_list.setMinimumHeight(140)
         self.archive_list.currentCellChanged.connect(self._on_archive_row_changed)
+        self.archive_list.itemChanged.connect(self._on_item_changed)
         archive_layout.addWidget(self.archive_list, 1)
 
         self.pager = Pager(archive_card, page_size=ARCHIVE_PAGE_SIZE)
@@ -315,6 +324,7 @@ class ArchivePage(QWidget):
         """重新取数并重置到第一页；筛选条件保留。"""
         self._refresh_policy()
         self._archives = self.service.history(limit=ARCHIVE_FETCH_LIMIT)
+        self._checked &= {int(archive.id) for archive in self._archives}
         self._archive_texts = [
             archive_row_texts(
                 name=archive.name,
@@ -357,8 +367,9 @@ class ArchivePage(QWidget):
                 format_size(archive.total_size),
                 "已标记" if archive.pinned else "未标记",
             ]
-            for column, value in enumerate(values):
-                table.setItem(row, column, _cell(str(value)))
+            table.setItem(row, ARCHIVE_CHECK_COLUMN, check_cell(int(archive.id) in self._checked))
+            for offset, value in enumerate(values):
+                table.setItem(row, ARCHIVE_CHECK_COLUMN + 1 + offset, _cell(str(value)))
         table.blockSignals(False)
         fit_columns(table, min_width=72, max_width=240)
 
@@ -380,6 +391,7 @@ class ArchivePage(QWidget):
             self._show_archive(self._page_items[target])
         else:
             self._clear_detail()
+        self._sync_selection()
         self._update_pin_button()
 
     def _clear_detail(self) -> None:
@@ -501,6 +513,113 @@ class ArchivePage(QWidget):
             else "标记后该存档不会被自动清理删除"
         )
 
+    # ------------------------------------------------------------------ 勾选
+    def _build_selection_bar(self, parent: QWidget) -> QHBoxLayout:
+        """选择条：单个三态全选框 + 批量操作，与表格勾选双向同步。"""
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+
+        self.select_all_box = CheckBox("全选本页", parent)
+        self.select_all_box.setTristate(True)
+        self.select_all_box.setToolTip(
+            "空 = 全不选，横杠 = 部分选中，勾 = 全选本页；点一下切换全选/全不选"
+        )
+        self.select_all_box.clicked.connect(self._on_select_all_clicked)
+        bar.addWidget(self.select_all_box)
+
+        self.selection_label = CaptionLabel("未选择存档", parent)
+        bar.addWidget(self.selection_label)
+        bar.addStretch(1)
+
+        self.batch_pin_button = PushButton(FluentIcon.PIN, "批量标记", parent)
+        self.batch_pin_button.setToolTip("标记所有勾选的存档，使其不被自动清理删除")
+        self.batch_pin_button.clicked.connect(lambda: self._on_batch_pin(True))
+        self.batch_unpin_button = PushButton(FluentIcon.UNPIN, "批量取消标记", parent)
+        self.batch_unpin_button.setToolTip("取消所有勾选存档的标记，之后才能删除")
+        self.batch_unpin_button.clicked.connect(lambda: self._on_batch_pin(False))
+        self.batch_delete_button = PushButton(FluentIcon.DELETE, "批量删除", parent)
+        self.batch_delete_button.setToolTip("删除所有勾选的存档；已标记的存档需先取消标记")
+        self.batch_delete_button.clicked.connect(self._on_batch_delete)
+        for button in (self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
+            bar.addWidget(button)
+        return bar
+
+    def _page_ids(self) -> list[int]:
+        return [int(archive.id) for archive in self._page_items]
+
+    def checked_archives(self) -> list:
+        """当前勾选的存档（按列表顺序），供批量操作与自检脚本使用。"""
+        return [archive for archive in self._archives if int(archive.id) in self._checked]
+
+    def _sync_selection(self) -> None:
+        """三态全选框、已选数量与批量按钮跟随勾选状态。"""
+        ids = self._page_ids()
+        state = tri_state(sum(1 for archive_id in ids if archive_id in self._checked), len(ids))
+        self.select_all_box.blockSignals(True)
+        self.select_all_box.setCheckState(state)
+        self.select_all_box.blockSignals(False)
+        count = len(self._checked)
+        self.selection_label.setText(f"已选 {count} 个存档" if count else "未选择存档")
+        for button in (self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
+            button.setEnabled(bool(count))
+
+    def _apply_page_check_states(self) -> None:
+        """把 _checked 写回本页表格的勾选框（阻断信号，避免回环）。"""
+        table = self.archive_list
+        table.blockSignals(True)
+        for row, archive in enumerate(self._page_items):
+            item = table.item(row, ARCHIVE_CHECK_COLUMN)
+            if item is not None:
+                checked = int(archive.id) in self._checked
+                item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        table.blockSignals(False)
+        self._sync_selection()
+
+    def _set_page_checked(self, checked: bool) -> None:
+        for archive in self._page_items:
+            if checked:
+                self._checked.add(int(archive.id))
+            else:
+                self._checked.discard(int(archive.id))
+        self._apply_page_check_states()
+
+    def select_all(self) -> None:
+        """勾选本页全部存档。"""
+        self._set_page_checked(True)
+
+    def select_none(self) -> None:
+        """取消本页全部勾选。"""
+        self._set_page_checked(False)
+
+    def invert_selection(self) -> None:
+        """反转本页勾选状态。"""
+        for archive in self._page_items:
+            archive_id = int(archive.id)
+            if archive_id in self._checked:
+                self._checked.discard(archive_id)
+            else:
+                self._checked.add(archive_id)
+        self._apply_page_check_states()
+
+    def _on_select_all_clicked(self) -> None:
+        """点一下：本页没有全选就全选，已全选就全不选（横杠只是部分选中的显示状态）。"""
+        ids = self._page_ids()
+        all_checked = bool(ids) and all(archive_id in self._checked for archive_id in ids)
+        self._set_page_checked(not all_checked)
+
+    def _on_item_changed(self, item) -> None:
+        if item.column() != ARCHIVE_CHECK_COLUMN:
+            return
+        row = item.row()
+        if not 0 <= row < len(self._page_items):
+            return
+        archive_id = int(self._page_items[row].id)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._checked.add(archive_id)
+        else:
+            self._checked.discard(archive_id)
+        self._sync_selection()
+
     # ------------------------------------------------------------------ 操作
     def _on_create(self) -> None:
         dialog = TextInputDialog(
@@ -589,18 +708,68 @@ class ArchivePage(QWidget):
         archive = self._current_archive()
         if archive is None:
             return
-        note = "该存档已标记，删除后不再受清理保护。" if archive.pinned else ""
+        if archive.pinned:
+            # 已标记的存档受保护：必须先取消标记，才能手动删除。
+            toast_warning(self, "无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
+            return
         if not confirm(
             self,
             "删除存档",
-            f"确定删除存档「{archive.name}」吗？数据本身不会被删除。{note}",
+            f"确定删除存档「{archive.name}」吗？数据本身不会被删除。",
         ):
             return
-        self.service.delete(archive)
+        if not self.service.delete(archive):
+            toast_warning(self, "无法删除", f"「{archive.name}」已标记，请先取消标记再删除")
+            return
         self.session.commit()
+        self._checked.discard(int(archive.id))
         self._selected_id = None
         self._reload_archives()
         toast_success(self, "存档已删除", archive.name)
+
+    def _on_batch_pin(self, pinned: bool) -> None:
+        """批量标记 / 批量取消标记勾选的存档。"""
+        archives = self.checked_archives()
+        if not archives:
+            toast_warning(self, "未选择存档", "请先勾选要批量操作的存档")
+            return
+        for archive in archives:
+            self.service.set_pinned(archive, pinned)
+        self.session.commit()
+        self._reload_archives()
+        if pinned:
+            toast_success(self, "已批量标记", f"{len(archives)} 个存档不会被自动清理删除")
+        else:
+            toast_success(self, "已批量取消标记", f"{len(archives)} 个存档将重新参与自动清理")
+
+    def _on_batch_delete(self) -> None:
+        """批量删除勾选的存档；已标记的存档会被跳过，需要先取消标记。"""
+        archives = self.checked_archives()
+        if not archives:
+            toast_warning(self, "未选择存档", "请先勾选要批量删除的存档")
+            return
+        pinned = [archive for archive in archives if archive.pinned]
+        removable = [archive for archive in archives if not archive.pinned]
+        if not removable:
+            toast_warning(
+                self, "无法删除", f"勾选的 {len(pinned)} 个存档都已标记，请先取消标记再删除"
+            )
+            return
+        note = f"其中 {len(pinned)} 个已标记的存档会被跳过，需要先取消标记。" if pinned else ""
+        if not confirm(
+            self,
+            "批量删除存档",
+            f"确定删除勾选的 {len(removable)} 个存档吗？数据本身不会被删除。{note}",
+        ):
+            return
+        for archive in removable:
+            self.service.delete(archive)
+        self.session.commit()
+        self._checked -= {int(archive.id) for archive in removable}
+        self._selected_id = None
+        self._reload_archives()
+        suffix = f"，跳过 {len(pinned)} 个已标记" if pinned else ""
+        toast_success(self, "存档已删除", f"删除 {len(removable)} 个存档{suffix}")
 
     def _on_prune(self) -> None:
         busy = BusyTip(self, "正在按策略清理存档", "删除超出策略的较早快照，并释放不再被引用的内容")
@@ -639,7 +808,9 @@ def _cell(text: str) -> QTableWidgetItem:
 
 
 __all__ = [
+    "ARCHIVE_CHECK_COLUMN",
     "ARCHIVE_COLUMNS",
+    "ARCHIVE_HEADERS",
     "ARCHIVE_PAGE_SIZE",
     "ARCHIVE_TABS",
     "ArchivePage",

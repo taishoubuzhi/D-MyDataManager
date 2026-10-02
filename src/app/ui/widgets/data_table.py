@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QAbstractItemView, QGridLayout, QHeaderView, QWidget
+from PyQt6.QtWidgets import QAbstractItemView, QGridLayout, QHeaderView, QTableWidgetItem, QWidget
 from qfluentwidgets import ComboBox, LineEdit, TableWidget
 
 from ..common import release_widget
@@ -115,6 +115,18 @@ class TableFilterBar(QWidget):
             self.changed.emit()
 
 
+def check_cell(checked: bool = False) -> QTableWidgetItem:
+    """可勾选的单元格：带复选框、仍可整行选中，供批量操作使用。"""
+    cell = QTableWidgetItem("")
+    cell.setFlags(
+        Qt.ItemFlag.ItemIsEnabled
+        | Qt.ItemFlag.ItemIsSelectable
+        | Qt.ItemFlag.ItemIsUserCheckable
+    )
+    cell.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+    return cell
+
+
 def prepare_table(
     table: TableWidget,
     *,
@@ -184,6 +196,7 @@ def column_values(table: TableWidget, column: int) -> list[str]:
 __all__ = [
     "FILTER_ALL",
     "TableFilterBar",
+    "check_cell",
     "prepare_table",
     "fit_columns",
     "match_filters",

@@ -156,31 +156,118 @@ def _check_home_stats(window) -> list[str]:
 
 
 def _check_category_filter(app, window) -> list[str]:
-    """筛选栏里的分类勾选此前被忽略，只有左侧分类树生效。"""
+    """左侧分类树的勾选驱动中间列表；右侧筛选栏不再有分类分组。"""
+    import sys
+
+    from PyQt6.QtCore import Qt
+
     from app.repositories import ItemFilter
+    from app.services import is_uncategorized
 
     page = window.manage_page
     user_id = page.user_service.current_id()
     before = page._total
+    problems: list[str] = []
 
-    target = None
-    for category_id in page.filter_panel._category_boxes:
-        if page.item_repo.count(ItemFilter(category_ids={category_id}, user_ids={user_id})):
-            target = category_id
-            break
-    if target is None:
-        return []
+    def count(category_id: int) -> int:
+        return page.item_repo.count(ItemFilter(category_ids={category_id}, user_ids={user_id}))
 
-    page.filter_panel._category_boxes[target].setChecked(True)
-    app.processEvents()
-    problems = []
-    if page._total == 0 or not all(item.category_id == target for item in page._items):
-        problems.append(f"勾选分类 {target} 后筛选无效：total={page._total}")
+    def tree_item(category_id: int):
+        for candidate in page.tree._iter_items():
+            if candidate.data(0, Qt.ItemDataRole.UserRole) == category_id:
+                return candidate
+        return None
 
-    page.filter_panel._category_boxes[target].setChecked(False)
-    app.processEvents()
+    def uncheck_all() -> None:
+        for item in list(page.tree._iter_items()):
+            if isinstance(item.data(0, Qt.ItemDataRole.UserRole), int):
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+        app.processEvents()
+
+    def check(category_id: int) -> bool:
+        item = tree_item(category_id)
+        if item is None:
+            problems.append(f"分类树里找不到分类 {category_id}")
+            return False
+        item.setCheckState(0, Qt.CheckState.Checked)
+        app.processEvents()
+        return True
+
+    if hasattr(page.filter_panel, "category_section"):
+        problems.append("筛选栏里仍然保留了分类分组")
+    if len(page.filter_panel.sections()) != 3:
+        problems.append(f"筛选栏分组数 {len(page.filter_panel.sections())}，应为 3")
+    if not hasattr(page, "_checked_categories"):
+        problems.append("数据管理页没有分类勾选状态")
+        return problems
+    if page.category_delete_button.isEnabled() or page.category_move_button.isEnabled():
+        problems.append("没有勾选任何分类时批量按钮应为禁用")
+
+    nodes = page.taxonomy.tree(user_id=user_id)
+    with_items = [node.category.id for node in nodes if count(node.category.id)][:2]
+    if not with_items:
+        return problems
+    for category_id in with_items:
+        if not check(category_id):
+            return problems
+    checked = set(with_items)
+    if page._total > sum(count(category_id) for category_id in checked):
+        problems.append(f"勾选 {sorted(checked)} 后 total={page._total}，超出这些分类的数据量")
+    if page._total <= 0 or not all(item.category_id in checked for item in page._items):
+        problems.append(f"勾选分类后筛选无效：total={page._total}")
+    if set(page._checked_categories) != checked:
+        problems.append(f"页面记录的勾选分类为 {sorted(page._checked_categories)}")
+    uncheck_all()
     if page._total != before:
         problems.append(f"取消分类勾选后未恢复：total={page._total}，应为 {before}")
+
+    child = next(
+        (
+            node.category.id
+            for node in nodes
+            if node.category.parent_id is not None and not is_uncategorized(node.category)
+        ),
+        None,
+    )
+    root = next(
+        (
+            node.category.id
+            for node in nodes
+            if node.category.parent_id is None and not is_uncategorized(node.category)
+        ),
+        None,
+    )
+    if child is not None:
+        page.tree.select_category(None)
+        app.processEvents()
+        if check(child):
+            if not page.category_delete_button.isEnabled() or not page.category_move_button.isEnabled():
+                problems.append("勾选子分类后批量移动/删除按钮应可用")
+            original_parent = page.category_repo.get(child).parent_id
+            manage = sys.modules["app.ui.pages.manage_page"]
+            original_confirm = manage.confirm
+            manage.confirm = lambda *args, **kwargs: False
+            try:
+                page._on_category_batch_delete()
+                page._on_category_batch_move()
+            finally:
+                manage.confirm = original_confirm
+            app.processEvents()
+            current = page.category_repo.get(child)
+            if current is None:
+                problems.append(f"确认框返回 False 时分类 {child} 仍被删除")
+            elif current.parent_id != original_parent:
+                problems.append(f"确认框返回 False 时分类 {child} 仍被移动")
+    if root is not None:
+        uncheck_all()
+        enabled = check(root) and (
+            page.category_delete_button.isEnabled() or page.category_move_button.isEnabled()
+        )
+        if enabled:
+            problems.append("只勾选根分类时批量移动/删除按钮应为禁用")
+    uncheck_all()
+    if page._total != before:
+        problems.append(f"全部取消勾选后未恢复：total={page._total}，应为 {before}")
     return problems
 
 
@@ -540,8 +627,8 @@ def _check_tag_page(app, window) -> list[str]:
         if leaked:
             problems.append(f"用户「{info.name}」看到了他人的个人标签：{leaked}")
     for row, tag in enumerate(tags):
-        name_cell = page.table.item(row, 0)
-        scope_cell = page.table.item(row, 1)
+        name_cell = page.table.item(row, 1)
+        scope_cell = page.table.item(row, 2)
         if name_cell is None or scope_cell is None:
             problems.append(f"第 {row} 行单元格为空")
             continue
@@ -551,14 +638,252 @@ def _check_tag_page(app, window) -> list[str]:
         wanted = "全局" if tag.is_global else "个人"
         if not scope_cell.text().startswith(wanted):
             problems.append(f"标签「{tag.name}」归属显示为 {scope_cell.text()!r}，应为 {wanted}")
+    # 勾选列与批量操作：全选 / 全不选与 _checked 保持一致。
+    from app.ui.pages.tag_page import TAG_CHECK_COLUMN, TAG_HEADERS
+
+    if page.table.columnCount() != len(TAG_HEADERS):
+        problems.append(f"标签页有 {page.table.columnCount()} 列，应为 {len(TAG_HEADERS)} 列")
+    header = page.table.horizontalHeaderItem(TAG_CHECK_COLUMN)
+    if header is None or header.text() != TAG_HEADERS[TAG_CHECK_COLUMN]:
+        problems.append("标签页第一列不是「选择」列")
+    page.select_all()
+    app.processEvents()
+    if len(page.checked_tags()) != len(page._visible_rows()):
+        problems.append(
+            f"标签页全选后勾选 {len(page.checked_tags())} 个，应为 {len(page._visible_rows())} 个"
+        )
+    page.select_none()
+    app.processEvents()
+    if page.checked_tags():
+        problems.append("标签页全不选后仍保留勾选")
+    return problems
+
+
+def _check_tag_permissions(app, window) -> list[str]:
+    """权限：默认用户（管理员）可管理任意标签，其他用户只能管理自己创建的标签。"""
+    from app.core.signals import signalBus
+    from app.repositories import TagRepository
+    from app.services import TaxonomyService, UserService
+
+    page = window.tag_page
+    _show_page(window, page)
+    page.refresh()
+    app.processEvents()
+    users = UserService(page.session)
+    taxonomy = TaxonomyService(page.session)
+    repo = TagRepository(page.session)
+    admin = users.default()
+    member = users.create("权限自检用户", "")
+    if admin is None or member is None:
+        return ["无法创建权限自检用户"]
+    admin_id, member_id = int(admin.id), int(member.id)
+    own = taxonomy.create_tag("权限自检-成员标签", user_id=member_id)
+    other = taxonomy.create_tag("权限自检-管理员标签", user_id=admin_id)
+    page.session.flush()
+    if own is None or other is None:
+        return ["无法创建权限自检标签"]
+    problems: list[str] = []
+    original = users.current()
+    try:
+        # 普通用户：只能管理自己创建的标签
+        users.set_current(member)
+        page.session.commit()
+        page.refresh()
+        app.processEvents()
+        if page._is_admin:
+            problems.append("普通用户被判定为管理员")
+        if repo.can_manage(other, member_id, page._is_admin):
+            problems.append("普通用户可以管理他人创建的标签")
+        if not repo.can_manage(own, member_id, page._is_admin):
+            problems.append("普通用户不能管理自己创建的标签")
+        if any(tag.id == other.id for tag in page._tags):
+            problems.append("普通用户在标签页看到了他人的个人标签")
+        if taxonomy.rename_tag(
+            other, "权限自检-越权改名", user_id=member_id, is_admin=page._is_admin
+        ):
+            problems.append("普通用户越权重命名了他人的标签")
+        if other.name != "权限自检-管理员标签":
+            problems.append("他人标签的名称被越权修改")
+        if taxonomy.set_tag_global(other, True, user_id=member_id, is_admin=page._is_admin):
+            problems.append("普通用户越权切换了他人标签的归属")
+        if taxonomy.delete_tag(other, user_id=member_id, is_admin=page._is_admin) != -1:
+            problems.append("普通用户越权删除他人标签未被拒绝")
+        if repo.by_name("权限自检-管理员标签", user_id=None) is None:
+            problems.append("他人的标签被越权删除")
+        if not taxonomy.rename_tag(own, "权限自检-成员标签改", user_id=member_id):
+            problems.append("普通用户无法重命名自己创建的标签")
+
+        # 默认用户（管理员）：可以管理任意标签
+        users.set_current(admin)
+        page.session.commit()
+        page.refresh()
+        app.processEvents()
+        if not page._is_admin:
+            problems.append("默认用户未被判定为管理员")
+        if not repo.can_manage(other, admin_id, page._is_admin):
+            problems.append("默认用户不能管理他人创建的标签")
+        if not taxonomy.rename_tag(
+            other, "权限自检-管理员改名", user_id=admin_id, is_admin=page._is_admin
+        ):
+            problems.append("默认用户无法重命名他人的标签")
+        if not taxonomy.set_tag_global(
+            own, True, user_id=admin_id, is_admin=page._is_admin
+        ):
+            problems.append("默认用户无法切换他人标签的归属")
+    finally:
+        taxonomy.delete_tag(own, user_id=admin_id, is_admin=True)
+        taxonomy.delete_tag(other, user_id=admin_id, is_admin=True)
+        users.delete(member, admin)
+        users.set_current(original)
+        page.session.commit()
+        signalBus.userChanged.emit()
+        signalBus.tagsChanged.emit()
+        page.refresh()
+        app.processEvents()
+    return problems
+
+
+def _check_system_permissions(app, window) -> list[str]:
+    """系统级操作只有默认用户可用：资源文件夹 / 恢复初始化 / 插件导入与启停编辑删除。"""
+    from app.ui.pages import plugin_page as plugin_module
+    from app.ui.pages import settings_page as settings_module
+
+    problems: list[str] = []
+
+    class _ForbiddenFactory:
+        """越权构造服务即视为权限校验失效。"""
+
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("普通用户不应触发系统级操作")
+
+    class _ForbiddenService:
+        """任何服务方法调用都视为越权。"""
+
+        def __getattr__(self, name: str):
+            raise AssertionError("普通用户不应触发系统级操作")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("普通用户不应看到系统级确认框")
+
+    page = window.settings_page
+    _show_page(window, page)
+    app.processEvents()
+    state = page._is_admin
+    real_service = settings_module.LibraryService
+    real_confirm = settings_module.confirm
+    try:
+        page._is_admin = False
+        page._apply_permissions()
+        for name, card in (
+            ("更改位置", page._path_card),
+            ("扫描并登记", page._scan_card),
+            ("重建目录结构", page._rebuild_card),
+            ("恢复初始化", page._reset_card),
+        ):
+            if card.isEnabled():
+                problems.append(f"普通用户可以执行设置页的「{name}」")
+        for hint in (page._library_permission_card, page._maintenance_permission_card):
+            if hint.isHidden():
+                problems.append("普通用户看不到「仅默认用户可用」的权限说明")
+        settings_module.LibraryService = _ForbiddenFactory
+        settings_module.confirm = _boom
+        try:
+            page._reset_to_defaults()
+            page._scan_library()
+            page._rebuild_layout()
+        except AssertionError:
+            problems.append("普通用户绕过了设置页的系统级权限校验")
+    finally:
+        settings_module.LibraryService = real_service
+        settings_module.confirm = real_confirm
+        page._is_admin = state
+        page._apply_permissions()
+    if not page._path_card.isEnabled():
+        problems.append("默认用户不能更改资源文件夹位置")
+    if not page._scan_card.isEnabled() or not page._reset_card.isEnabled():
+        problems.append("默认用户不能使用资源文件夹 / 恢复初始化操作")
+    if not page._library_permission_card.isHidden() or not page._maintenance_permission_card.isHidden():
+        problems.append("默认用户仍能看到「仅默认用户可用」的权限说明")
+
+    plugin = window.plugin_page
+    _show_page(window, plugin)
+    app.processEvents()
+    state = plugin._is_admin
+    real_dialog = plugin_module.TextInputDialog
+    real_confirm = plugin_module.confirm
+    real_plugin_service = plugin.service
+    try:
+        plugin._is_admin = False
+        plugin.select_all()
+        plugin._apply_permissions()
+        for name, button in (
+            ("导入插件包", plugin._zip_button),
+            ("导入插件目录", plugin._folder_button),
+            ("启用 / 禁用", plugin.toggle_button),
+            ("插件选项", plugin.options_button),
+            ("重命名", plugin._name_button),
+            ("编辑说明", plugin._description_button),
+            ("编辑备注", plugin._note_button),
+            ("删除", plugin.delete_button),
+            ("批量启用", plugin.batch_enable_button),
+            ("批量禁用", plugin.batch_disable_button),
+            ("批量删除", plugin.batch_remove_button),
+        ):
+            if button.isEnabled():
+                problems.append(f"普通用户可以点击插件页的「{name}」")
+        if not plugin.reveal_button.isEnabled():
+            problems.append("普通用户不能打开插件目录")
+        if plugin.permission_hint.isHidden():
+            problems.append("普通用户看不到插件页的只读说明")
+        plugin_module.TextInputDialog = _boom
+        plugin_module.confirm = _boom
+        plugin.service = _ForbiddenService()
+        try:
+            plugin._on_edit("name")
+            plugin._on_remove()
+            plugin._on_batch_remove()
+            plugin._on_batch_toggle(True)
+            plugin._on_toggle()
+            plugin._install(str(paths.ROOT), "自检")
+        except AssertionError:
+            problems.append("普通用户绕过了插件页的权限校验")
+        finally:
+            plugin.service = real_plugin_service
+        plugin.select_none()
+    finally:
+        plugin_module.TextInputDialog = real_dialog
+        plugin_module.confirm = real_confirm
+        plugin._is_admin = state
+        plugin._apply_permissions()
+    app.processEvents()
+    if not plugin._zip_button.isEnabled() or not plugin._name_button.isEnabled():
+        problems.append("默认用户不能导入 / 编辑插件")
+    if not plugin.permission_hint.isHidden():
+        problems.append("默认用户仍能看到插件页的只读说明")
     return problems
 
 
 SELFCHECK_IMPORT_NAME = "selfcheck_import"
 
 
+def _cleanup_selfcheck_archives(session) -> None:
+    """导入流程结束时会自动建一份存档，这里连同它一起清掉，避免自检在开发库里堆积存档。"""
+    from app.services import ArchiveService
+
+    service = ArchiveService(session)
+    try:
+        archives = [item for item in service.history(limit=500) if SELFCHECK_IMPORT_NAME in (item.note or "")]
+        for archive in archives:
+            service.delete(archive)
+        if archives:
+            session.commit()
+    except Exception as exc:  # 自检清理失败不应影响检查结论
+        session.rollback()
+        print(f"自检清理：导入页自检存档未清干净：{exc}")
+
+
 def _cleanup_selfcheck_import(window) -> None:
-    """清掉自检真导入产生的分类、数据项与落盘文件，避免污染开发库。"""
+    """清掉自检真导入产生的分类、数据项、落盘文件与自动存档，避免污染开发库。"""
     import shutil
     from pathlib import Path
 
@@ -568,6 +893,7 @@ def _cleanup_selfcheck_import(window) -> None:
     session = window.import_page.session
     node = CategoryRepository(session).by_name(SELFCHECK_IMPORT_NAME)
     if node is None:
+        _cleanup_selfcheck_archives(session)
         return
     try:
         items = list(ItemRepository(session).in_category(node.id))
@@ -588,6 +914,7 @@ def _cleanup_selfcheck_import(window) -> None:
                 break
     for folder in folders:
         shutil.rmtree(folder, ignore_errors=True)
+    _cleanup_selfcheck_archives(session)
 
 
 def _check_import_batch(app, window) -> list[str]:
@@ -683,7 +1010,7 @@ def _check_tag_filters(app, window) -> list[str]:
     def visible_rows() -> list[int]:
         return [row for row in range(total) if not page.table.isRowHidden(row)]
 
-    names = [page.table.item(row, 0).text() for row in range(total)]
+    names = [page.table.item(row, 1).text() for row in range(total)]
     unique = next(
         (
             name
@@ -715,8 +1042,8 @@ def _check_tag_filters(app, window) -> list[str]:
     page.filter_bar.set_filter("scope", "全局")
     app.processEvents()
     for row in visible_rows():
-        if page.table.item(row, 1).text() != "全局":
-            problems.append(f"按归属「全局」筛选后出现 {page.table.item(row, 1).text()!r} 行")
+        if page.table.item(row, 2).text() != "全局":
+            problems.append(f"按归属「全局」筛选后出现 {page.table.item(row, 2).text()!r} 行")
             break
     page._on_reset_filters()
     app.processEvents()
@@ -1056,10 +1383,35 @@ def _check_archive_pin(app, window) -> list[str]:
     if page.pin_button.text() != expected:
         problems.append(f"按钮文案应为「{expected}」，实际为「{page.pin_button.text()}」")
     if pinned:
-        if "【已标记】" not in page.archive_list.item(index).text():
+        if "【已标记】" not in page.archive_list.item(index, 1).text():
             problems.append("列表项没有标出【已标记】")
         if "【已标记】" not in page.detail_meta.text():
             problems.append("详情区没有标出【已标记】")
+    if pinned:
+        # 已标记的存档受保护：服务层拒绝删除，页面删除前必须二次确认。
+        if page.service.delete(target) is not False:
+            problems.append("服务层没有拒绝删除已标记的存档")
+        import app.ui.pages.archive_page as archive_module
+
+        original_confirm = archive_module.confirm
+        calls: list[tuple] = []
+        archive_module.confirm = lambda *args, **kwargs: (calls.append(args), False)[1]
+        try:
+            before = len(page._archives)
+            page._on_delete()
+            app.processEvents()
+            if len(page._archives) != before:
+                problems.append("已标记的存档被单条删除")
+            page.select_all()
+            page._on_batch_delete()
+            app.processEvents()
+            if not calls:
+                problems.append("批量删除没有二次确认")
+            if len(page._archives) != before:
+                problems.append("取消确认后仍删除了存档")
+            page.select_none()
+        finally:
+            archive_module.confirm = original_confirm
     page.switch_tab("archives")
     app.processEvents()
     return problems
@@ -1089,6 +1441,37 @@ def _check_archive_table(app, window) -> list[str]:
         app.processEvents()
         if len(page._visible) != before:
             problems.append(f"存档重置筛选后可见行由 {before} 变为 {len(page._visible)}")
+    from app.ui.pages.archive_page import ARCHIVE_CHECK_COLUMN, ARCHIVE_HEADERS
+
+    if page.archive_list.columnCount() != len(ARCHIVE_HEADERS):
+        problems.append(
+            f"存档表有 {page.archive_list.columnCount()} 列，应为 {len(ARCHIVE_HEADERS)} 列"
+        )
+    if page.archive_list.horizontalHeaderItem(ARCHIVE_CHECK_COLUMN) is None:
+        problems.append("存档表缺少「选择」列")
+    if page._page_items:
+        page.select_all()
+        app.processEvents()
+        if len(page.checked_archives()) != len(page._page_ids()):
+            problems.append(
+                f"存档全选后勾选 {len(page.checked_archives())} 个，应为 {len(page._page_ids())} 个"
+            )
+        page.invert_selection()
+        app.processEvents()
+        if page.checked_archives():
+            problems.append("存档本页全选后反选仍有勾选")
+        page.select_none()
+        app.processEvents()
+        if page.checked_archives():
+            problems.append("存档全不选后仍保留勾选")
+        page.select_all_box.click()
+        app.processEvents()
+        if len(page.checked_archives()) != len(page._page_ids()):
+            problems.append("单击三态全选框未勾选本页全部存档")
+        page.select_all_box.click()
+        app.processEvents()
+        if page.checked_archives():
+            problems.append("再次单击三态全选框未取消本页勾选")
     return problems
 
 
@@ -1227,6 +1610,33 @@ def _check_plugins(window) -> list[str]:
         problems.append(f"插件列表项应显示类型与来源，实际为 {first!r}")
     if page.kind_box.count() != 4:
         problems.append(f"类型下拉应有「全部类型」+3 种插件类型，实际 {page.kind_box.count()} 项")
+
+    # 勾选列与批量操作：列表项可勾选，全选 / 全不选与 _checked 保持一致。
+    if page.plugin_list.count():
+        if not page.plugin_list.item(0).flags() & Qt.ItemFlag.ItemIsUserCheckable:
+            problems.append("插件列表项不可勾选")
+        page.select_all()
+        QApplication.processEvents()
+        if len(page.checked_infos()) != page.plugin_list.count():
+            problems.append(
+                f"插件全选后勾选 {len(page.checked_infos())} 个，应为 {page.plugin_list.count()} 个"
+            )
+        if not page.batch_enable_button.isEnabled() or not page.batch_disable_button.isEnabled():
+            problems.append("插件全选后批量启用/禁用按钮仍禁用")
+        page.select_none()
+        QApplication.processEvents()
+        if page.checked_infos():
+            problems.append("插件全不选后仍保留勾选")
+        if page.batch_enable_button.isEnabled():
+            problems.append("插件全不选后批量启用按钮仍可用")
+        page.select_all_box.click()
+        QApplication.processEvents()
+        if len(page.checked_infos()) != page.plugin_list.count():
+            problems.append("单击三态全选框未勾选全部插件")
+        page.select_all_box.click()
+        QApplication.processEvents()
+        if page.checked_infos():
+            problems.append("再次单击三态全选框未取消插件勾选")
 
     # 插件选项：详情里显示选项摘要与清单路径，并能打开选项对话框
     page._select_plugin("builtin.image")
@@ -1634,7 +2044,7 @@ def main() -> int:
     failures = 0
     try:
         window.show()
-        app.processEvents()
+        QApplication.processEvents()
         print("show: ok")
     except Exception:  # noqa: BLE001
         failures += 1
@@ -1662,6 +2072,8 @@ def main() -> int:
         ("keyword_filter", lambda: _check_keyword_filter(app, window)),
         ("keyword_display", lambda: _check_keyword_display(window)),
         ("tag_page", lambda: _check_tag_page(app, window)),
+        ("tag_permissions", lambda: _check_tag_permissions(app, window)),
+        ("system_permissions", lambda: _check_system_permissions(app, window)),
         ("tag_filters", lambda: _check_tag_filters(app, window)),
         ("import_batch", lambda: _check_import_batch(app, window)),
         ("single_library", lambda: _check_single_library(window)),
