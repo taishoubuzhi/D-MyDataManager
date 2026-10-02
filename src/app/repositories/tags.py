@@ -134,6 +134,19 @@ class TagRepository(Repository[Tag]):
         self.delete(source)
         return target
 
+    def merge_shadow_copies(self, tag: Tag) -> int:
+        """把与全局标签同名的个人标签并入它（引用转移后删除副本），返回合并数量。"""
+        if not tag.is_global:
+            return 0
+        shadows = list(
+            self.session.scalars(
+                select(Tag).where(Tag.name == tag.name, Tag.is_global.is_(False))
+            ).all()
+        )
+        for shadow in shadows:
+            self.merge(shadow, tag)
+        return len(shadows)
+
     def usage_counts(self, user_id: int | None = None) -> dict[str, int]:
         stmt = (
             select(Tag.name, func.count(item_tags.c.item_id))

@@ -147,7 +147,8 @@ def card_permissions(
 ) -> dict[str, bool]:
     """卡片按钮可见性：切换 / 重命名 / 口令 / 清除口令 / 删除。
 
-    语义与原列表一致：只能改自己或由默认用户操作；默认用户不可删除。
+    只能改自己或由默认用户操作；默认用户不可删除；当前用户也不能删除自己
+    （删号后当前用户会被悄悄切换成默认用户，等于给自己提权），删除只对默认用户开放。
     """
     mine = bool(is_current)
     rename = bool(is_admin or mine)
@@ -156,7 +157,7 @@ def card_permissions(
         "rename": rename,
         "password": rename,
         "clear_password": rename and bool(protected),
-        "delete": rename and not bool(is_default),
+        "delete": bool(is_admin) and not mine and not bool(is_default),
     }
 
 
@@ -417,10 +418,19 @@ class UserPage(QWidget):
             clear_button.clicked.connect(lambda _=False, item=info: self._clear_password(item))
             buttons.append(clear_button)
 
+        card.delete_button = None
         if allow["delete"]:
             delete_button = PushButton(FluentIcon.DELETE, "删除", card)
             delete_button.clicked.connect(lambda _=False, item=info: self._delete_user(item))
             buttons.append(delete_button)
+            card.delete_button = delete_button
+        elif mine and not info.is_default:
+            # 当前用户不允许删除自己：按钮保留但禁用，说明要先切换用户。
+            delete_button = PushButton(FluentIcon.DELETE, "删除", card)
+            delete_button.setEnabled(False)
+            delete_button.setToolTip("不能删除当前用户，请先切换到其他用户再删除")
+            buttons.append(delete_button)
+            card.delete_button = delete_button
 
         buttons_grid = QGridLayout()
         buttons_grid.setHorizontalSpacing(6)
@@ -541,8 +551,11 @@ class UserPage(QWidget):
         toast_success(self, "已清除口令", info.name)
 
     def _delete_user(self, info) -> None:
-        if not (self._is_admin or is_current_user(info.user.id, self._user_id)):
-            toast_warning(self, "没有权限", "只能删除当前用户自己的账号")
+        if is_current_user(info.user.id, self._user_id):
+            toast_warning(self, "无法删除", "不能删除当前用户，请先切换到其他用户再删除自己的账号")
+            return
+        if not self._is_admin:
+            toast_warning(self, "没有权限", "只有默认用户可以删除其他用户")
             return
         if info.is_default:
             toast_warning(self, "无法删除", "默认用户不可删除")
@@ -551,12 +564,12 @@ class UserPage(QWidget):
             self,
             "删除用户",
             f"确定删除用户「{info.name}」吗？\n"
-            "该用户有数据时：分类会以用户名作为一级分类并入默认用户，数据文件与标签一并转移；\n"
-            "该用户没有数据时：直接清理其分类与用户文件夹，不会在默认用户下留下空分类或空目录。",
+            "该用户的数据文件、标签（同名标签会合并）、它创建的全局标签与存档条目都会转移到默认用户；\n"
+            "它的分类会以用户名作为一级分类并入默认用户，没有数据时只清理其分类与用户文件夹。",
         ):
             return
         if not self.service.delete(info.user):
-            toast_warning(self, "无法删除", "默认用户不可删除，或找不到可接收数据的目标用户")
+            toast_warning(self, "无法删除", "默认用户与当前用户不可删除，或找不到可接收数据的目标用户")
             return
         self.session.commit()
         for signal in (

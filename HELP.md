@@ -105,7 +105,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 标签分两类（`src/app/db/models.py` 的 `Tag`）：`is_global` 为真时对所有用户可见，`user_id` 记录归属用户，
 `created_by` 记录创建者。可见性由 `src/app/repositories/tags.py` 的 `_scope()` 决定：全局标签 + 自己创建或归属自己的个人标签（默认用户传 None 表示不限制，因此能看到全部标签）；
-`by_name()` 优先返回全局标签，因此新建个人标签不会与已有全局标签重名，转全局时若已有同名全局标签会被拒绝。
+`by_name()` 优先返回全局标签，因此新建个人标签不会与已有全局标签重名，转全局时若已有同名全局标签会被拒绝。反过来，新建全局标签（或把个人标签转为全局）时若库里已有同名个人标签，会把这些副本并入全局标签（`TagRepository.merge_shadow_copies()`：引用先转到全局标签再删除副本行），所以不会长期留下「个人标签与全局标签同名」的重复项；历史库里已有的这类副本由启动时的 `database._merge_shadow_tags()` 修复。
 默认用户（管理员）可以管理任意标签，其他用户只能管理自己创建的标签：重命名、切换全局 / 个人归属、删除都由
 `TagRepository.can_manage(tag, user_id, is_admin)` 判定（管理员或创建者），越权时在状态栏给出提示；
 批量操作只处理有权限的标签，其余计入「跳过」（`TaxonomyService.set_tag_global()` / `rename_tag()` / `delete_tag()` / `cleanup_unused()`）。
@@ -126,7 +126,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 `users` 表的 `is_default` 标记默认用户（管理员）：结构升级到 `SCHEMA_VERSION` 4 时把 `MIN(id)` 置位，种子数据建的第一个用户即管理员
 （`src/app/db/seed.py` 的 `User(name=DEFAULT_USER, is_default=True)`，`UserRepository.default()` / `ensure_default()` 优先取它）。
 `UserService.is_admin()` 决定界面权限：默认用户能在「用户」页新建 / 重命名 / 删除任意用户并设置或清除其口令，也才能用存档页的「还原整个存档」，也才能执行设置页与插件页的系统级操作（见下）；
-普通用户可以改自己或清除自己的口令并删除自己。口令按用户独立保存（`src/app/core/security.py`），切换用户与解锁隐藏数据都用当前用户口令。
+普通用户可以改自己的用户名与口令、清除自己的口令，但**不能删除当前用户**：`UserService.delete()` 的 `allow_current` 默认为 False，删自己会把当前用户静默切到默认用户（等于提权），所以服务层直接拒绝，界面也把当前用户卡片上的删除按钮置灰。口令按用户独立保存（`src/app/core/security.py`），切换用户与解锁隐藏数据都用当前用户口令。
 「清除口令」按钮只对已设口令的用户显示（`UserPage._clear_password()`）：默认用户可以清除任何用户的口令，其他用户只能清除自己的，越权时给出提示。
 
 系统级操作只对默认用户开放（`src/app/ui/pages/settings_page.py` / `plugin_page.py`）：设置页的「恢复初始化」与资源文件夹的
@@ -135,6 +135,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 SettingCard（设置页）或说明文字（插件页）标注原因；处理器入口还有 `_require_admin()` 兜底，误调时提示「无权操作」。
 切换用户时 `signalBus.userChanged` 触发 `_sync_admin()` → `_apply_permissions()`，立即刷新按钮可用状态与提示显隐。
 「打开文件夹」（资源文件夹）与隐私保护分组（资源文件夹 / 隐藏文件两个开关）对所有用户可用，不受此限制。
+删除用户（`UserService.delete()`）时：默认用户与当前用户不可删除（`allow_current=True` 只供内部与自检使用）；其余用户的数据项、分类、标签与存档条目一并转到默认用户——分类以「用户名」为一级分类镜像到默认用户下（**只镜像真正有数据项的分类及其祖先分类**，子树里没有数据文件的空分类不保留、镜像后对应的空目录也会删掉）、文件整目录搬进 `<库>/<默认用户>/<用户名>/`，个人标签改归属并在同名时合并、**没有任何数据项引用的标签直接删除而不迁移**，该用户创建的**全局标签**也改写创建者（`created_by`，否则外键的 `ON DELETE SET NULL` 会抹掉它），存档条目保留原来的 `user_id` / `user_name` / `category` 文本；数据为空的用户直接清理其分类与用户文件夹。没有引入「已删除用户」影子账号。
 
 「用户」页的头部是统一的标题行（`page_header()`，右侧是「新建用户」主按钮），卡片网格整体装在一张分区卡片（`section_card(self, "全部用户", "…", spacing=10)`）里：
 「用户」页（`src/app/ui/pages/user_page.py`）把用户排成卡片网格：卡片是**固定宽度** `CARD_WIDTH`（320 px，`setFixedWidth()` +
@@ -146,10 +147,11 @@ SettingCard（设置页）或说明文字（插件页）标注原因；处理器
 每张卡片都是自洽的对象单元（`UserPage._user_card()`）：三段式布局 = ①首字头像（`_avatar()`，当前用户蓝底 / 其他灰底）+ 用户名 + 徽标（`card_badges()`：当前用户 / 默认用户 / 已设口令）；
 ②摘要（`card_summary()`：数据项数、分类数、创建时间）；③两列按钮网格（`CARD_BUTTON_COLUMNS = 2`，按 `card_permissions()` 显隐）——
 切换为当前用户（当前用户卡片上是禁用态的「当前用户」）、重命名、口令、清除口令、删除，因此所有针对该用户的操作都在卡片内完成，按钮不会被裁出卡片。
-`UserService.delete()` 保留默认用户（`if user.is_default: return False`），其余用户删除时先看有没有数据（`data_count()`）：
-**有数据**时分类以「用户名」为一级分类镜像到默认用户（`_mirror_categories()`，返回旧→新 id 映射并改写 `DataItem.category_id`，
+`UserService.delete()` 保留默认用户（`if user.is_default: return False`）并拒绝删除当前用户（`allow_current` 默认 False）；其余用户删除时先看有没有数据（是否有未软删除的数据项）：
+**有数据**时先算要保留的分类：`_retained_categories()` 只收「有数据项的分类 + 它们的全部祖先分类」，`_mirror_categories(user, target, retained)` 再以「用户名」为一级分类把它们镜像到默认用户下（返回旧→新 id 映射与镜像根；保留集合为空时不建一级分类，`DataItem.category_id` 回落到目标用户的「未分类」，
 镜像时用 `CategoryRepository.unique_sibling_name()` 避开同级重名），`<库>/<用户名>` 整目录搬到 `<库>/<目标用户>/<用户名>`
-（`LibraryService.relocate_user_dir()`）并给 `DataItem.file_path` 加默认用户名前缀，标签归属与 `created_by` 一并改为默认用户（同名标签走 `TagRepository.merge()`），
+（`LibraryService.relocate_user_dir()`）并给 `DataItem.file_path` 加默认用户名前缀，随后 `_prune_empty_dirs()` 自底向上删掉镜像目录里空掉的目录（子树里没有数据文件的分类连磁盘目录一起消失）；
+标签归属与 `created_by` 一并改为默认用户（同名标签走 `TagRepository.merge()`，**没有任何数据项引用的标签直接删除**，不迁移）；
 存档条目 `user_id` / `user_name` 改为目标用户且 `category` 前缀上「用户名 / 」；**数据为空**时不建任何镜像分类，直接
 `LibraryService.remove_user_dir()` 删掉其用户文件夹（目录里还有库不认识的残留文件时保留目录并打日志），再删除其分类行与用户行。
 
@@ -185,8 +187,9 @@ KPI 卡与快捷按钮这两块流式区域用 `widgets/flow_area.py` 的 `FlowA
 工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
 勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」与「清空选择」，没有选中项时批量按钮禁用。
 
-左栏分类树（`src/app/ui/widgets/category_tree.py`）的每个分类节点都带复选框（「全部数据」根节点没有）：勾选集合由 `checked_categories()` 读出、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
-勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）。
+左栏分类树（`src/app/ui/widgets/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
+三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
+勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）；勾上「全部数据」时整棵树都处于勾选状态（此时按钮一并禁用：顶层没有可移动的去处、顶层分类也不能整体删除，提示会改成「已全选「全部数据」…」，处理器同样会拒绝这次操作）；批量移动时若所选分类本来就都在目标分类下，会提示「无需移动」而不再走一次无意义的提交。
 中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**打开方式**（系统默认程序 /
 点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
@@ -317,7 +320,9 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 ## 默认标签
 
 `src/app/db/seed.py` 的 `DEFAULT_TAGS`（重要 / 待整理 / 收藏）在 `seed_user_defaults()` 里只写入一次，且写成**全局标签**
-（`user_id=None`、`is_global=True`、`created_by` 记第一个用户）：新用户开箱即用，也不会每个用户各存一份。
+（`user_id=None`、`is_global=True`、`created_by` 记第一个用户）：新用户开箱即用，也不会每个用户各存一份。写之前先看有没有同名全局标签；
+没有同名全局标签、但库里已有同名**个人**标签时，会先建好全局标签再把这些个人标签并入它（`TagRepository.merge_shadow_copies()`），
+避免凭空多出一个同名全局副本；历史库里已经存在的这种副本由启动时的 `database._merge_shadow_tags()` 修复（`item_tags` 的引用改到全局标签后删除个人标签行）。
 
 ## 打开方式与查看器插件
 

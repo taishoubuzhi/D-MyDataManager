@@ -204,23 +204,15 @@ def _check_category_filter(app, window) -> list[str]:
         problems.append("没有勾选任何分类时批量按钮应为禁用")
 
     nodes = page.taxonomy.tree(user_id=user_id)
-    with_items = [node.category.id for node in nodes if count(node.category.id)][:2]
-    if not with_items:
-        return problems
-    for category_id in with_items:
-        if not check(category_id):
-            return problems
-    checked = set(with_items)
-    if page._total > sum(count(category_id) for category_id in checked):
-        problems.append(f"勾选 {sorted(checked)} 后 total={page._total}，超出这些分类的数据量")
-    if page._total <= 0 or not all(item.category_id in checked for item in page._items):
-        problems.append(f"勾选分类后筛选无效：total={page._total}")
-    if set(page._checked_categories) != checked:
-        problems.append(f"页面记录的勾选分类为 {sorted(page._checked_categories)}")
-    uncheck_all()
-    if page._total != before:
-        problems.append(f"取消分类勾选后未恢复：total={page._total}，应为 {before}")
-
+    parents = {node.category.parent_id for node in nodes if node.category.parent_id is not None}
+    leaves = [
+        node.category.id
+        for node in nodes
+        if node.category.parent_id is not None
+        and not is_uncategorized(node.category)
+        and node.category.id not in parents
+        and count(node.category.id)
+    ][:2]
     child = next(
         (
             node.category.id
@@ -229,20 +221,76 @@ def _check_category_filter(app, window) -> list[str]:
         ),
         None,
     )
-    root = next(
+    branch = next(
         (
             node.category.id
             for node in nodes
-            if node.category.parent_id is None and not is_uncategorized(node.category)
+            if node.category.id in parents and not is_uncategorized(node.category)
         ),
         None,
     )
+    childless_root = next(
+        (
+            node.category.id
+            for node in nodes
+            if node.category.parent_id is None
+            and not is_uncategorized(node.category)
+            and node.category.id not in parents
+        ),
+        None,
+    )
+    root_item = tree_item(None)
+    if root_item is None or not (root_item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+        problems.append("「全部数据」缺少三态复选框")
+
+    def buttons_enabled() -> bool:
+        return page.category_delete_button.isEnabled() or page.category_move_button.isEnabled()
+
+    def descendants_of(item) -> list:
+        found = []
+        stack = [item]
+        while stack:
+            current = stack.pop()
+            for index in range(current.childCount()):
+                child_item = current.child(index)
+                found.append(child_item)
+                stack.append(child_item)
+        return found
+
+    if not leaves:
+        return problems
+    for category_id in leaves:
+        if not check(category_id):
+            return problems
+    checked = set(leaves)
+    expected_total = sum(count(category_id) for category_id in checked)
+    if set(page._checked_categories) != checked:
+        problems.append(
+            f"勾选叶子分类后页面记录为 {sorted(page._checked_categories)}，应为 {sorted(checked)}"
+        )
+    if page._total != expected_total:
+        problems.append(f"勾选叶子分类后 total={page._total}，应为 {expected_total}")
+    if page._total <= 0 or not all(item.category_id in checked for item in page._items):
+        problems.append(f"勾选分类后筛选无效：total={page._total}")
+    if root_item is not None and root_item.checkState(0) != Qt.CheckState.PartiallyChecked:
+        problems.append("部分分类被勾选时「全部数据」应为半选")
+    if not buttons_enabled():
+        problems.append("勾选叶子分类后批量移动/删除按钮应可用")
+    uncheck_all()
+    if page._total != before:
+        problems.append(f"取消分类勾选后未恢复：total={page._total}，应为 {before}")
+    if root_item is not None and root_item.checkState(0) != Qt.CheckState.Unchecked:
+        problems.append("全部取消勾选后「全部数据」应为未选")
+
     if child is not None:
         page.tree.select_category(None)
         app.processEvents()
         if check(child):
-            if not page.category_delete_button.isEnabled() or not page.category_move_button.isEnabled():
+            if not buttons_enabled():
                 problems.append("勾选子分类后批量移动/删除按钮应可用")
+            parent_item = tree_item(page.category_repo.get(child).parent_id)
+            if parent_item is not None and parent_item.checkState(0) != Qt.CheckState.PartiallyChecked:
+                problems.append(f"只勾选子分类 {child} 时其父分类应为半选")
             original_parent = page.category_repo.get(child).parent_id
             manage = sys.modules["app.ui.pages.manage_page"]
             original_confirm = manage.confirm
@@ -258,13 +306,94 @@ def _check_category_filter(app, window) -> list[str]:
                 problems.append(f"确认框返回 False 时分类 {child} 仍被删除")
             elif current.parent_id != original_parent:
                 problems.append(f"确认框返回 False 时分类 {child} 仍被移动")
-    if root is not None:
+    if branch is not None:
         uncheck_all()
-        enabled = check(root) and (
-            page.category_delete_button.isEnabled() or page.category_move_button.isEnabled()
-        )
-        if enabled:
-            problems.append("只勾选根分类时批量移动/删除按钮应为禁用")
+        branch_item = tree_item(branch)
+        if check(branch):
+            descendants = descendants_of(branch_item)
+            if not descendants:
+                problems.append(f"父分类 {branch} 没有子分类，无法验证级联")
+            elif any(item.checkState(0) != Qt.CheckState.Checked for item in descendants):
+                problems.append(f"勾选父分类 {branch} 后子分类没有跟着全选")
+            elif not {
+                item.data(0, Qt.ItemDataRole.UserRole) for item in descendants
+            } <= set(page._checked_categories):
+                problems.append(
+                    f"级联后页面记录的勾选分类缺少子分类：{sorted(page._checked_categories)}"
+                )
+            if not buttons_enabled():
+                problems.append("勾选父分类（含子分类）后批量移动/删除按钮应可用")
+            top_level_ids = {node.category.id for node in nodes if node.category.parent_id is None}
+            checked_ids = {item.data(0, Qt.ItemDataRole.UserRole) for item in descendants}
+            manage_module = sys.modules["app.ui.pages.manage_page"]
+            original_confirm = manage_module.confirm
+            manage_module.confirm = lambda *args, **kwargs: True
+            original_delete = page.taxonomy.delete_category
+            deleted: list[int] = []
+            page.taxonomy.delete_category = lambda category: deleted.append(category.id) or 0
+            try:
+                page._on_category_batch_delete()
+            finally:
+                manage_module.confirm = original_confirm
+                page.taxonomy.delete_category = original_delete
+            if set(deleted) & top_level_ids:
+                problems.append(f"批量删除动了顶层分类：{sorted(set(deleted) & top_level_ids)}")
+            if not set(deleted) <= checked_ids:
+                problems.append(f"批量删除动了勾选范围外的分类：{deleted}")
+    if childless_root is not None:
+        uncheck_all()
+        if check(childless_root) and buttons_enabled():
+            problems.append("只勾选没有子分类的根分类时批量移动/删除按钮应为禁用")
+    if root_item is not None:
+        uncheck_all()
+        every_id = {
+            int(item.data(0, Qt.ItemDataRole.UserRole))
+            for item in page.tree._iter_items()
+            if isinstance(item.data(0, Qt.ItemDataRole.UserRole), int)
+        }
+        if check(None):
+            if set(page._checked_categories) != every_id:
+                problems.append("勾选「全部数据」后页面记录不是全部分类")
+            if any(
+                item.checkState(0) != Qt.CheckState.Checked
+                for item in page.tree._iter_items()
+                if isinstance(item.data(0, Qt.ItemDataRole.UserRole), int)
+            ):
+                problems.append("勾选「全部数据」后仍有分类处于未选或半选")
+            all_total = sum(count(category_id) for category_id in every_id)
+            if page._total != all_total:
+                problems.append(f"勾选「全部数据」后 total={page._total}，应为 {all_total}")
+            if buttons_enabled():
+                problems.append("勾选「全部数据」后批量移动/删除按钮应禁用")
+            if page.category_hint.text() == "勾选分类可批量移动或删除":
+                problems.append("全选「全部数据」时分类提示没有说明不能批量操作")
+            manage_module = sys.modules["app.ui.pages.manage_page"]
+            original_confirm = manage_module.confirm
+            manage_module.confirm = lambda *args, **kwargs: True
+            original_move = page.taxonomy.move_category
+            original_delete = page.taxonomy.delete_category
+            touched: list[str] = []
+            page.taxonomy.move_category = lambda *args, **kwargs: touched.append("move") or True
+            page.taxonomy.delete_category = lambda *args, **kwargs: touched.append("delete") or 0
+            try:
+                page._on_category_batch_move()
+                page._on_category_batch_delete()
+            finally:
+                manage_module.confirm = original_confirm
+                page.taxonomy.move_category = original_move
+                page.taxonomy.delete_category = original_delete
+            if touched:
+                problems.append(f"全选「全部数据」时批量操作改动了分类：{touched}")
+            if set(page._checked_categories) != every_id:
+                problems.append("全选「全部数据」时的批量操作改写了勾选集合")
+            fresh_root = tree_item(None)
+            if fresh_root is None:
+                problems.append("刷新后分类树里找不到「全部数据」")
+            else:
+                fresh_root.setCheckState(0, Qt.CheckState.Unchecked)
+            app.processEvents()
+            if page._checked_categories:
+                problems.append("取消「全部数据」后仍有分类被勾选")
     uncheck_all()
     if page._total != before:
         problems.append(f"全部取消勾选后未恢复：total={page._total}，应为 {before}")
@@ -1302,6 +1431,65 @@ def _check_user_page(app, window) -> list[str]:
         needed = columns * CARD_WIDTH + (columns - 1) * CARD_SPACING
         if needed > available:
             problems.append(f"700px 视口下卡片网格放不下：需要 {needed}px > {available}px")
+    # 删除只对默认用户开放：当前用户卡片不能删除自己，其他用户卡片由默认用户删除。
+    from app.ui.pages import user_page as user_page_module
+
+    def card_of(user_id: int):
+        return next(
+            (card for card in page.cards() if int(getattr(card, "user_id", 0)) == user_id), None
+        )
+
+    def delete_button(card):
+        return getattr(card, "delete_button", None)
+
+    def _no_confirm(*args, **kwargs):
+        raise AssertionError("删除当前用户时不应弹确认框")
+
+    member_info = next((info for info in page.service.list_users() if not info.is_default), None)
+    admin_info = next((info for info in page.service.list_users() if info.is_default), None)
+    if admin_info is not None:
+        button = delete_button(card_of(int(admin_info.user.id)))
+        if button is not None:
+            problems.append("默认用户卡片不该有「删除」入口")
+    if member_info is not None:
+        button = delete_button(card_of(int(member_info.user.id)))
+        if button is None or not button.isEnabled():
+            problems.append("默认用户应能删除其他用户，卡片上的「删除」按钮却不可用")
+    state = (page._is_admin, page._user_id)
+    service_state = (page.service.current_id, page.service.is_admin)
+    original_confirm = user_page_module.confirm
+    try:
+        if member_info is not None:
+            page.service.current_id = lambda: int(member_info.user.id)
+            page.service.is_admin = lambda: False
+            page.refresh()
+            app.processEvents()
+            card = card_of(int(member_info.user.id))
+            if card is None:
+                problems.append("找不到当前用户的卡片")
+            elif delete_button(card) is None or delete_button(card).isEnabled():
+                problems.append("当前用户卡片上的「删除」按钮应存在但禁用")
+            if any(
+                delete_button(other) is not None and delete_button(other).isEnabled()
+                for other in page.cards()
+            ):
+                problems.append("普通用户的卡片上不应有可用的「删除」按钮")
+            user_page_module.confirm = _no_confirm
+            try:
+                page._delete_user(card._info)
+            except AssertionError as exc:
+                problems.append(f"普通用户删除自己时未拒绝：{exc}")
+            finally:
+                user_page_module.confirm = original_confirm
+            if page.service.current_id() != int(member_info.user.id):
+                problems.append("删除自己被拒绝后当前用户被切换了")
+    finally:
+        page.service.current_id, page.service.is_admin = service_state
+        user_page_module.confirm = original_confirm
+        page._is_admin, page._user_id = state
+        page.refresh()
+        app.processEvents()
+
     settings_texts = _widget_texts(window.settings_page)
     for banned in ("新建用户", "切换用户", "删除用户"):
         if any(banned in text for text in settings_texts):
@@ -1309,6 +1497,180 @@ def _check_user_page(app, window) -> list[str]:
     if previous is not None and previous is not page:
         _show_page(window, previous)
         app.processEvents()
+    return problems
+
+
+def _check_user_delete_transfer(app, window) -> list[str]:
+    """删除用户：数据项、个人标签、它创建的全局标签与存档条目都并入默认用户。"""
+    from sqlalchemy import select
+
+    from app.db.models import Archive, Category, DataItem, Tag, User
+    from app.repositories.archives import ArchiveRepository
+    from app.repositories.items import ItemRepository
+    from app.services import TaxonomyService, UserService
+    from app.ui.pages import user_page as user_page_module
+
+    page = window.user_page
+    previous = window.stackedWidget.currentWidget()
+    _show_page(window, page)
+    app.processEvents()
+    problems: list[str] = []
+    users = UserService(page.session)
+    taxonomy = TaxonomyService(page.session)
+    archives = ArchiveRepository(page.session)
+    admin = users.default()
+    if admin is None:
+        return ["缺少默认用户，无法验证用户删除"]
+    admin_id = int(admin.id)
+    # 上一次运行中途失败可能留下同名残留（用户 / 标签 / 数据项 / 存档），先清掉。
+    stale = next((info for info in users.list_users() if info.name == "删除自检用户"), None)
+    if stale is not None:
+        users.delete(stale.user, allow_current=True)
+        page.session.commit()
+    for leftover in page.session.scalars(
+        select(Tag).where(Tag.name.in_(("自检个人标签", "自检全局标签", "自检废弃标签")))
+    ):
+        taxonomy.delete_tag(leftover, user_id=admin_id, is_admin=True)
+    for leftover in page.session.scalars(select(DataItem).where(DataItem.name == "自检数据")):
+        page.session.delete(leftover)
+    for leftover in page.session.scalars(select(Archive).where(Archive.name == "自检存档")):
+        page.session.delete(leftover)
+    page.session.flush()
+
+    def drop_mirror_trees() -> None:
+        """删掉镜像出来的「删除自检用户」分类树（含 -1、-2 等副本），避免残留空分类。"""
+        uncategorized = taxonomy.uncategorized_category(admin_id)
+        uncategorized_id = int(uncategorized.id) if uncategorized is not None else None
+        roots = list(
+            page.session.scalars(
+                select(Category).where(
+                    Category.user_id == admin_id, Category.name.like("删除自检用户%")
+                )
+            )
+        )
+        for root in roots:
+            branches = [*taxonomy.categories.descendants(root), root]
+            ids = [int(branch.id) for branch in branches]
+            for item in page.session.scalars(
+                select(DataItem).where(DataItem.category_id.in_(ids))
+            ):
+                item.category_id = uncategorized_id
+            for branch in branches:
+                page.session.delete(branch)
+        page.session.flush()
+
+    drop_mirror_trees()
+    member = users.create("删除自检用户", "")
+    if member is None:
+        return ["删除自检用户创建失败（可能仍有同名用户残留）"]
+    member_id = int(member.id)
+    member_name = member.name
+    users.set_current(admin)
+    category = taxonomy.categories.create("自检分类", None, user_id=member_id)
+    item = ItemRepository(page.session).create(
+        name="自检数据", user_id=member_id, category_id=category.id
+    )
+    personal = taxonomy.create_tag("自检个人标签", user_id=member_id)
+    shared = taxonomy.create_tag("自检全局标签", user_id=member_id, is_global=True)
+    dropped = taxonomy.create_tag("自检废弃标签", user_id=member_id)
+    if personal is None or shared is None or dropped is None:
+        return ["自检标签创建失败（同名标签残留）"]
+    item.tags.extend([personal, shared])  # 只有被数据项引用的标签才会迁移
+    archive = archives.create_archive(
+        "自检存档",
+        "",
+        [
+            {
+                "user_id": member_id,
+                "user_name": member_name,
+                "name": "自检数据",
+                "category": "自检分类",
+            }
+        ],
+        0,
+        0,
+    )
+    entry = archives.entries_of(archive)[0]
+    page.session.commit()
+    page.refresh()
+    app.processEvents()
+
+    def card_of(user_id: int):
+        return next((card for card in page.cards() if int(card.user_id) == user_id), None)
+
+    def _no_confirm(*args, **kwargs):
+        raise AssertionError("删除当前用户时不应弹确认框")
+
+    original_confirm = user_page_module.confirm
+    try:
+        users.set_current(member)
+        page.refresh()
+        app.processEvents()
+        card = card_of(member_id)
+        if card is None:
+            problems.append("找不到删除自检用户的卡片")
+        else:
+            user_page_module.confirm = _no_confirm
+            try:
+                page._delete_user(card._info)
+            except AssertionError as exc:
+                problems.append(f"删除当前用户时未拒绝：{exc}")
+            if page.session.get(User, member_id) is None:
+                problems.append("当前用户被删除了")
+        users.set_current(admin)
+        page.refresh()
+        app.processEvents()
+        user_page_module.confirm = lambda *args, **kwargs: True
+        card = card_of(member_id)
+        if card is None:
+            problems.append("删除自检用户的卡片丢失")
+        else:
+            page._delete_user(card._info)
+    finally:
+        user_page_module.confirm = original_confirm
+
+    app.processEvents()
+    if previous is not None and previous is not page:
+        _show_page(window, previous)
+        app.processEvents()
+    if page.session.get(User, member_id) is not None:
+        problems.append("默认用户没能删除自检用户")
+        return problems
+    if item.user_id != admin_id:
+        problems.append(f"被删用户的数据项归属 {item.user_id}，应为默认用户 {admin_id}")
+    mirrored = taxonomy.categories.get(item.category_id) if item.category_id else None
+    if mirrored is None or mirrored.user_id != admin_id:
+        problems.append("被删用户的分类没有镜像到默认用户下")
+    if personal.user_id != admin_id or personal.created_by != admin_id:
+        problems.append("被删用户的个人标签没有转到默认用户")
+    if not shared.is_global or shared.created_by != admin_id:
+        problems.append("被删用户创建的全局标签，创建者没有改成默认用户")
+    if page.session.scalars(select(Tag).where(Tag.name == "自检废弃标签")).first() is not None:
+        problems.append("没有被数据项使用的标签没有直接删除")
+    mirror_root = page.session.get(Category, mirrored.parent_id) if mirrored is not None else None
+    if mirror_root is None or mirror_root.name != member_name:
+        problems.append("被删用户的分类没有镜像成同名一级分类")
+    else:
+        names = sorted(child.name for child in mirror_root.children)
+        if names != ["自检分类"]:
+            problems.append(f"镜像分类没有剪枝（只剩有数据的分类）：{names}")
+    if entry.user_id != admin_id or entry.user_name != admin.name:
+        problems.append("存档条目没有转到默认用户")
+    if entry.category != f"{member_name} / 自检分类":
+        problems.append(f"存档条目分类为 {entry.category!r}，应保留原用户信息")
+    # 还原现场：自检产生的标签 / 数据项 / 存档都删掉，避免影响其它检查。
+    for leftover in page.session.scalars(
+        select(Tag).where(Tag.name.in_(("自检个人标签", "自检全局标签", "自检废弃标签")))
+    ):
+        taxonomy.delete_tag(leftover, user_id=admin_id, is_admin=True)
+    for leftover in page.session.scalars(select(DataItem).where(DataItem.name == "自检数据")):
+        page.session.delete(leftover)
+    for leftover in page.session.scalars(select(Archive).where(Archive.name == "自检存档")):
+        page.session.delete(leftover)
+    drop_mirror_trees()
+    page.session.commit()
+    page.refresh()
+    app.processEvents()
     return problems
 
 
@@ -2080,6 +2442,7 @@ def main() -> int:
         ("no_library_picker", lambda: _check_no_library_picker(window)),
         ("global_tag_marks", lambda: _check_global_tag_marks(app, window)),
         ("user_page", lambda: _check_user_page(app, window)),
+    ("user_delete_transfer", lambda: _check_user_delete_transfer(app, window)),
         ("user_password_clear", lambda: _check_user_password_clear(app, window)),
         ("archive_tabs", lambda: _check_archive_tabs(app, window)),
         ("archive_owner", lambda: _check_archive_owner(app, window)),

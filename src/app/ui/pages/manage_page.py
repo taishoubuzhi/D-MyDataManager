@@ -1023,9 +1023,15 @@ class ManagePage(QWidget):
         return eligible
 
     def _sync_category_buttons(self) -> None:
-        eligible = bool(self._eligible_category_ids())
+        all_checked = self.tree.is_all_checked()
+        eligible = bool(self._eligible_category_ids()) and not all_checked
         self.category_move_button.setEnabled(eligible)
         self.category_delete_button.setEnabled(eligible)
+        self.category_hint.setText(
+            "已全选「全部数据」：顶层分类不能整体移动或删除，请只勾选要处理的子分类"
+            if all_checked
+            else "勾选分类可批量移动或删除"
+        )
 
     def _descendant_category_ids(self, category_ids: set[int]) -> set[int]:
         """勾选分类的全部子孙分类 id，用于拒绝非法的移动目标。"""
@@ -1043,6 +1049,9 @@ class ManagePage(QWidget):
 
     def _on_category_batch_move(self) -> None:
         """把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）。"""
+        if self.tree.is_all_checked():
+            toast_warning(self, "无法移动", "已全选「全部数据」：顶层分类不能整体移动，请只勾选要移动的子分类")
+            return
         ids = self._eligible_category_ids()
         if not ids:
             toast_warning(self, "无法移动", "根分类与「未分类」不能移动，请先勾选普通分类")
@@ -1053,6 +1062,9 @@ class ManagePage(QWidget):
             return
         target = self.category_repo.get(target_id) if target_id is not None else None
         target_name = target.name if target is not None else "顶层"
+        if all(self.category_repo.get(category_id).parent_id == target_id for category_id in ids):
+            toast_warning(self, "无需移动", f"勾选的分类已经在「{target_name}」下")
+            return
         names = "、".join(self._category_name(category_id) for category_id in ids)
         if not confirm(
             self,
@@ -1079,6 +1091,9 @@ class ManagePage(QWidget):
 
     def _on_category_batch_delete(self) -> None:
         """批量删除勾选的分类；其中的数据变成未分类，根分类与固定分类受保护。"""
+        if self.tree.is_all_checked():
+            toast_warning(self, "无法删除", "已全选「全部数据」：顶层分类不能整体删除，请只勾选要删除的子分类")
+            return
         ids = self._eligible_category_ids()
         if not ids:
             toast_warning(self, "无法删除", "根分类与「未分类」不能删除，请先勾选普通分类")

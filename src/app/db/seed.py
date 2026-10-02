@@ -24,6 +24,8 @@ def is_initialized(session: Session) -> bool:
 
 def seed_user_defaults(session: Session, user: User) -> None:
     """为新用户写入默认分类；基础标签是全局标签，只在首次初始化时写入一次。"""
+    from ..repositories.tags import TagRepository  # 延迟导入，避免与仓储层初始化顺序耦合
+
     session.add_all(
         [
             Category(name=name, user_id=user.id, sort_order=index)
@@ -35,7 +37,13 @@ def seed_user_defaults(session: Session, user: User) -> None:
             select(Tag.id).where(Tag.name == name, Tag.is_global.is_(True)).limit(1)
         )
         if exists is None:
-            session.add(Tag(name=name, user_id=None, created_by=user.id, is_global=True))
+            tag = Tag(name=name, user_id=None, created_by=user.id, is_global=True)
+            session.add(tag)
+            session.flush()
+            # 已有同名个人标签时并入新全局标签，否则会留下同名副本。
+            merged = TagRepository(session).merge_shadow_copies(tag)
+            if merged:
+                logger.warning("全局标签「{}」并入 {} 个同名个人标签", name, merged)
     session.flush()
 
 

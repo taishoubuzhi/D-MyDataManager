@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from loguru import logger
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..core.config import config
 from ..db.models import ArchiveEntry, Category, DataItem, Tag, User
-from ..db.seed import seed_user_defaults
+from ..db.seed import UNCATEGORIZED_NAME, seed_user_defaults
 from ..repositories import (
     CategoryRepository,
     ItemFilter,
@@ -149,10 +150,17 @@ class UserService:
             self.session.scalar(select(func.count(DataItem.id)).where(DataItem.user_id == user.id)) or 0
         )
 
-    def delete(self, user: User, move_to: User | None = None) -> bool:
-        """删除用户：有数据时并入默认用户（显式传入 move_to 时并入该用户），没有数据时只清理其分类与目录。"""
+    def delete(self, user: User, move_to: User | None = None, *, allow_current: bool = False) -> bool:
+        """删除用户：数据、分类、标签与存档条目一并并入目标用户（默认是默认用户）。
+
+        默认用户不可删除；当前用户默认也不可删除（只有脚本显式传 allow_current=True 才能删），
+        否则删号后当前用户会被悄悄切换成默认用户，等于给自己提权。
+        """
         if user.is_default:
             logger.warning("默认用户不可删除")
+            return False
+        if not allow_current and config.currentUserId.value == user.id:
+            logger.warning("不能删除当前用户 {}，请先切换到其他用户", user.name)
             return False
         target = move_to if move_to is not None and move_to.id != user.id else self.default()
         if target is None or target.id == user.id:
@@ -161,52 +169,130 @@ class UserService:
         libraries = _library_service(self.session)
         library = libraries.ensure_default()
         old_dir = libraries.dir_name_of(user.name)
-        has_data = self.data_count(user) > 0
-        # 用户没有数据时不再把它的一级分类与空目录并入目标用户。
-        mapping = self._mirror_categories(user, target) if has_data else {}
-        if has_data:
-            for item in self.session.scalars(select(DataItem).where(DataItem.user_id == user.id)):
-                item.user_id = target.id
-                if item.category_id in mapping:
-                    item.category_id = mapping[item.category_id]
-                prefix = f"{old_dir}/"
-                if item.file_path.startswith(prefix):
-                    item.file_path = f"{libraries.dir_name_of(target.name)}/{item.file_path}"
+        new_dir = libraries.dir_name_of(target.name)
+        items = list(self.session.scalars(select(DataItem).where(DataItem.user_id == user.id)))
+        has_data = any(not item.is_deleted for item in items)
+        # 分类剪枝：整棵子树都没有数据项的分类不迁移，只镜像有数据的分类与它们的祖先。
+        retained = self._retained_categories(user, items)
+        mapping, mirror_root = self._mirror_categories(user, target, retained)
+        if items:
+            fallback_id = (
+                mirror_root
+                if mirror_root is not None
+                else self.categories.ensure(UNCATEGORIZED_NAME, None, user_id=target.id).id
+            )
+        else:
+            fallback_id = None
+        moved_items = 0
+        for item in items:
+            item.user_id = target.id
+            item.category_id = mapping.get(item.category_id, fallback_id)
+            prefix = f"{old_dir}/"
+            if item.file_path.startswith(prefix):
+                item.file_path = f"{new_dir}/{item.file_path}"
+            moved_items += 1
         for category in self.session.scalars(select(Category).where(Category.user_id == user.id)):
             self.session.delete(category)
-        for tag in self.session.scalars(select(Tag).where(Tag.user_id == user.id)):
-            existing = self.tags.by_name(tag.name, user_id=target.id)
-            if existing is not None and existing.id != tag.id:
-                self.tags.merge(tag, existing)
+        # 该用户的个人标签并入目标用户；它创建的全局标签保持全局，只改创建者，
+        # 否则外键 SET NULL 会抹掉创建者，标签从此谁都改不了。
+        # 没有任何数据项引用的标签不迁移，直接删除。
+        moved_tags = 0
+        dropped_tags = 0
+        for tag in self.session.scalars(
+            select(Tag).where(or_(Tag.user_id == user.id, Tag.created_by == user.id))
+        ):
+            if self.tags.item_count(tag) == 0:
+                self.session.delete(tag)
+                dropped_tags += 1
+                continue
+            if tag.user_id == user.id:
+                existing = self.tags.by_name(tag.name, user_id=target.id)
+                if existing is not None and existing.id != tag.id:
+                    self.tags.merge(tag, existing)
+                else:
+                    # 归属转移；创建者只有在指向被删用户（或为空）时才改写。
+                    tag.user_id = target.id
+                    if tag.created_by is None or tag.created_by == user.id:
+                        tag.created_by = target.id
             else:
-                # 归属与创建者一并转移，避免删除后标签的创建者指向已不存在的用户。
-                tag.user_id = target.id
                 tag.created_by = target.id
+            moved_tags += 1
+        moved_entries = 0
         for entry in self.session.scalars(select(ArchiveEntry).where(ArchiveEntry.user_id == user.id)):
             entry.user_id = target.id
             entry.user_name = target.name
             entry.category = f"{user.name} / {entry.category}" if entry.category else user.name
+            moved_entries += 1
+        pruned_dirs = 0
         if has_data:
-            libraries.relocate_user_dir(library, user.name, target.name)
+            mirror = libraries.relocate_user_dir(library, user.name, target.name)
+            # 只留下有数据的分类目录，镜像目录里的空目录一并清掉。
+            pruned_dirs = self._prune_empty_dirs(mirror)
         else:
             libraries.remove_user_dir(library, user.name)
         if config.currentUserId.value == user.id:
             self.set_current(target)
         self.session.delete(user)
         self.session.flush()
-        if has_data:
-            logger.info("已删除用户 {}，数据并入 {}", user.name, target.name)
-        else:
-            logger.info("已删除无数据的用户 {}，其分类与目录已清理", user.name)
+        logger.info(
+            "已删除用户 {}：数据 {} 项、标签 {} 个（未使用删除 {} 个）、分类 {} 个、"
+            "空目录 {} 个、存档条目 {} 条并入 {}",
+            user.name,
+            moved_items,
+            moved_tags,
+            dropped_tags,
+            len(mapping),
+            pruned_dirs,
+            moved_entries,
+            target.name,
+        )
         return True
 
-    def _mirror_categories(self, source: User, target: User) -> dict[int, int]:
-        """把 source 的分类层级镜像到 target 下的一级分类「source.name」，返回旧 -> 新 id 映射。"""
+    def _retained_categories(self, user: User, items: list[DataItem]) -> set[int]:
+        """需要迁移的分类：有数据项的分类及其全部祖先；其余分类为空，迁移时剪掉。"""
+        categories = {
+            category.id: category
+            for category in self.session.scalars(
+                select(Category).where(Category.user_id == user.id)
+            )
+        }
+        retained: set[int] = set()
+        for item in items:
+            category_id = item.category_id
+            while category_id in categories and category_id not in retained:
+                retained.add(category_id)
+                category_id = categories[category_id].parent_id
+        return retained
+
+    def _prune_empty_dirs(self, root: Path) -> int:
+        """删除镜像目录里没有任何文件的空子目录（自底向上），返回删除数量。"""
+        if not root.is_dir():
+            return 0
+        removed = 0
+        for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if path.is_dir() and not any(path.iterdir()):
+                path.rmdir()
+                removed += 1
+        return removed
+
+    def _mirror_categories(
+        self, source: User, target: User, retained: set[int]
+    ) -> tuple[dict[int, int], int | None]:
+        """把 source 中 retained 里的分类镜像到 target 下的一级分类「source.name」。
+
+        返回旧 -> 新 id 映射与新一级分类 id；没有需要迁移的分类时返回 ({}, None)。
+        """
+        categories = [
+            category
+            for category in self.session.scalars(
+                select(Category).where(Category.user_id == source.id)
+            ).all()
+            if category.id in retained
+        ]
+        if not categories:
+            return {}, None
         root = self.categories.ensure(source.name, None, user_id=target.id)
         mapping: dict[int, int] = {}
-        categories = list(
-            self.session.scalars(select(Category).where(Category.user_id == source.id)).all()
-        )
         ids = {category.id for category in categories}
         pending = list(categories)
         while pending:
@@ -236,7 +322,7 @@ class UserService:
                         is_hidden=category.is_hidden,
                     ).id
                 break
-        return mapping
+        return mapping, root.id
 
 
 __all__ = ["DEFAULT_USER_NAME", "UserInfo", "UserService"]

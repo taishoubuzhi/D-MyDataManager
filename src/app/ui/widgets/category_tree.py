@@ -46,6 +46,7 @@ class CategoryTree(TreeWidget):
         self.customContextMenuRequested.connect(self._show_menu)
         self.itemSelectionChanged.connect(self._on_selection)
         self.itemChanged.connect(self._on_item_changed)
+        self._updating = False
 
     # ------------------------------------------------------------------ 数据
     def set_nodes(
@@ -60,6 +61,8 @@ class CategoryTree(TreeWidget):
         self.clear()
         root = QTreeWidgetItem([f"全部数据 ({total})"])
         root.setData(0, Qt.ItemDataRole.UserRole, ALL_ID)
+        # 根节点也能勾选：全选 / 半选 / 全不选整棵分类树。
+        root.setFlags(root.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         self.addTopLevelItem(root)
 
         items: dict[int, QTreeWidgetItem] = {}
@@ -69,9 +72,6 @@ class CategoryTree(TreeWidget):
             item.setData(0, Qt.ItemDataRole.UserRole, node.category.id)
             item.setData(0, FIXED_ROLE, fixed)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            category_id = item.data(0, Qt.ItemDataRole.UserRole)
-            state = Qt.CheckState.Checked if category_id in checked_ids else Qt.CheckState.Unchecked
-            item.setCheckState(0, state)
             if fixed:
                 item.setToolTip(0, FIXED_TIP)
             parent = items.get(node.category.parent_id) if node.category.parent_id else root
@@ -83,6 +83,7 @@ class CategoryTree(TreeWidget):
             item.setExpanded(True)
 
         root.setExpanded(True)
+        self._set_states(checked_ids)
         self.blockSignals(False)
         self.select_category(selected)
 
@@ -95,10 +96,26 @@ class CategoryTree(TreeWidget):
             and isinstance(item.data(0, Qt.ItemDataRole.UserRole), int)
         }
 
+    def is_all_checked(self) -> bool:
+        """「全部数据」根节点是否被完整勾选（此时整棵分类树都处于勾选状态）。"""
+        for index in range(self.topLevelItemCount()):
+            item = self.topLevelItem(index)
+            if item.data(0, Qt.ItemDataRole.UserRole) is ALL_ID:
+                return item.checkState(0) == Qt.CheckState.Checked
+        return False
+
     def set_checked_categories(self, category_ids: set[int] | None) -> None:
-        """按 id 集合设置勾选状态，不触发 checkedChanged。"""
+        """按 id 集合设置勾选状态（父节点自动聚合三态），不触发 checkedChanged。"""
         wanted = set(category_ids or ())
         self.blockSignals(True)
+        try:
+            self._set_states(wanted)
+        finally:
+            self.blockSignals(False)
+
+    def _set_states(self, wanted: set[int]) -> None:
+        """wanted 里的分类勾选、其余取消，然后由下而上聚合父节点状态。"""
+        self._updating = True
         try:
             for item in self._iter_items():
                 category_id = item.data(0, Qt.ItemDataRole.UserRole)
@@ -108,12 +125,43 @@ class CategoryTree(TreeWidget):
                     Qt.CheckState.Checked if category_id in wanted else Qt.CheckState.Unchecked
                 )
                 item.setCheckState(0, state)
+            self._aggregate_all()
         finally:
-            self.blockSignals(False)
+            self._updating = False
+
+    def _aggregate_all(self) -> None:
+        """自底向上刷新父节点：全选 / 半选 / 全不选。"""
+        for item in reversed(list(self._iter_items())):
+            if item.childCount():
+                item.setCheckState(0, self._aggregate_state(item))
+
+    def _aggregate_state(self, item: QTreeWidgetItem) -> Qt.CheckState:
+        states = [item.child(index).checkState(0) for index in range(item.childCount())]
+        if all(state == Qt.CheckState.Checked for state in states):
+            return Qt.CheckState.Checked
+        if all(state == Qt.CheckState.Unchecked for state in states):
+            return Qt.CheckState.Unchecked
+        return Qt.CheckState.PartiallyChecked
+
+    def _apply_state(self, item: QTreeWidgetItem, state: Qt.CheckState) -> None:
+        """把状态向下级联到所有后代。"""
+        item.setCheckState(0, state)
+        for index in range(item.childCount()):
+            self._apply_state(item.child(index), state)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        if column == 0 and isinstance(item.data(0, Qt.ItemDataRole.UserRole), int):
-            self.checkedChanged.emit()
+        if self._updating or column != 0:
+            return
+        state = item.checkState(0)
+        if state == Qt.CheckState.PartiallyChecked:
+            state = Qt.CheckState.Checked  # 半选被点中时按全选处理
+        self._updating = True
+        try:
+            self._apply_state(item, state)
+            self._aggregate_all()
+        finally:
+            self._updating = False
+        self.checkedChanged.emit()
 
     def select_category(self, category_id: int | None) -> None:
         for item in self._iter_items():

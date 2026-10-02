@@ -182,7 +182,13 @@ class TaxonomyService:
         if not name or self.tags.by_name(name, user_id=user_id) is not None:
             logger.warning("标签已存在（含全局标签）：{}", name)
             return None
-        return self.tags.ensure(name, description, color, user_id=user_id, is_global=is_global)
+        tag = self.tags.ensure(name, description, color, user_id=user_id, is_global=is_global)
+        if tag is not None and tag.is_global:
+            # 别人可能已有同名个人标签：并入新全局标签，避免出现同名个人 / 全局副本。
+            merged = self.tags.merge_shadow_copies(tag)
+            if merged:
+                logger.warning("全局标签「{}」并入 {} 个同名个人标签", name, merged)
+        return tag
 
     def update_tag(self, tag: Tag, **fields) -> Tag:
         for key, value in fields.items():
@@ -221,6 +227,10 @@ class TaxonomyService:
         if not self.tags.set_global(tag, is_global):
             logger.warning("已存在同名全局标签：{}", tag.name)
             return False
+        if is_global:
+            merged = self.tags.merge_shadow_copies(tag)
+            if merged:
+                logger.warning("全局标签「{}」并入 {} 个同名个人标签", tag.name, merged)
         return True
 
     def delete_tag(

@@ -231,6 +231,22 @@ def _dedupe_global_tags(connection) -> None:
         logger.warning("历史全局标签「{}」重名，已重命名 {} 个副本", name, len(ids) - 1)
 
 
+def _merge_shadow_tags(connection) -> None:
+    """个人标签不得与全局标签重名：把同名个人标签的引用并入全局标签，再删除副本。"""
+    pairs = connection.exec_driver_sql(
+        "SELECT s.id, g.id FROM tags AS s JOIN tags AS g "
+        "ON g.name = s.name AND g.is_global = 1 WHERE s.is_global = 0"
+    ).fetchall()
+    for shadow_id, global_id in pairs:
+        connection.exec_driver_sql(
+            "UPDATE OR IGNORE item_tags SET tag_id = ? WHERE tag_id = ?", (global_id, shadow_id)
+        )
+        connection.exec_driver_sql("DELETE FROM item_tags WHERE tag_id = ?", (shadow_id,))
+        connection.exec_driver_sql("DELETE FROM tags WHERE id = ?", (shadow_id,))
+    if pairs:
+        logger.warning("发现 {} 个与全局标签重名的个人标签，已并入全局标签", len(pairs))
+
+
 def _upgrade_schema() -> None:
     """把旧版本库原地升级到当前结构：只补列 / 补索引并回填，不重建库、不丢数据。"""
     engine = get_engine()
@@ -291,6 +307,8 @@ def init_db(force: bool = False) -> None:
         _upgrade_schema()
     engine = get_engine()
     Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        _merge_shadow_tags(connection)
     ensure_fts(engine)
     _write_schema_version(engine)
     logger.info("数据表已就绪")
