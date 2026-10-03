@@ -235,8 +235,8 @@ def main() -> int:
     # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
-    viewers = plugin_service.load_viewers()
-    _stage(7, f"插件系统已就绪（扩展点 2 个、登记查看器 {viewers} 个）")
+    plugin_service.load_viewers()
+    _stage(7, "插件系统已就绪")
 
     window = MainWindow()
     window.show()

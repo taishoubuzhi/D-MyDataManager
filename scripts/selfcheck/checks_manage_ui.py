@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from .harness import Case, build_window, check, dispose_window, ensure_app
+from .harness import Case, build_window, check, dispose_window, ensure_app, install_builtin_plugins
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QPushButton, QWidget
@@ -678,4 +678,239 @@ def tag_picker_keywords(case: Case) -> None:
 
         assert not problems, "标签与关键词：" + "；".join(problems[:12])
     finally:
+        dispose_window(window)
+
+
+@check("manage_edit_dialog", "pages")
+def manage_edit_dialog(case: Case) -> None:
+    """数据信息编辑：右键菜单有入口、弹窗带只读信息区，改名后库内文件一起改名。"""
+    from app.services import ItemService
+    from app.ui.dialogs import ItemEditDialog
+
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    app = None
+    dialog = None
+    try:
+        app = ensure_app()
+        session = case.session
+        page = window.manage_page
+        item = ImportService(session).import_text(
+            "改名前", "改名前的内容", category_id=fixture.category_child
+        )
+        session.commit()
+        page.refresh()
+        app.processEvents()
+
+        if "edit" not in dict(manage_module.menu_items(1)):
+            problems.append("单项右键菜单没有「编辑信息」入口")
+
+        info = dict(page._item_info(item))
+        for key in ("类型", "大小", "归属用户", "所在库", "库内路径", "磁盘位置", "创建时间", "内容指纹"):
+            if not info.get(key) or info[key] == "—":
+                problems.append(f"编辑弹窗缺少只读信息：{key}")
+
+        dialog = ItemEditDialog(
+            item,
+            categories=[
+                (node.category.id, node.category.name)
+                for node in page.taxonomy.tree(user_id=item.user_id)
+            ],
+            known_tags=[],
+            info=page._item_info(item),
+            parent=window,
+        )
+        texts = _widget_texts(dialog)
+        for key in ("数据信息", "可修改的信息", "库内路径", "磁盘位置"):
+            if not any(key in text for text in texts):
+                problems.append(f"编辑弹窗没有渲染「{key}」")
+        if dialog.values()["name"] != item.name:
+            problems.append(f"编辑弹窗的名称初值 {dialog.values()['name']!r} != {item.name!r}")
+
+        dialog.name_edit.setText("改名之后")
+        ItemService(session).update(item, name=dialog.values()["name"])
+        session.commit()
+        path = LibraryService(session).abs_path(item)
+        if path is None or path.name != "改名之后.txt":
+            problems.append(f"改名后库内文件没有跟着改：{path}")
+        elif not path.is_file():
+            problems.append("改名后库内文件不存在")
+
+        if getattr(page, "session", None) is not None:
+            # 页面用的是另一个会话，改完要让它的身份映射重新读库。
+            page.session.expire_all()
+        page.refresh()
+        app.processEvents()
+        if not any(row.item is not None and row.item.name == "改名之后" for row in _list_rows(page)):
+            problems.append(
+                "改名后列表没有出现新名称："
+                f"行={[row.item.name for row in _list_rows(page) if row.item is not None]} / "
+                f"可见项={[entry.name for entry in page._items]}"
+            )
+
+        assert not problems, "数据信息编辑：" + "；".join(problems[:12])
+    finally:
+        if dialog is not None:
+            from PyQt6 import sip
+
+            dialog.close()
+            dialog.setParent(None)
+            sip.delete(dialog)
+        if app is not None:
+            app.processEvents()
+        dispose_window(window)
+
+
+@check("manage_editor_menu", "pages")
+def manage_editor_menu(case: Case) -> None:
+    """右键「编辑器」子菜单是程序本体内置的：有系统默认程序 / 各编辑器 / 交给系统选择，禁用编辑器库也还在。"""
+    from app.sdk import editors
+
+    install_builtin_plugins()
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        app = ensure_app()
+        session = case.session
+        page = window.manage_page
+        item = ImportService(session).import_text(
+            "编辑目标", "原始内容", category_id=fixture.category_child
+        )
+        session.commit()
+        page.session.expire_all()
+        page.refresh()
+        app.processEvents()
+        target = next(
+            (row.item for row in _list_rows(page) if row.item is not None and row.item.id == item.id),
+            None,
+        )
+        assert target is not None, "列表里找不到刚导入的数据项"
+
+        keys = [key for key, _text in manage_module.menu_items(1)]
+        if "editor" not in keys or "open_with" not in keys:
+            problems.append(f"右键菜单应有「查看器」「编辑器」，实际 {keys}")
+        elif keys.index("editor") != keys.index("open_with") + 1:
+            problems.append(f"「编辑器」应紧跟「查看器」，实际 {keys}")
+
+        menu_texts = [action.text() for action in page._build_menu(target).actions()]
+        if not menu_texts or menu_texts[0] != "直接打开" or "编辑器" in menu_texts:
+            problems.append(f"「编辑器」应是子菜单、不进 actions()，实际 {menu_texts}")
+
+        inner = [action.text() for action in page._build_editor_menu(target).actions()]
+        if not inner or inner[0] != "系统默认程序" or inner[-1] != "交给系统选择…":
+            problems.append(f"编辑器子菜单首尾应是系统默认程序 / 交给系统选择…，实际 {inner}")
+
+        # 编辑器库被禁用时（这里直接让 editors_for 返回空）子菜单仍要在，只是只剩系统项
+        original_for = manage_module.editors_for
+        manage_module.editors_for = lambda suffix: ()
+        try:
+            fallback = [action.text() for action in page._build_editor_menu(target).actions()]
+        finally:
+            manage_module.editors_for = original_for
+        if fallback[:1] != ["系统默认程序"] or fallback[-1:] != ["交给系统选择…"]:
+            problems.append(f"没有编辑器插件时子菜单应只剩系统项，实际 {fallback}")
+
+        seen: list[str] = []
+        original_edit = manage_module.edit_with
+        fake_edit = lambda path, editor, parent=None: (seen.append(str(path)), (True, "自检"))[1]
+        manage_module.edit_with = fake_edit
+        editors.edit_with = fake_edit
+        try:
+            action = next(
+                (
+                    action
+                    for action in page._build_editor_menu(target).actions()
+                    if action.text() not in ("系统默认程序", "交给系统选择…")
+                ),
+                None,
+            )
+            if action is None:
+                problems.append("没有可点名的编辑器插件，无法验证回调路径")
+            else:
+                action.trigger()
+        finally:
+            manage_module.edit_with = original_edit
+            editors.edit_with = original_edit
+        expected = LibraryService(session).abs_path(item)
+        if not seen or expected is None or Path(seen[-1]).resolve() != expected.resolve():
+            problems.append(f"「编辑器 → 点名插件」应打开该项的库内文件 {expected}，实际 {seen}")
+
+        assert not problems, "编辑器菜单：" + "；".join(problems[:12])
+    finally:
+        dispose_window(window)
+
+@check("manage_double_click_action", "pages")
+def manage_double_click_action(case: Case) -> None:
+    """设置页新增「左键双击」配置：默认打开查看器，可改成打开编辑器。"""
+    from app.core.config import DOUBLE_CLICK_EDITOR, DOUBLE_CLICK_VIEWER, config
+    from app.sdk import editors
+    from app.ui.pages.settings_page import ComboSettingCard
+
+    install_builtin_plugins()
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    original = config.doubleClickAction.value
+    original_open = manage_module.open_path
+    original_edit = editors.edit_path
+    try:
+        app = ensure_app()
+        session = case.session
+        page = window.manage_page
+        item = ImportService(session).import_text(
+            "双击目标", "双击内容", category_id=fixture.category_child
+        )
+        session.commit()
+        page.session.expire_all()
+        page.refresh()
+        app.processEvents()
+        row = next(
+            (r for r in _list_rows(page) if r.item is not None and r.item.id == item.id), None
+        )
+        assert row is not None, "列表里找不到刚导入的数据项"
+
+        cards = [
+            card
+            for card in window.settings_page.findChildren(ComboSettingCard)
+            if card.titleLabel.text() == "左键双击"
+        ]
+        if len(cards) != 1:
+            problems.append(f"设置页应有 1 张「左键双击」卡，实际 {len(cards)}")
+        else:
+            labels = [cards[0].combo.itemText(i) for i in range(cards[0].combo.count())]
+            if labels != ["打开查看器", "打开编辑器"]:
+                problems.append(f"「左键双击」下拉的选项是 {labels}")
+        if config.doubleClickAction.value != DOUBLE_CLICK_VIEWER:
+            problems.append(f"默认动作应是打开查看器，实际 {config.doubleClickAction.value!r}")
+
+        viewer_calls: list[str] = []
+        editor_calls: list[str] = []
+        manage_module.open_path = lambda path, parent=None: (
+            viewer_calls.append(str(path)),
+            (True, "自检"),
+        )[1]
+        fake_edit_path = lambda path, parent=None: (
+            editor_calls.append(str(path)),
+            (True, "自检"),
+        )[1]
+        editors.edit_path = fake_edit_path
+        manage_module.edit_path_with = fake_edit_path
+
+        row.opened.emit(row.item)  # 双击
+        if len(viewer_calls) != 1 or editor_calls:
+            problems.append(f"默认双击应交给查看器：viewer={viewer_calls} editor={editor_calls}")
+
+        config.set(config.doubleClickAction, DOUBLE_CLICK_EDITOR)
+        row.opened.emit(row.item)
+        if len(editor_calls) != 1 or len(viewer_calls) != 1:
+            problems.append(f"切成编辑器后双击应交给编辑器：viewer={viewer_calls} editor={editor_calls}")
+        expected = LibraryService(session).abs_path(item)
+        if not editor_calls or expected is None or Path(editor_calls[-1]).resolve() != expected.resolve():
+            problems.append(f"双击编辑器应打开该项的库内文件 {expected}，实际 {editor_calls}")
+
+        assert not problems, "左键双击配置：" + "；".join(problems[:12])
+    finally:
+        manage_module.open_path = original_open
+        manage_module.edit_path_with = original_edit
+        editors.edit_path = original_edit
+        config.set(config.doubleClickAction, original)
         dispose_window(window)

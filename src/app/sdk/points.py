@@ -17,7 +17,7 @@ class ExtensionPoint:
     插件用 ctx.contribute(point, value) 往坑里放东西；value 必须是对象，形状如下
     （程序侧统一由 app.ui.framework.contributions 取用，缺字段按默认值处理）：
 
-    - VIEWER / PAGE：用 ctx.add_viewer(...) / ctx.add_page(...) 的字段；
+    - VIEWER / EDITOR / PAGE：用 ctx.add_viewer(...) / ctx.add_editor(...) / ctx.add_page(...) 的字段；
     - HOME_KPI：{"title": str, "value": 回调或字符串, "sub": str, "icon": str}；
     - SETTINGS_CARD：{"title": str, "factory": 回调(parent) -> QWidget}；
     - MANAGE_TOOLBAR：{"text": str, "callback": 回调(), "icon": str, "tip": str}；
@@ -28,6 +28,7 @@ class ExtensionPoint:
     """
 
     VIEWER = "app.viewer"
+    EDITOR = "app.editor"
     PAGE = "app.ui.page"
     MANAGE_TOOLBAR = "app.ui.manage.toolbar"
     MANAGE_ITEM_MENU = "app.ui.manage.item_menu"
@@ -40,6 +41,7 @@ class ExtensionPoint:
 
     _LABELS = {
         VIEWER: "查看器",
+        EDITOR: "编辑器",
         PAGE: "页面",
         MANAGE_TOOLBAR: "数据管理工具栏",
         MANAGE_ITEM_MENU: "条目菜单",

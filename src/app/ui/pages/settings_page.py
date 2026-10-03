@@ -22,7 +22,14 @@ from qfluentwidgets import (
 )
 
 from ...core import logging_setup, paths
-from ...core.config import config, export_dir, resources_root, set_resource_root
+from ...core.config import (
+    DOUBLE_CLICK_EDITOR,
+    DOUBLE_CLICK_VIEWER,
+    config,
+    export_dir,
+    resources_root,
+    set_resource_root,
+)
 from ...core.signals import signalBus
 from ...core.version import APP_VERSION
 from ...db import database
@@ -241,6 +248,17 @@ class SettingsPage(ScrollPage):
                 "数据管理页左侧分类栏启动时展开全部分类（默认全部收起）",
                 configItem=config.expandCategories,
                 parent=group,
+            )
+        )
+        group.addSettingCard(
+            ComboSettingCard(
+                FluentIcon.EDIT,
+                "左键双击",
+                "数据管理页左键双击条目时的动作（右键菜单里仍可随时选用另一个）",
+                [("打开查看器", DOUBLE_CLICK_VIEWER), ("打开编辑器", DOUBLE_CLICK_EDITOR)],
+                config.doubleClickAction.value,
+                lambda value: config.set(config.doubleClickAction, value),
+                group,
             )
         )
         return group

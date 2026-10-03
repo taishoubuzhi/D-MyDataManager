@@ -1,0 +1,26 @@
+{
+  "id": "builtin.lib.editor",
+  "name": "编辑器库",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "编辑器工具库：提供 EditorPlugin 基类、EditorWindow 窗口外壳与编辑器注册表，并注册 editor.open 调度接口与「编辑器」配置页。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "class": "EditorLibraryPlugin",
+  "depends": [
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "provides": [
+    "editor.open"
+  ],
+  "libraries": [
+    {
+      "name": "editor",
+      "module": "plugin.py",
+      "description": "编辑器插件基类 EditorPlugin、窗口外壳 EditorWindow、注册表 EditorRegistry；调度接口 EditorOpenApi、规则 EditorRules 与配置页 EditorConfigPage"
+    }
+  ]
+}

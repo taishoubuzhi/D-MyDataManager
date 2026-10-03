@@ -31,8 +31,15 @@ from qfluentwidgets import (
 
 from ...core.signals import signalBus
 from ...sdk.viewers import ViewerInfo, open_path, open_system, open_viewer_with, viewers_for
+from ...sdk.editors import (
+    EditorInfo,
+    edit_path as edit_path_with,
+    edit_with,
+    editors_for,
+    open_system as edit_open_system,
+)
 from ...db import database
-from ...db.models import DataType
+from ...db.models import DataItem, DataType
 from ...db.seed import UNCATEGORIZED_NAME
 from ...repositories import (
     CategoryRepository,
@@ -63,7 +70,7 @@ from ..dialogs import (
     ItemEditDialog,
     TextInputDialog,
 )
-from ...core.config import config
+from ...core.config import DOUBLE_CLICK_EDITOR, config
 from ..components.category_tree import CategoryTree
 from ..components.filter_panel import FilterPanel
 from ..components.item_card import ItemCard, ItemListRow
@@ -88,6 +95,7 @@ def range_ids(order: list[int], anchor: int, target: int) -> set[int]:
 MENU_LABELS: dict[str, tuple[str, str]] = {
     "open": ("直接打开", "直接打开"),
     "open_with": ("查看器", "查看器"),
+    "editor": ("编辑器", "编辑器"),
     "reveal": ("在文件夹中显示", "在文件夹中显示"),
     "copy": ("复制路径", "复制路径"),
     "move": ("移动到分类…", "移动到分类…（{count} 项）"),
@@ -102,6 +110,7 @@ MENU_LABELS: dict[str, tuple[str, str]] = {
 }
 MENU_ICONS: dict[str, FluentIcon] = {
     "open": FluentIcon.VIEW,
+    "editor": FluentIcon.EDIT,
     "reveal": FluentIcon.FOLDER,
     "copy": FluentIcon.COPY,
     "move": FluentIcon.MOVE,
@@ -114,7 +123,7 @@ MENU_ICONS: dict[str, FluentIcon] = {
     "purge": FluentIcon.CLOSE,
     "details": FluentIcon.INFO,
 }
-MENU_SEPARATORS_AFTER = frozenset({"open_with", "copy", "hidden", "purge"})
+MENU_SEPARATORS_AFTER = frozenset({"open_with", "editor", "copy", "hidden", "purge"})
 MENU_SINGLE_ONLY = frozenset({"edit", "details"})
 
 
@@ -133,6 +142,21 @@ def open_with_items(suffix: str) -> tuple[tuple[str, str, ViewerInfo | None], ..
     entries += [
         (f"viewer:{viewer.id}", f"{viewer.name}（{viewer.plugin_id}）", viewer)
         for viewer in viewers_for(suffix)
+    ]
+    entries.append(("ask", "交给系统选择…", None))
+    return tuple(entries)
+
+
+def editor_menu_items(suffix: str) -> tuple[tuple[str, str, EditorInfo | None], ...]:
+    """「编辑器」子菜单：(标识, 文本, 编辑器)，标识为 system / editor:<id> / ask。
+
+    没启用编辑器插件时只剩「系统默认程序」与「交给系统选择…」——菜单本身照旧在
+    （与查看器子菜单一致），因为它是程序本体内置的，不依赖插件贡献。
+    """
+    entries: list[tuple[str, str, EditorInfo | None]] = [("system", "系统默认程序", None)]
+    entries += [
+        (f"editor:{editor.id}", f"{editor.name}（{editor.plugin_id}）", editor)
+        for editor in editors_for(suffix)
     ]
     entries.append(("ask", "交给系统选择…", None))
     return tuple(entries)
@@ -174,6 +198,8 @@ class ManagePage(Page):
         self._syncing = False
         self._category_id: int | None = None
         self._mode = "list"
+        #: 两种视图各自的控件池：刷新时按位复用，避免整页销毁重建。
+        self._rows: dict[str, list[QWidget]] = {"list": [], "card": []}
         self._unlocked = False
         self._page = 0
         self._page_size = normalize_page_size(config.pageSize.value)
@@ -581,18 +607,32 @@ class ManagePage(Page):
 
     def _render(self) -> None:
         layout = self.list_layout if self._mode == "list" else self.card_layout
-        _clear_layout(layout)
-        for item in self._items:
-            widget = ItemListRow(item) if self._mode == "list" else ItemCard(item)
-            widget.activated.connect(self._on_item_activated)
-            widget.opened.connect(self._on_open)
-            widget.menuRequested.connect(self._show_menu)
-            widget.checkedChanged.connect(self._on_item_checked)
-            widget.set_selected(item.id in self._selected)
-            if isinstance(layout, AdaptiveFlowLayout):
-                layout.addWidget(widget)
+        pool = self._rows[self._mode]
+        if not pool:
+            _clear_layout(layout)
+        while len(pool) > len(self._items):
+            widget = pool.pop()
+            layout.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+        for index, item in enumerate(self._items):
+            if index < len(pool):
+                widget = pool[index]
+                widget.set_item(item)
             else:
-                layout.insertWidget(layout.count() - 1, widget)
+                widget = ItemListRow(item) if self._mode == "list" else ItemCard(item)
+                widget.activated.connect(lambda target, page=self: page._on_item_activated(target))
+                widget.opened.connect(lambda target, page=self: page._on_open(target))
+                widget.menuRequested.connect(lambda target, pos, page=self: page._show_menu(target, pos))
+                widget.checkedChanged.connect(
+                    lambda target, checked, page=self: page._on_item_checked(target, checked)
+                )
+                pool.append(widget)
+                if isinstance(layout, AdaptiveFlowLayout):
+                    layout.addWidget(widget)
+                else:
+                    layout.insertWidget(layout.count() - 1, widget)
+            widget.set_selected(item.id in self._selected)
         self._sync_select_all()
 
     # ------------------------------------------------------------------ 用户
@@ -769,13 +809,25 @@ class ManagePage(Page):
         return path.suffix if path is not None else ""
 
     def _on_open(self, item) -> None:
-        """打开数据：优先用内置查看器，没有内置查看器时交给系统默认程序。"""
+        """左键双击：按「设置 → 外观 → 左键双击」打开查看器（默认）或交给编辑器插件。"""
+        if config.doubleClickAction.value == DOUBLE_CLICK_EDITOR:
+            self._open_in_editor(item)
+            return
         path = self._path_of(item)
         if path is None:
             return
         ok, message = open_path(path, self.window())
         if not ok:
             self.toast_error("无法打开", message)
+
+    def _open_in_editor(self, item) -> None:
+        """双击选到「打开编辑器」时走编辑器门面（没装编辑器插件时由它退回系统默认程序）。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = edit_path_with(path, self.window())
+        if not ok:
+            self.toast_error("无法编辑", message)
 
     def _on_open_system(self, item) -> None:
         """右键「查看器 → 系统默认程序」。"""
@@ -803,6 +855,33 @@ class ManagePage(Page):
         ok, message = open_viewer_with(path, viewer, self.window())
         if not ok:
             self.toast_error("无法打开", message)
+
+    def _on_edit_system(self, item) -> None:
+        """右键「编辑器 → 系统默认程序」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = edit_open_system(path)
+        if not ok:
+            self.toast_error("无法编辑", message)
+
+    def _on_edit_ask(self, item) -> None:
+        """右键「编辑器 → 交给系统选择」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = edit_open_system(path, ask=True)
+        if not ok:
+            self.toast_error("无法编辑", message)
+
+    def _on_edit_with(self, item, editor) -> None:
+        """右键「编辑器 → 点名某个插件」。"""
+        path = self._path_of(item)
+        if path is None:
+            return
+        ok, message = edit_with(path, editor, self.window())
+        if not ok:
+            self.toast_error("无法编辑", message)
 
     def _on_reveal(self, item) -> None:
         if not self.item_service.reveal_item(item):
@@ -866,8 +945,33 @@ class ManagePage(Page):
                 )
         return menu
 
+    def _build_editor_menu(self, item) -> RoundMenu:
+        """「编辑器」子菜单：系统默认程序 / 各内置编辑器 / 交给系统选择。"""
+        menu = RoundMenu("编辑器", self)
+        for key, text, editor in editor_menu_items(self._suffix(item)):
+            if key == "system":
+                menu.addAction(
+                    Action(FluentIcon.VIEW, text, triggered=lambda: self._on_edit_system(item))
+                )
+            elif key == "ask":
+                menu.addSeparator()
+                menu.addAction(
+                    Action(FluentIcon.FOLDER, text, triggered=lambda: self._on_edit_ask(item))
+                )
+            else:
+                menu.addAction(
+                    Action(
+                        FluentIcon.EDIT,
+                        text,
+                        triggered=lambda _checked=False, chosen=editor: self._on_edit_with(
+                            item, chosen
+                        ),
+                    )
+                )
+        return menu
+
     def _build_menu(self, item) -> RoundMenu:
-        """右键菜单：打开 / 查看器（点名插件或系统）/ 批量操作（按选中数量调整）。"""
+        """右键菜单：打开 / 查看器、编辑器（点名插件或系统）/ 批量操作（按选中数量调整）。"""
         count = len(self._selected)
         callbacks = {
             "open": lambda: self._on_open(item),
@@ -884,9 +988,22 @@ class ManagePage(Page):
             "details": lambda: self._on_details(item),
         }
         menu = RoundMenu(parent=self)
+        plugin_items = items(ExtensionPoint.MANAGE_ITEM_MENU)
         for key, text in menu_items(count):
             if key == "open_with":
                 menu.addMenu(self._build_open_with_menu(item))
+            elif key == "editor":
+                menu.addMenu(self._build_editor_menu(item))
+                # 插件贡献的菜单项跟在「查看器」「编辑器」子菜单之后。
+                for contribution in plugin_items:
+                    data = value_of(contribution)
+                    menu.addAction(
+                        Action(
+                            icon_of(data.get("icon")),
+                            str(data.get("text") or contribution.name),
+                            triggered=lambda _checked=False, cb=data.get("callback"): resolve(cb, item),
+                        )
+                    )
             else:
                 action = Action(MENU_ICONS[key], text, triggered=callbacks[key])
                 if key in MENU_SINGLE_ONLY and count != 1:
@@ -894,18 +1011,6 @@ class ManagePage(Page):
                 menu.addAction(action)
             if key in MENU_SEPARATORS_AFTER:
                 menu.addSeparator()
-        plugin_items = items(ExtensionPoint.MANAGE_ITEM_MENU)
-        if plugin_items:
-            menu.addSeparator()
-        for item in plugin_items:
-            data = value_of(item)
-            menu.addAction(
-                Action(
-                    icon_of(data.get("icon")),
-                    str(data.get("text") or item.name),
-                    triggered=lambda _checked=False, cb=data.get("callback"): resolve(cb, item),
-                )
-            )
         return menu
 
     def _show_menu(self, item, pos) -> None:
@@ -965,6 +1070,7 @@ class ManagePage(Page):
             categories=[(node.category.id, "　" * node.depth + node.category.name) for node in nodes],
             known_tags=self.tag_repo.names(user_id=self.user_service.current_id()),
             global_tags=set(self.tag_repo.global_names()),
+            info=self._item_info(item),
             parent=self.window(),
         )
         if not dialog.exec():
@@ -981,6 +1087,25 @@ class ManagePage(Page):
         self.session.commit()
         signalBus.itemsChanged.emit()
         self.toast_success("已保存", item.name)
+
+    def _item_info(self, item: DataItem) -> list[tuple[str, str]]:
+        """编辑弹窗里的只读信息区：这条数据现在是什么、放在哪儿。"""
+        owner = self.user_service.by_id(item.user_id)
+        library = item.library if item.library_id else None
+        if library is None:
+            library = self.item_service.libraries.default()
+        path = self.item_service.libraries.abs_path(item)
+        mime = f"（{item.mime}）" if item.mime else ""
+        return [
+            ("类型", f"{type_name(item.type)}{mime}"),
+            ("大小", format_size(item.size or 0)),
+            ("归属用户", owner.name if owner is not None else "未归属"),
+            ("所在库", f"{library.name}（{library.path}）" if library is not None else "—"),
+            ("库内路径", item.file_path or "—"),
+            ("磁盘位置", str(path) if path is not None else "（文件不在库里）"),
+            ("创建时间", item.created_at.strftime("%Y-%m-%d %H:%M") if item.created_at else "—"),
+            ("内容指纹", (item.checksum or "—")[:16]),
+        ]
 
     def _on_add_tags(self) -> None:
         items = self._require_selection()

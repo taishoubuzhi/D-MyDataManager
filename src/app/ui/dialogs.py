@@ -7,9 +7,11 @@ from PyQt6.QtWidgets import QTreeWidgetItem
 from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
+    CaptionLabel,
     ComboBox,
     LineEdit,
     MessageBoxBase,
+    StrongBodyLabel,
     SubtitleLabel,
     SwitchButton,
     TextEdit,
@@ -130,7 +132,7 @@ class CategoryPickerDialog(MessageBoxBase):
 
 
 class ItemEditDialog(MessageBoxBase):
-    """编辑单个数据项的名称、分类、标签、关键词与隐藏状态。"""
+    """编辑单个数据项：上方是只读的数据信息，下方可改名称、分类、标签、关键词与隐藏状态。"""
 
     def __init__(
         self,
@@ -138,12 +140,30 @@ class ItemEditDialog(MessageBoxBase):
         categories: list[tuple[int, str]],
         known_tags: list[str],
         global_tags: set[str] | None = None,
+        info: list[tuple[str, str]] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._item = item
 
         self.viewLayout.addWidget(SubtitleLabel("编辑数据项", self))
+
+        if info:
+            self.viewLayout.addWidget(StrongBodyLabel("数据信息", self))
+            info_grid = QGridLayout()
+            info_grid.setHorizontalSpacing(10)
+            info_grid.setVerticalSpacing(4)
+            for row, (label, value) in enumerate(info):
+                name_label = CaptionLabel(label, self)
+                value_label = CaptionLabel(value, self)
+                value_label.setToolTip(value)
+                value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                info_grid.addWidget(name_label, row, 0, Qt.AlignmentFlag.AlignTop)
+                info_grid.addWidget(value_label, row, 1)
+            info_grid.setColumnStretch(1, 1)
+            self.viewLayout.addLayout(info_grid)
+
+        self.viewLayout.addWidget(StrongBodyLabel("可修改的信息", self))
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)

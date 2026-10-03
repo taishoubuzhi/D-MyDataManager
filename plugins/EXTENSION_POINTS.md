@@ -23,6 +23,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 | 扩展点 | 标签 | 值结构 | 生效位置 | 稳定级别 |
 | --- | --- | --- | --- | --- |
 | `app.viewer` | 查看器 | 由 `ctx.add_viewer()` 构造 | 「查看器」页、条目打开流程 | 稳定 |
+| `app.editor` | 编辑器 | 由 `ctx.add_editor()` 构造 | 「编辑器」页、条目右键「编辑器 ▸」 | 稳定 |
 | `app.ui.page` | 页面 | 由 `ctx.add_page()` 构造 | 主窗口左侧导航 + 堆叠页 | 稳定 |
 | `app.ui.manage.toolbar` | 数据管理工具栏 | `{"text", "callback", "icon", "tip"}` | 数据管理页工具栏 | 稳定 |
 | `app.ui.manage.item_menu` | 条目菜单 | `{"text", "callback", "icon"}` | 数据行右键菜单 | 稳定 |
@@ -100,7 +101,7 @@ ctx.contribute(
 | `callback` | `(item) -> None` | 调用时收到该行对应的数据项对象 |
 | `icon` | 字符串 | 可选 |
 
-菜单项加在条目菜单末尾（前面自动补分隔符）。`item` 是域对象，可读 `item.id` / `item.name` / `item.file_path` 等。
+菜单项一律加在「查看器」「编辑器」两个子菜单之后、内置项之前（紧随其后的分隔符由页面补）。`item` 是域对象，可读 `item.id` / `item.name` / `item.file_path` 等。
 
 ### 2.4 `app.ui.detail.panel`：详情弹窗里的一段文本
 
@@ -192,7 +193,37 @@ ctx.add_viewer(
   `create_view(path, parent=None)` 即可，登记与弹窗都由基类完成。只给 `factory` 的老式写法仍然可用
   （程序用宿主把控件包一层），但视图控件仍必须来自插件自己的目录。
 
-### 3.2 `app.ui.page`：插件页面
+### 3.2 `app.editor`：编辑器
+
+用 `ctx.add_editor()` 注册，而不是直接 `contribute`：
+
+```python
+ctx.add_editor(
+    "文本编辑器",
+    extensions=["txt", "md"],           # 认领的扩展名
+    factory=self.create_editor,         # (path, parent) -> QWidget（可带 save()/is_dirty()）
+    opener=self.open_editor,            # 可选：(path, parent) -> (bool, str)，插件自己开窗（推荐）
+    kind="internal",                    # internal=程序内编辑控件；external=交给系统默认程序编辑
+    description="编辑文本文件",
+    capabilities=["保存", "未保存提示"],
+    host="dialog",                      # 显示在哪个宿主里，内置弹窗外壳为 "dialog"
+    editor_id="my.plugin",              # 缺省即插件 id
+    order=100,
+)
+```
+
+- 编辑器和查看器一样分「工具库 + 具体插件」：内置工具箱是 `builtin.lib.editor` 的 `plugin.py`
+  （`EditorPlugin` 基类 + `EditorWindow` 窗口外壳 + 注册表 `EditorRegistry`）—— 继承 `EditorPlugin`
+  只实现 `create_editor(path, parent=None)` 即可，登记、规则与弹窗都由基类完成。
+- `kind="internal"` 的编辑器控件是可以改内容的 `QWidget`；若它提供 `save()`（返回 `True` 或 `(bool, str)`）
+  和 `is_dirty()`，窗口外壳会据此启用「保存」按钮、显示「已修改」并在关闭前询问未保存改动。
+- `kind="external"` 表示「不提供程序内编辑控件，交给电脑系统默认程序编辑」（登记 `opener` 即可，
+  `factory` 可省略），用户点「编辑器 → 系统默认程序」时直接打开系统默认编辑器。
+- 注册后会出现在「编辑器」页的插件下拉里，用户可以按扩展名指定用哪个编辑器；规则存 `.configs/editors.json`。
+- 程序侧 `app.sdk.editors` 的 `edit_path()` 拿不到 `editor.open` 接口（没装编辑器插件）时**退回系统默认编辑器**；
+  内置编辑器插件保存文件后会通过公开信号刷新对应条目的 checksum / size / 内容。
+
+### 3.3 `app.ui.page`：插件页面
 
 ```python
 ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, order=100)

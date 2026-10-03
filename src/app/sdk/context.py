@@ -67,6 +67,22 @@ class ContextServices(Protocol):
         order: int = 100,
     ) -> Contribution: ...
 
+    def add_editor(
+        self,
+        plugin_id: str,
+        name: str,
+        *,
+        extensions: Any = (),
+        factory: Callable | None = None,
+        opener: Callable | None = None,
+        kind: str = "internal",
+        description: str = "",
+        capabilities: Any = (),
+        editor_id: str = "",
+        host: str = "",
+        order: int = 100,
+    ) -> Contribution: ...
+
     def add_page(
         self,
         plugin_id: str,
@@ -78,8 +94,6 @@ class ContextServices(Protocol):
         bottom: bool = False,
         order: int = 100,
     ) -> Contribution: ...
-
-
 class PluginContext:
     """插件上下文：读配置、取数据、注册贡献、订阅事件、取依赖的接口。"""
 
@@ -169,6 +183,10 @@ class PluginContext:
     def add_viewer(self, name: str, **fields: Any) -> Contribution:
         """注册一个查看器。"""
         return self._services.add_viewer(self.plugin_id, name, **fields)
+
+    def add_editor(self, name: str, **fields: Any) -> Contribution:
+        """注册一个编辑器。"""
+        return self._services.add_editor(self.plugin_id, name, **fields)
 
     def add_page(self, key: str, title: str, factory: Callable, **fields: Any) -> Contribution:
         """往主窗口加一个页面。"""

@@ -1,0 +1,18 @@
+{
+  "id": "builtin.editor.office",
+  "name": "内置 Office 外部编辑器",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "为 doc/docx/xls/xlsx/ppt/pptx/pdf 等文档与表格登记系统默认程序编辑。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    {
+      "id": "builtin.lib.editor"
+    }
+  ],
+  "data": {
+    "editor": "data/editor.json"
+  }
+}

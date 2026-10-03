@@ -49,6 +49,7 @@ from ..sdk import (
     register_dependency_lookup,
     register_library_resolver,
 )
+from ..sdk.editors import EDITOR_EXTENSION, EditorFactory, EditorInfo, EditorOpener, editor_api
 from ..sdk.viewers import OPEN_EXTENSION, ViewerFactory, ViewerInfo, ViewerOpener, open_api
 
 STATE_VERSION = 1
@@ -92,6 +93,62 @@ class PluginHost:
         """当前登记的查看器（含其他插件注册的）。"""
         api = open_api()
         return tuple(api.viewers()) if api is not None else ()
+
+    def editors(self) -> tuple[EditorInfo, ...]:
+        """当前登记的编辑器（含其他插件注册的）。"""
+        api = editor_api()
+        return tuple(api.editors()) if api is not None else ()
+
+    def refresh_path(self, path: str | Path) -> int:
+        """库内文件被外部（如编辑器）改写后，重算对应条目指纹并广播刷新，返回命中条目数。"""
+        target = Path(path)
+        count = 0
+        try:
+            from ..db.database import session_scope
+            from ..repositories import ItemFilter
+            from .item_service import ItemService
+
+            wanted = target.resolve()
+            with session_scope() as session:
+                service = ItemService(session)
+                filters = ItemFilter(include_hidden=True, include_deleted=True)
+                for item in service.items.query(filters):
+                    resolved = service.file_path_of(item)
+                    if resolved is None or resolved.resolve() != wanted:
+                        continue
+                    if service.refresh_file(item):
+                        count += 1
+        except Exception:
+            logger.exception("刷新库内文件失败：{}", target)
+        if count:
+            from ..core.signals import signalBus
+
+            signalBus.itemsChanged.emit()
+        logger.info("编辑器保存后刷新库内文件：{}（命中 {} 项）", target.name, count)
+        return count
+
+    def item_path(self, item) -> str:
+        """数据项在库内的真实文件路径（没有磁盘文件时返回空串）。"""
+        item_id = getattr(item, "id", None)
+        if not item_id:
+            return ""
+        try:
+            from ..db.database import new_session
+            from ..db.models import DataItem
+            from .item_service import ItemService
+
+            session = new_session()
+            try:
+                fresh = session.get(DataItem, int(item_id))
+                if fresh is None:
+                    return ""
+                path = ItemService(session).file_path_of(fresh)
+                return str(path) if path is not None else ""
+            finally:
+                session.close()
+        except Exception:
+            logger.warning("读取数据项文件路径失败：{}", item_id)
+            return ""
 
     def file_formats(self) -> dict[str, int]:
         """库里实际出现的文件格式（小写、不带点）→ 数量，供插件列出可配置的格式。"""
@@ -621,6 +678,59 @@ class PluginService:
             description=description,
         )
 
+    def add_editor(
+        self,
+        plugin_id: str,
+        name: str,
+        *,
+        extensions: Iterable[str] = (),
+        factory: EditorFactory | None = None,
+        opener: EditorOpener | None = None,
+        kind: str = "internal",
+        description: str = "",
+        capabilities: Sequence[str] = (),
+        editor_id: str = "",
+        host: str = "",
+        order: int = 100,
+    ) -> Contribution:
+        """注册一个编辑器，并记下对应贡献。"""
+        if factory is not None and not callable(factory):
+            raise PluginError(f"编辑器「{name}」没有可用的控件工厂（插件需自行创建编辑器）")
+        clean: list[str] = []
+        for item in extensions:
+            suffix = str(item).strip().lstrip(".").lower()
+            if suffix and suffix not in clean:
+                clean.append(suffix)
+        if not clean:
+            raise PluginError(f"编辑器「{name}」没有声明任何扩展名")
+        if not editor_id:
+            editor_id = f"{plugin_id}.{len(self._contributions.get(plugin_id, ())) + 1}"
+        if host:
+            self.require(plugin_id, host)  # 显示窗口由该扩展接口提供，缺了就注册失败
+        api = editor_api()
+        if api is None:
+            raise PluginError("程序没有提供编辑器接口 editor.open，无法注册编辑器")
+        editor = api.add_editor(
+            plugin_id,
+            editor_id=editor_id,
+            name=name,
+            extensions=tuple(clean),
+            kind=kind,
+            factory=factory,
+            opener=opener,
+            host=host,
+            description=description,
+            capabilities=tuple(capabilities),
+        )
+        return self.contribute(
+            plugin_id,
+            ExtensionPoint.EDITOR,
+            editor,
+            key=editor_id,
+            order=order,
+            description=description,
+        )
+
     def add_page(
         self,
         plugin_id: str,
@@ -664,6 +774,9 @@ class PluginService:
         api = open_api()
         if api is not None:
             api.clear()
+        editor = editor_api()
+        if editor is not None:
+            editor.clear()
         extension_registry.clear()
         self._provide_bootstrap()
         register_library_resolver(self._resolve_library)
@@ -695,6 +808,10 @@ class PluginService:
 
     def load_viewers(self) -> int:
         """载入入口的别名（历史命名，界面与启动流程仍用它）。"""
+        return self.load()
+
+    def load_editors(self) -> int:
+        """载入编辑器的别名（与载入整体插件等价）。"""
         return self.load()
 
     def _load_one(self, info: PluginInfo) -> bool:
@@ -780,6 +897,9 @@ class PluginService:
         api = open_api()
         if api is not None:
             api.unregister_plugin(plugin_id)
+        editor = editor_api()
+        if editor is not None:
+            editor.unregister_plugin(plugin_id)
         extension_registry.drop_plugin(plugin_id)
         for event, handlers in list(self._handlers.items()):
             kept = [(owner, fn) for owner, fn in handlers if owner != plugin_id]
@@ -858,6 +978,12 @@ class PluginService:
         if not self._plugins and not self._loaded:
             self.load()
         return [item.value for item in self._contributions.get(plugin_id, ()) if item.point == ExtensionPoint.VIEWER]
+
+    def editors_of(self, plugin_id: str) -> list[EditorInfo]:
+        """该插件注册的编辑器（未载入时先按需载入）。"""
+        if not self._plugins and not self._loaded:
+            self.load()
+        return [item.value for item in self._contributions.get(plugin_id, ()) if item.point == ExtensionPoint.EDITOR]
 
     def describe(self, plugin_id: str) -> list[tuple[str, str]]:
         """插件自报的运行期信息（键值行），未载入返回空列表。"""

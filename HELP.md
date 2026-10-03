@@ -133,6 +133,10 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 （历史 `user_id IS NULL` 的标签视为全局），重名的历史全局标签会被重命名为「名称（N）」后再建唯一索引；
 只有库版本高于程序版本（降级运行）时才会备份并重建。
 
+程序版本号只有 `src/app/core/version.py` 一处：改 `APP_VERSION` 就会改「设置 → 关于」处显示的版本
+（`SettingCard` 里写成 `v{APP_VERSION} · 数据目录 …`）；插件清单的「适用管理器版本」校验用的是同一个常量（`MANAGER_VERSION = APP_VERSION`）。
+包级 `src/app/__init__.py` 不再放版本，在那里设置不会有任何效果。
+
 ## 用户与权限
 
 `users` 表的 `is_default` 标记默认用户（管理员）：结构升级到 `SCHEMA_VERSION` 4 时把 `MIN(id)` 置位，种子数据建的第一个用户即管理员
@@ -196,7 +200,7 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 `_type_boxes` / `_tag_boxes` / `_keyword_boxes` 别名指向各分组的同一份 `boxes` 字典。
 
 列表 / 卡片项（`src/app/ui/components/item_card.py` 的 `ItemListRow` / `ItemCard`）左侧是复选框：左键单击只选中这一项（不再直接打开），
-双击左键才打开（`opened` → `ManagePage._on_open()`）；复选框用于多选，Ctrl + 左键逐个切换、Shift + 左键从锚点选到点击项（Windows 规则，
+双击左键才打开（`opened` → `ManagePage._on_open()`；默认交给查看器，可在「设置 → 外观 → 左键双击」里改成打开编辑器）；复选框用于多选，Ctrl + 左键逐个切换、Shift + 左键从锚点选到点击项（Windows 规则，
 区间由纯函数 `ManagePage.range_ids(order, anchor, target)` 计算，`_anchor` 记录最近一次点击项）。`ItemCard` 是 qfluentwidgets 的
 `CardWidget`，它的 `mouseReleaseEvent` 无条件发出 `clicked`，所以页面用 `_press_button` 只认左键，右键不会破坏多选。
 工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
@@ -211,13 +215,19 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 状态显示；右侧筛选区的类型 / 标签 / 关键词三个分组默认**全部折叠**，展开哪几个就记进 `Layout/Expanded-Filters`，下次启动照着恢复。
 每页条数、两栏显隐、分类栏与筛选栏的折叠状态都存在 `.configs/config.json` 的 `Layout` 组里，也可以在「设置 → 外观」里改
 （「每页条数」下拉、「分类栏默认展开」开关）。
-右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**查看器**（系统默认程序 /
-点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
+右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` / `editor_menu_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、
+**查看器**（系统默认程序 / 点名某个内置查看器 / 交给系统选择…）、**编辑器**（系统默认程序 / 点名某个内置编辑器 / 交给系统选择…）、
+插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
 「移入回收站」只在选中项里确有未删除项时可用（`ItemService.delete()` 也会先滤掉已在回收站里的项并返回真实条数），
 全部已删除时按钮禁用、即便误触发也只会提示「选中的数据都已在回收站里」。
 `ManagePage.move_selected(category_id)` 把选中项批量移到目标分类（`None` 表示「未分类」），走 `ItemService.set_category()`，文件跟随到
 `<库>/<用户名>/<分类链>/`；工具栏的「移动到分类」按钮与右键菜单共用它。
+「编辑信息…」弹出的 `ItemEditDialog` 分两块：上方只读的「数据信息」（类型 / 大小 / 归属用户 / 所在库 / 库内路径 / 磁盘位置 / 创建时间 / 内容指纹，由 `ManagePage._item_info()` 拼装），
+下方「可修改的信息」才是名称 / 分类 / 标签 / 关键词 / 隐藏；改名会顺带把库内那份文件一起重命名（`ItemService.update()` → `LibraryService.rename_item_file()`：
+沿用原后缀、同名冲突时加 `_N`、文件不在库里时只改显示名并记一条警告），分类变化仍由 `move_item()` 搬目录。
+刷新的开销也做了控制：`PageBase.auto_refresh()` 只在页面可见（或整个窗口不可见）时刷新，否则记一个待刷新标记、`showEvent` 补刷；
+数据管理页的卡片 / 列表行改为复用控件池（`ItemCard.set_item()` / `ItemListRow.set_item()`），删除与回档后的整页重建从约 260ms 降到 30ms 量级。
 
 ## 数据存档
 
@@ -386,7 +396,7 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 查看器页的字段名、插件页的两栏标题、数据管理页的「用户」与概览页的「当前用户」都改用它，纯文本按钮（自动编号、每组只保留最新、
 全部取消勾选、清空选择、重置筛选）也都补上了图标。标签内部图标固定 18 px 且贴左、文字紧随其后（`addWidget(..., AlignVCenter)` + `addStretch(1)`），放在很宽的容器里也不会被推到中间；信息行可以传 `keep_text=True`：即使打开简化显示也保留文字（用户卡片的三行信息就是这么写的）；
 自检 `icon_text_labels` 逐项验「平时有文字、简化显示只留图标且有同一段提示」与「图标 18 px、贴左、文字紧跟图标」。
-「设置 → 外观」另有「每页条数」（`Layout/Page-Size`，50 / 100 / 200 / 500）、「分类栏默认展开」（`Layout/Expand-Categories`）与「悬停提示延迟（毫秒）」（`Layout/Tooltip-Delay`，默认 2000，0 表示立刻弹出）三张卡。
+「设置 → 外观」另有「每页条数」（`Layout/Page-Size`，50 / 100 / 200 / 500）、「分类栏默认展开」（`Layout/Expand-Categories`）与「悬停提示延迟（毫秒）」（`Layout/Tooltip-Delay`，默认 2000，0 表示立刻弹出）与「左键双击」（`Layout/Double-Click-Action`，默认「打开查看器」，可改成「打开编辑器」——只影响左键双击，右键菜单里两个入口都还在）四张卡。
 所有数字配置卡都换成 `framework/settings_cards.py` 的 `NumberSettingCard`：滑块左边多一个输入框（宽 `SPIN_WIDTH` = 96 px），
 滑块与输入框双向同步、取值范围直接取配置项的 `range`，要精确填一个数时不必拖滑块；自检 `number_setting_cards` 逐张验范围与双向同步。
 设置页的每张配置卡（开关 / 下拉 / 数字）改动后都会在右上角弹一条提示：`SettingsPage._connect_setting_toasts()` 汇总三类信号，
@@ -534,13 +544,30 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 窗口（Esc 或标题栏关闭按钮退出）；缺少该插件时提示「缺少弹窗工具库（dialog），请到「插件」页启用后重试」。
 程序侧只剩调度：`app.sdk.viewers` 的 `open_path()` / `open_viewer_with()` / `open_system()` 通过 `viewer.open` 扩展接口把活儿交给插件
 （`plugins/builtin.lib.viewer/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。
-数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开；
+数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开（`Layout/Double-Click-Action` 选成「打开编辑器」时改走 `app.sdk.editors` 的 `edit_path()`，`ManagePage._open_in_editor()`；没装编辑器插件时编辑器门面自己退回系统默认程序）；
 右键「查看器」里的点名查看器与「系统默认程序 / 交给系统选择…」分别走 `open_viewer_with()` 与 `open_system()`。
 
 查看器由 `plugins/builtin.lib.viewer/registry.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），模块级实例 `viewer_registry`
 随 `viewer.open` 扩展接口一起由插件持有。`PluginService.load()`（`src/main.py` 启动时调用；历史命名 `load_viewers()`）先取旧接口调
 `api.clear()` 清空注册表、再清空 `ExtensionRegistry`，然后按上面的顺序载入所有已启用插件，单个插件出错只把错误记在该插件上；
 插件卸载时 `_drop_plugin_state()` 调 `api.unregister_plugin(plugin_id)`。禁用「查看器」插件后，对应格式会退回系统默认程序。
+
+### 编辑器机制与编辑器插件
+
+数据编辑走的是与查看器**平行**的一套机制：程序侧 `app.sdk.editors` 只留类型别名（`EditorInfo` / `EditorFactory` / `EditorOpener`）与调度门面
+（`edit_path()` / `edit_with()` / `open_system()`，拿不到 `editor.open` 接口时退回系统默认编辑器）；
+注册表、规则（`.configs/editors.json`）与窗口外壳都在工具库插件 `builtin.lib.editor`（`plugin.py` 提供 `EditorPlugin` 基类与 `EditorWindow`
+窗口外壳，`registry.py` 提供 `EditorRegistry`）里。数据管理页右键的「编辑器」子菜单由程序本体搭出来
+（`ManagePage.editor_menu_items()` / `_build_editor_menu()` 读 `app.sdk.editors.editors_for()`），所以禁用 `builtin.lib.editor` 后菜单仍然在，
+只是只剩「系统默认程序 / 交给系统选择…」。
+编辑器分两种 `kind`：`internal` 在程序内用可编辑控件改内容（控件若提供 `save()` / `is_dirty()`，窗口会启用「保存」按钮、显示「已修改」并在关闭前
+询问未保存改动，保存后通过公开信号刷新条目的 checksum / size / 内容）；`external` 不提供程序内控件，直接调用系统默认程序编辑，符合「本身进行
+数据编辑则打开电脑系统默认的编辑器」。
+内置编辑器插件：`builtin.editor.text`（文本 / 代码 / Markdown / CSV / JSON 等文本后缀的内部编辑器，复用 `app.sdk.data` 的编码探测）与
+`builtin.editor.office`（doc/docx/xls/xlsx/ppt/pptx/pdf 等文档表格走系统默认程序）。没有可用编辑器插件时，右键「编辑器 → 系统默认程序」走
+`app.sdk.editors.open_system()` 退回系统默认程序，子菜单不会因为缺少插件而消失。
+「编辑器」配置页与「查看器」页同构：左列格式清单每行标注当前打开方式（`内置编辑器（…）` / `自定义程序（…）` / `继承系统默认`）与「库中 N 项」，
+搜索框按「格式 + 编辑器名」过滤，见 `EditorConfigPage._fill_list()` / `_state_text()`。
 启动时的控制台输出分三层，程序侧不需要再打印任何东西：`app.sdk` 第一次被导入时播报一次
 「SDK 已载入：版本 1.0」（`app.sdk.sdk_banner()`），随后每载入成功一个插件各来一行「插件 `<id>` 已载入」，
 最后由 `PluginService.loaded_summary()` 给一句汇总，形如
@@ -578,10 +605,10 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 ### 扩展点、事件与插件页面
 
-插件除了提供查看器与扩展接口，还能往界面上加东西。程序定义了 10 个扩展点（`src/app/sdk/points.py` 的 `ExtensionPoint`）：
+插件除了提供查看器与扩展接口，还能往界面上加东西。程序定义了 11 个扩展点（`src/app/sdk/points.py` 的 `ExtensionPoint`）：
 概览卡片（`app.ui.home.kpi`）、设置卡片（`app.ui.settings.card`）、数据管理工具栏（`app.ui.manage.toolbar`）、条目右键菜单
 （`app.ui.manage.item_menu`）、详情面板行（`app.ui.detail.panel`）、导入筛选器（`app.ui.import.filter`）、查看器（`app.viewer`）、
-页面（`app.ui.page`）；另有 `app.data.import.hook` 与 `app.item.open.resolver` 是**协议预留**、程序侧尚未接线。
+编辑器（`app.editor`）、页面（`app.ui.page`）；另有 `app.data.import.hook` 与 `app.item.open.resolver` 是**协议预留**、程序侧尚未接线。
 界面上的扩展点由 `src/app/ui/framework/contributions.py` 统一读取，插件用 `ctx.contribute(扩展点, {...})` 贡献，
 插件被禁用时贡献随之撤销；某个回调抛异常只记日志，不会影响页面。
 

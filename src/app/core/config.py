@@ -49,6 +49,11 @@ SIMPLE_DEFAULT = "default"
 SIMPLE_FULL = "full"
 SIMPLE_MODES = (SIMPLE_NONE, SIMPLE_DEFAULT, SIMPLE_FULL)
 
+#: 数据管理页左键双击条目时的动作（设置页可改）
+DOUBLE_CLICK_VIEWER = "viewer"
+DOUBLE_CLICK_EDITOR = "editor"
+DOUBLE_CLICK_ACTIONS = (DOUBLE_CLICK_VIEWER, DOUBLE_CLICK_EDITOR)
+
 
 class SimpleDisplayValidator(OptionsValidator):
     """简化显示挡位：把旧版的布尔值换算成挡位（`true` → 完全简化、`false` → 不简化）。"""
@@ -89,6 +94,10 @@ class Config(QConfig):
     )
     # 悬停提示：鼠标停在按钮或标题上多久才弹出说明（毫秒，0 表示立刻弹出）
     tooltipDelay = RangeConfigItem("Layout", "Tooltip-Delay", 2000, RangeValidator(0, 10_000))
+    # 左键双击：数据管理页双击条目时打开查看器（默认）还是交给编辑器插件
+    doubleClickAction = OptionsConfigItem(
+        "Layout", "Double-Click-Action", DOUBLE_CLICK_VIEWER, OptionsValidator(list(DOUBLE_CLICK_ACTIONS))
+    )
 
     # 日志
     logLevel = OptionsConfigItem(

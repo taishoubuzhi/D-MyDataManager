@@ -31,8 +31,12 @@ class ItemService:
             item.tags = self.tags.ensure_many(fields.pop("tags"), user_id=item.user_id)
         if "keywords" in fields:
             fields["keywords"] = [str(k).strip() for k in fields["keywords"] if str(k).strip()]
+        old_name = item.name
         changed_content = "content" in fields and fields["content"] != item.content
         item = self.items.update(item, **fields)
+        if item.name != old_name:
+            # 改名同时重命名库内文件，避免显示名与磁盘文件名对不上。
+            self.libraries.rename_item_file(item, item.name)
         if changed_content:
             checksum, store_rel, size = self.store.put_text(
                 item.content, name=item.name, mime=item.mime or "text/plain"
@@ -142,6 +146,24 @@ class ItemService:
     def file_path_of(self, item: DataItem) -> Path | None:
         path = self.libraries.abs_path(item)
         return path if path is not None and path.exists() else None
+
+    def refresh_file(self, item: DataItem) -> bool:
+        """按磁盘上的库内文件重算 checksum / size（编辑器保存后调用），文本项同步 content。"""
+        path = self.file_path_of(item)
+        if path is None:
+            return False
+        checksum, store_rel, size = self.store.put_file(path, name=item.name, mime=item.mime or "")
+        item.checksum = checksum
+        item.size = size
+        if item.type is DataType.TEXT:
+            try:
+                item.content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                logger.warning("重新读取文本内容失败：{}", path)
+        self.blobs.register(checksum, size, item.mime or "", store_rel)
+        feature_service.replace_features(self.session, item)
+        self.session.flush()
+        return True
 
     def open_item(self, item: DataItem) -> bool:
         """用系统默认程序打开；内置查看器由查看器插件库按规则处理。"""

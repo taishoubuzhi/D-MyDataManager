@@ -307,6 +307,34 @@ class LibraryService:
         if not hidden and previous is not None:
             self._prune_empty_hidden(previous.parent)
 
+    @guarded
+    def rename_item_file(self, item, name: str) -> Path | None:
+        """改名后同步重命名库内文件：保持所在目录、隐藏位与扩展名，冲突时加序号。"""
+        library = item.library or (self.libraries.get(item.library_id) if item.library_id else None)
+        library = library or self.ensure_default()
+        if not item.file_path:
+            return None
+        current = Path(library.path) / item.file_path
+        if not current.is_file():
+            logger.warning("库内文件不存在，只改显示名：{}", current)
+            return None
+        stem = sanitize_dir_name(name)
+        suffix = current.suffix
+        if suffix and stem.lower().endswith(suffix.lower()):
+            stem = sanitize_dir_name(stem[: -len(suffix)])
+        stem = stem or current.stem
+        candidate = current.parent / f"{stem}{suffix}"
+        index = 1
+        while candidate.exists() and candidate != current:
+            candidate = current.parent / f"{stem}_{index}{suffix}"
+            index += 1
+        if candidate != current:
+            current.replace(candidate)
+        item.file_path = candidate.relative_to(Path(library.path)).as_posix()
+        self.session.flush()
+        logger.info("库内文件已重命名：{} -> {}", current.name, candidate.name)
+        return candidate
+
     def _prune_empty_hidden(self, directory: Path) -> None:
         """隐藏目录空了就删掉，避免库里留下大量空 .hiddens 目录。"""
         if directory.name != paths.HIDDEN_DIR_NAME or not directory.is_dir():

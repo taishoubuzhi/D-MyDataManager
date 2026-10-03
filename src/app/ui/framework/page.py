@@ -37,6 +37,8 @@ class PageBase:
         self.body: QVBoxLayout
         #: 标题区（由 `add_header()` 建立）。
         self.header: PageHeader | None = None
+        #: 页面不可见时被跳过的刷新（`showEvent` 里补做）。
+        self._refresh_pending = False
 
     # ------------------------------------------------------------------ 骨架
     def add_header(self, title: str = "", subtitle: str = "") -> PageHeader:
@@ -87,9 +89,26 @@ class PageBase:
         """子类覆盖：把数据重新填进界面。"""
 
     def auto_refresh(self, *signals) -> None:
-        """把给定的 signalBus 信号接到 `refresh()`（页面销毁时 Qt 会自动断开）。"""
+        """把给定的 signalBus 信号接到 `refresh()`（页面销毁时 Qt 会自动断开）。
+
+        页面不可见时先把刷新挂起（`_refresh_pending`），等 `showEvent` 再补做一次：
+        数据变化时重建整页控件的开销不小，隐藏页没必要跟着刷。窗口整体不可见时
+        （自检、离屏运行）保持旧的立即刷新行为。
+        """
         for signal in signals:
-            signal.connect(self.refresh)
+            signal.connect(self._on_auto_refresh)
+
+    def _on_auto_refresh(self) -> None:
+        if self.isVisible() or not self.window().isVisible():
+            self.refresh()
+            return
+        self._refresh_pending = True
+
+    def _flush_pending_refresh(self) -> None:
+        """`showEvent` 里补做挂起的刷新（子类在自己的 showEvent 里调用）。"""
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh()
 
 
 class ScrollPage(ScrollArea, PageBase):
@@ -112,6 +131,10 @@ class ScrollPage(ScrollArea, PageBase):
         if self._page_title:
             self.add_header()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        ScrollArea.showEvent(self, event)
+        self._flush_pending_refresh()
+
 
 class Page(QWidget, PageBase):
     """满高页面：正文占满可视区域，适合表格、分栏与树 + 详情布局。"""
@@ -125,6 +148,10 @@ class Page(QWidget, PageBase):
         self.body = layout
         if self._page_title:
             self.add_header()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        QWidget.showEvent(self, event)
+        self._flush_pending_refresh()
 
 
 __all__ = ["Page", "PageBase", "ScrollPage"]

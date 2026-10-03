@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from . import data, storage, ui, viewers
+from . import data, editors, storage, ui, viewers
 from .context import ContextServices, PluginContext
 from .errors import DependencyError, ManifestError, PluginError, SdkError, VersionError
 from .library import library, register_dependency_lookup, register_library_resolver, requires
@@ -42,6 +42,7 @@ __all__ = [
     "collect_plugin_classes",
     "compare_versions",
     "data",
+    "editors",
     "events",
     "library",
     "parse_range",

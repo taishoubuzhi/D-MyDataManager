@@ -4,7 +4,7 @@
 
 - 清单字段、版本范围、依赖规则、载入阶段、状态文件等**规范**见 [`plugins/PLUGIN_PROTOCOL.md`](plugins/PLUGIN_PROTOCOL.md)。
 - 程序开放了哪些**扩展点**、会广播哪些**事件**见 [`plugins/EXTENSION_POINTS.md`](plugins/EXTENSION_POINTS.md)。
-- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/builtin.lib.viewer/`（库插件）、`plugins/builtin.image/`（功能插件样板）。
+- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/builtin.image/`（功能插件样板）。
 
 ## 1. 插件是什么
 
@@ -20,7 +20,7 @@ plugins/demo.hello/
 
 程序启动时按依赖顺序把插件载入内存，插件通过 **SDK**（`app.sdk`）拿到程序给的能力。控制台会播报进展：先按「启动 1/8 … 8/8」报告启动阶段，插件部分打印「插件扫描完成：发现 N 个（启用 X、未启用 Y、清单有误 Z）」，载入完成后打印汇总「插件载入：共 N 个（已启用 X、未启用 Y）；库插件 …、功能插件 …」；
 
-- 往**扩展点**放东西（概览卡片、工具栏按钮、右键菜单、详情行、设置卡片、页面、查看器……）；
+- 往**扩展点**放东西（概览卡片、工具栏按钮、右键菜单、详情行、设置卡片、页面、查看器、编辑器……）；
 - 订阅程序的**事件**（导入、删除、用户切换、主题变化……）；
 - 读**插件选项**与**数据文件**；
 - 用 `provide()` / `require()` 在插件之间交换运行期对象；
@@ -129,6 +129,7 @@ class HelloPlugin(Plugin):
 | `ctx.contributions(point="")` | 看自己贡献了什么 |
 | `ctx.on(event, handler)` / `ctx.emit(event, **payload)` | 订阅 / 广播事件 |
 | `ctx.add_viewer(name, **fields)` | 注册查看器 |
+| `ctx.add_editor(name, **fields)` | 注册编辑器（`kind` 分 `internal` / `external`） |
 | `ctx.add_page(key, title, factory, **fields)` | 往主窗口加一个页面 |
 | `ctx.provide(name, obj)` / `ctx.require(name)` / `ctx.has(name)` | 插件之间交换运行期对象 |
 | `ctx.host` | 宿主服务对象（高级用法，一般用不到） |
@@ -369,6 +370,7 @@ data = ctx.data("info")                                                     # �
 value = ctx.option("zoom_step", 1.25)                                       # 读插件选项
 ctx.add_page("hello", "演示页", self._build, icon="HOME")                    # 加一个页面
 ctx.add_viewer("我的查看器", extensions=["abc"], factory=self._view)         # 注册查看器
+ctx.add_editor("我的编辑器", extensions=["abc"], factory=self._edit)         # 注册编辑器
 ctx.require("dialog")                                                       # 用别的插件提供的接口
 ```
 

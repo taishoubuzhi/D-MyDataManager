@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayou
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, CheckBox
 
 from ...db.models import DataItem
-from ..framework import accent_color, accent_name, elide, format_datetime, format_size, release_widget, type_icon, type_name
+from ..framework import accent_color, accent_name, elide, format_datetime, format_size, type_icon, type_name
 from .cover_loader import cover_loader
 
 COVER_SIZE = 48
@@ -63,22 +63,34 @@ class _TagRow(QWidget):
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(4)
+        #: 复用的标签胶囊：刷新时改文案/显隐，不再销毁重建（构造标签很贵）。
+        self._chips: list[CaptionLabel] = []
+        self._more: CaptionLabel | None = None
+        self._layout.addStretch(1)
 
     def set_tags(self, names: list[str]) -> None:
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                release_widget(widget)
-        for name in names[:4]:
-            chip = CaptionLabel(f"{self._prefix}{name}", self)
+        shown = names[:4]
+        while len(self._chips) < len(shown):
+            chip = CaptionLabel(self)
             chip.setStyleSheet(
                 f"background: rgba({self._rgba}); border-radius: 8px; padding: 1px 6px;"
             )
-            self._layout.addWidget(chip)
-        if len(names) > 4:
-            self._layout.addWidget(CaptionLabel(f"+{len(names) - 4}", self))
-        self._layout.addStretch(1)
+            self._layout.insertWidget(len(self._chips), chip)
+            self._chips.append(chip)
+        for index, chip in enumerate(self._chips):
+            visible = index < len(shown)
+            chip.setVisible(visible)
+            if visible:
+                chip.setText(f"{self._prefix}{shown[index]}")
+        extra = len(names) - 4
+        if extra > 0:
+            if self._more is None:
+                self._more = CaptionLabel(self)
+                self._layout.insertWidget(len(self._chips), self._more)
+            self._more.setText(f"+{extra}")
+            self._more.setVisible(True)
+        elif self._more is not None:
+            self._more.setVisible(False)
 
 
 class ItemCard(CardWidget):
@@ -125,10 +137,10 @@ class ItemCard(CardWidget):
         info.addWidget(self._title)
         info.addWidget(self._meta)
         info.addWidget(self._tags)
-        if keywords:
-            self._keywords.set_tags(keywords)
-            self._keywords.setToolTip("关键词：" + "、".join(keywords))
-            info.addWidget(self._keywords)
+        info.addWidget(self._keywords)
+        self._keywords.set_tags(keywords)
+        self._keywords.setToolTip("关键词：" + ("、".join(keywords) or "无"))
+        self._keywords.setVisible(bool(keywords))
 
         for flag in (Qt.WidgetAttribute.WA_TransparentForMouseEvents,):
             self._title.setAttribute(flag, True)
@@ -154,6 +166,22 @@ class ItemCard(CardWidget):
     @property
     def item(self) -> DataItem:
         return self._item
+
+    def set_item(self, item: DataItem) -> None:
+        """就地换成另一条数据（刷新时复用控件，避免整页销毁重建）。"""
+        self._item = item
+        self._cover.set_item(item)
+        self._title.setText(elide(item.name, 34))
+        self._meta.setText(
+            f"{type_name(item.type)} · {format_size(item.size)} · {format_datetime(item.created_at)}"
+        )
+        tag_names = list(item.tag_names)
+        keywords = [str(word) for word in (item.keywords or []) if str(word).strip()]
+        self._tags.set_tags(tag_names)
+        self._tags.setToolTip("标签：" + ("、".join(tag_names) or "无"))
+        self._keywords.set_tags(keywords)
+        self._keywords.setToolTip("关键词：" + ("、".join(keywords) or "无"))
+        self._keywords.setVisible(bool(keywords))
 
     def is_checked(self) -> bool:
         return self.check_box.isChecked()
@@ -235,6 +263,21 @@ class ItemListRow(QWidget):
     def item(self) -> DataItem:
         return self._item
 
+    def set_item(self, item: DataItem) -> None:
+        """就地换成另一条数据（刷新时复用控件，避免整页销毁重建）。"""
+        self._item = item
+        self._cover.set_item(item)
+        self._title.setText(elide(item.name, 46))
+        self._meta.setText(
+            f"{type_name(item.type)} · {format_size(item.size)} · {format_datetime(item.created_at)}"
+        )
+        tag_names = list(item.tag_names)
+        keywords = [str(word) for word in (item.keywords or []) if str(word).strip()]
+        self._tags.setText(" ".join(f"#{name}" for name in tag_names[:3]))
+        self._tags.setToolTip("标签：" + ("、".join(tag_names) or "无"))
+        self._keywords.setText("、".join(keywords[:3]))
+        self._keywords.setToolTip("关键词：" + ("、".join(keywords) or "无"))
+
     def is_checked(self) -> bool:
         return self.check_box.isChecked()
 
@@ -250,12 +293,14 @@ class ItemListRow(QWidget):
         self.checkedChanged.emit(self._item, self.check_box.isChecked())
 
     def set_selected(self, selected: bool) -> None:
-        self._selected = selected
-        self.setStyleSheet(
-            f"background: {_accent_rgba(0.16)}; border-radius: 6px;"
-            if selected
-            else "background: transparent;"
-        )
+        selected = bool(selected)
+        if self._selected != selected:
+            self._selected = selected
+            self.setStyleSheet(
+                f"background: {_accent_rgba(0.16)}; border-radius: 6px;"
+                if selected
+                else "background: transparent;"
+            )
         self.set_checked(selected)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802

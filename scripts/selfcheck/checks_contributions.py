@@ -107,8 +107,27 @@ def plugin_ui_contributions(case: Case) -> None:
         texts = [action.text() for action in manage._build_menu(item).actions()]
         if "示例菜单项" not in texts:
             problems.append(f"右键菜单应含插件贡献项，实际 {texts}")
-        elif texts[-1] != "示例菜单项":
-            problems.append(f"插件菜单项应排在最后，实际 {texts}")
+        elif texts[0] != "直接打开" or texts.index("示例菜单项") != 1:
+            # 「查看器」「编辑器」都是子菜单，不进 actions()；贡献项要排在它们后面、内置项前面
+            problems.append(f"插件菜单项应紧跟「查看器」「编辑器」子菜单之后，实际 {texts}")
+        if "示例菜单项" in texts:
+            # 回归：贡献项的回调必须拿到被右键的数据项，不能拿到贡献对象本身
+            from app.services.plugin_service import PluginHost
+
+            toasts: list[tuple[str, str]] = []
+            original_toast = PluginHost.toast
+            PluginHost.toast = lambda self, title, content="": toasts.append((title, content))
+            try:
+                action = next(
+                    action
+                    for action in manage._build_menu(item).actions()
+                    if action.text() == "示例菜单项"
+                )
+                action.trigger()
+            finally:
+                PluginHost.toast = original_toast
+            if not toasts or str(item.name) not in toasts[-1][1]:
+                problems.append(f"插件菜单回调应收到被点的条目 {item.name!r}，实际 {toasts}")
         lines = manage._plugin_detail_lines(item)
         if not any(line.startswith("示例信息") for line in lines):
             problems.append(f"详情行应含插件贡献，实际 {lines}")

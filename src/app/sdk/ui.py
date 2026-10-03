@@ -24,6 +24,7 @@ __all__ = [
     "clear_scroll_background",
     "open_default",
     "open_with_program",
+    "notify_items_changed",
     "reveal",
     "simple_display",
     "simple_mode",
@@ -95,3 +96,13 @@ def reveal(path: str | Path) -> bool:
     from ..core import shell
 
     return bool(shell.reveal(path))
+
+
+def notify_items_changed() -> None:
+    """库内文件被外部（如内置编辑器）改写后广播一次条目变更，让界面刷新列表。
+
+    程序只提供这条公开信号：插件改完库内文件调用它，不要直接写库。
+    """
+    from ..core.signals import signalBus
+
+    signalBus.itemsChanged.emit()
