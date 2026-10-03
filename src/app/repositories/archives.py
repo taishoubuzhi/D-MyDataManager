@@ -57,12 +57,14 @@ class ArchiveRepository(Repository[Archive]):
         entries: list[dict],
         new_blobs: int,
         total_size: int,
+        logical_size: int = 0,
     ) -> Archive:
         archive = Archive(
             name=name,
             note=note,
             item_count=len(entries),
             total_size=total_size,
+            logical_size=logical_size,
             new_blobs=new_blobs,
         )
         self.add(archive)

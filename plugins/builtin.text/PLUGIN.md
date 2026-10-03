@@ -13,11 +13,11 @@
 ## 依赖
 
 - builtin.lib.viewer（查看器基类）
-- builtin.lib.dialog（弹窗外壳）
+- builtin.lib.ui（弹窗外壳）
 
 ## 贡献
 
-- 打开方式（app.viewer）：kind = text，认领 60 多个常见文本与代码扩展名
+- 查看器（app.viewer）：kind = text，认领 60 多个常见文本与代码扩展名
   （txt / log / json / xml / yaml / toml / ini / py / js / ts / java / c / cpp / go / rs / sh / ps1 / sql / html / css …），
   能力：编码探测 / 编码切换 / 大文件截断 / 行号统计。完整清单见 data/viewer.json。
 

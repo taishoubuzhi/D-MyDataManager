@@ -1,14 +1,23 @@
-"""表格查看器：xlsx / xlsm / csv / tsv 的工作表切换与网格预览。"""
+"""表格查看器：xlsx / xlsm / csv / tsv 的工作表切换与网格预览。
+
+网格用 builtin.lib.ui 的只读表格工厂，工作表选择用它的下拉工厂。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtWidgets import QAbstractItemView, QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, TableWidget
+from PyQt6.QtWidgets import QTableWidgetItem, QVBoxLayout, QWidget
 
 from app.sdk.data import SheetData, csv_rows, human_size, xlsx_sheets
 from app.sdk.ui import COMPACT_MARGINS
+from dm_plugin.builtin.lib.ui.plugin import (
+    caption,
+    combo_box,
+    read_only_table,
+    status_label,
+    toolbar,
+)
 
 XLSX_SUFFIXES = ("xlsx", "xlsm")
 MAX_ROWS = 300
@@ -55,29 +64,29 @@ class SheetViewer(QWidget):
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        bar.addWidget(CaptionLabel("工作表", self))
-        self._combo = ComboBox(self)
-        self._combo.addItems([sheet.name for sheet in self._sheets] or ["无可用工作表"])
-        self._combo.setFixedWidth(220)
+        bar, row = toolbar(self)
+        row.addWidget(caption(bar, "工作表"))
+        self._combo = combo_box(
+            bar,
+            items=tuple(sheet.name for sheet in self._sheets) or ("无可用工作表",),
+            width=220,
+            on_change=self._show_index,
+        )
         self._combo.setEnabled(bool(self._sheets))
-        self._combo.currentIndexChanged.connect(self._show)
-        bar.addWidget(self._combo)
-        bar.addStretch(1)
-        self.status_label = CaptionLabel(self.caption, self)
-        bar.addWidget(self.status_label)
-        root.addLayout(bar)
+        row.addWidget(self._combo)
+        row.addStretch(1)
+        self.status_label = status_label(bar, self.caption)
+        row.addWidget(self.status_label)
+        root.addWidget(bar)
 
-        self._table = TableWidget(self)
-        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._table.setWordWrap(False)
-        self._table.setBorderVisible(True)
-        self._table.setBorderRadius(8)
+        self._table = read_only_table(self)
         root.addWidget(self._table, 1)
 
         if self._error:
             self.status_label.setText(f"无法读取表格：{self._error}")
+
+    def _show_index(self, index: int) -> None:
+        self._show(int(index) if index is not None else -1)
 
     def _show(self, index: int) -> None:
         if not self._sheets or index < 0 or index >= len(self._sheets):

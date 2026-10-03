@@ -33,14 +33,19 @@ SRC_DIR = APP_DIR.parent
 RESOURCE_DIR = APP_DIR / "resource"
 IMAGE_DIR = RESOURCE_DIR / "images"
 # 配置写在项目根目录（不随代码分发，升级 / 拉取代码时不会被覆盖）
-CONFIG_DIR = ROOT / "config"
+CONFIG_DIR_NAME = ".configs"
+LOG_DIR_NAME = ".logs"
+# 旧版目录名：启动时由 migrate_app_dirs() 并进新目录
+LEGACY_CONFIG_DIR_NAME = "config"
+LEGACY_LOG_DIR_NAME = "logs"
+CONFIG_DIR = ROOT / CONFIG_DIR_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # 运行期数据：资源文件夹（默认 <根>/.resources，隐藏目录；可在设置里改到别处）
 RESOURCE_ROOT_NAME = ".resources"
 LEGACY_RESOURCE_DIR_NAME = "resources"
 DEFAULT_RESOURCE_DIR = ROOT / RESOURCE_ROOT_NAME
-LOG_DIR = ROOT / "logs"
+LOG_DIR = ROOT / LOG_DIR_NAME
 DEFAULT_EXPORT_DIR = ROOT / "exports"
 
 # 资源文件夹内部结构：数据库、库文件夹都由 apply_resource_root() 按配置重算
@@ -51,8 +56,10 @@ DEFAULT_LIBRARY_DIR = DATA_DIR / "library"
 # 插件：第三方插件放在项目根（打包后为可执行文件同级），随程序分发的内置插件在代码里
 PLUGIN_DIR = ROOT / "plugins"
 PLUGIN_STATE_FILE = CONFIG_DIR / "plugins.json"
-# 打开方式规则：扩展名 → 内置 / 继承 / 自定义
-OPEN_WITH_FILE = CONFIG_DIR / "open_with.json"
+# 查看器规则：扩展名 → 内置查看器 / 继承系统默认 / 自定义程序（由 builtin.lib.viewer 插件读写）
+VIEWER_RULES_FILE = CONFIG_DIR / "viewers.json"
+# 查看器规则的旧文件名：首次载入时由插件自动迁移到 VIEWER_RULES_FILE
+LEGACY_VIEWER_RULES_FILE = CONFIG_DIR / "open_with.json"
 # 会话标记：程序启动时写下，正常退出时删除；残留下来的就是「上次没正常退出」
 SESSION_FILE = CONFIG_DIR / "session.json"
 PLUGIN_MANIFEST = "plugin.json"
@@ -173,6 +180,37 @@ def apply_resource_root(root: Path) -> Path:
     LEGACY_STORE_DIR = root / "store"
     LEGACY_COVER_DIR = root / "covers"
     return root
+
+
+def migrate_app_dirs() -> None:
+    """把旧版的 config/、logs/ 合并进 .configs/、.logs/，再删掉空下来的旧目录。
+
+    两个目录都在项目根（打包后是可执行文件同级）。同名条目以新目录为准（不覆盖），
+    迁移失败只记日志，下次启动再试，不阻断启动。
+    """
+    pairs = (
+        (LEGACY_CONFIG_DIR_NAME, CONFIG_DIR_NAME),
+        (LEGACY_LOG_DIR_NAME, LOG_DIR_NAME),
+    )
+    for legacy_name, new_name in pairs:
+        legacy = ROOT / legacy_name
+        destination = ROOT / new_name
+        if not legacy.is_dir():
+            continue
+        try:
+            make_dir(destination)
+            for child in sorted(legacy.iterdir(), key=lambda item: item.name):
+                target = destination / child.name
+                if not target.exists():
+                    child.rename(target)
+            _logger.info("已把运行期目录 %s 并入 %s", legacy.name, destination.name)
+        except OSError as exc:
+            _logger.warning("无法把 %s 迁移到 %s：%s", legacy, destination, exc)
+            continue
+        try:
+            legacy.rmdir()
+        except OSError:
+            pass  # 还有没搬走的旧条目（与新目录重名），留给用户自己处理
 
 
 def migrate_legacy_dir(target: Path | None = None) -> Path | None:

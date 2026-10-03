@@ -37,7 +37,7 @@ _FILTER_COLUMNS = (
     ("name", "名称", "text"),
     ("scope", "归属", "choice"),
     ("owner", "创建者", "choice"),
-    ("usage", "数据项数", "text"),
+    ("usage", "数据项数", "number", {"unit": "count"}),
 )
 
 
@@ -60,6 +60,7 @@ class TagPage(Page):
         self.tag_repo = self.taxonomy.tags
         self._tags: list[Tag] = []
         self._row_values: list[dict[str, str]] = []
+        self._row_numbers: list[dict[str, object]] = []
         self._user_id: int | None = None
         self._is_admin = False
         self._checked: set[int] = set()
@@ -129,6 +130,7 @@ class TagPage(Page):
         self.table.setRowCount(len(self._tags))
         self._checked &= {int(tag.id) for tag in self._tags}
         self._row_values = []
+        self._row_numbers = []
         for row, tag in enumerate(self._tags):
             creator = self.tag_repo.is_creator(tag, self._user_id)
             if tag.is_global:
@@ -137,7 +139,8 @@ class TagPage(Page):
                 scope = "个人（我）" if creator else "个人"
             owner_id = tag.created_by or tag.user_id
             owner = owners.get(owner_id, "—")
-            count = str(usage.get(tag.name, 0))
+            used = int(usage.get(tag.name, 0) or 0)
+            count = str(used)
             self.table.setItem(
                 row, TAG_CHECK_COLUMN, check_cell(int(tag.id) in self._checked)
             )
@@ -153,6 +156,7 @@ class TagPage(Page):
             self._row_values.append(
                 {"name": tag.name, "scope": scope, "owner": owner, "usage": count}
             )
+            self._row_numbers.append({"usage": float(used)})
         self.filter_bar.set_options("scope", column_values(self.table, TAG_CHECK_COLUMN + 2))
         self.filter_bar.set_options("owner", column_values(self.table, TAG_CHECK_COLUMN + 3))
         self._apply_filters()
@@ -163,7 +167,7 @@ class TagPage(Page):
         filters = self.filter_bar.filters()
         visible = 0
         for row, values in enumerate(self._row_values):
-            hit = match_filters(values, filters)
+            hit = match_filters(values, filters, self._row_numbers[row])
             self.table.setRowHidden(row, not hit)
             visible += int(hit)
         self.table.clearSelection()

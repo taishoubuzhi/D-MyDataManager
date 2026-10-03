@@ -3,16 +3,24 @@
   "name": "查看器库",
   "version": "1.0.0",
   "api_version": ">=1.0 <2.0",
-  "description": "查看器工具库：提供 ViewerPlugin 基类、ViewerWindow 窗口外壳与 MediaViewer 播放页，供查看器插件搭自己的查看器。",
+  "description": "查看器工具库：提供 ViewerPlugin 基类、ViewerWindow 窗口外壳与查看器注册表，并注册 viewer.open 调度接口与「查看器」配置页。",
   "author": "D-MyDataManager",
   "builtin": true,
   "entry": "plugin.py",
   "class": "ViewerLibraryPlugin",
+  "depends": [
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "provides": [
+    "viewer.open"
+  ],
   "libraries": [
     {
       "name": "viewer",
       "module": "plugin.py",
-      "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、播放页 MediaViewer"
+      "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、注册表 ViewerRegistry；调度接口 ViewerOpenApi、规则 ViewerRules 与配置页 ViewerConfigPage"
     }
   ]
 }

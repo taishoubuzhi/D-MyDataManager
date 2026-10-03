@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from . import data, ui
+from . import data, storage, ui, viewers
 from .context import ContextServices, PluginContext
 from .errors import DependencyError, ManifestError, PluginError, SdkError, VersionError
 from .library import library, register_dependency_lookup, register_library_resolver, requires
@@ -53,7 +53,9 @@ __all__ = [
     "requires",
     "satisfies",
     "sdk_banner",
+    "storage",
     "ui",
+    "viewers",
 ]
 
 

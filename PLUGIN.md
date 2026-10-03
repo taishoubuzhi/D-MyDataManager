@@ -128,7 +128,7 @@ class HelloPlugin(Plugin):
 | `ctx.contribute(point, value, *, key="", order=100, description="", **extra)` | 往扩展点放东西 |
 | `ctx.contributions(point="")` | 看自己贡献了什么 |
 | `ctx.on(event, handler)` / `ctx.emit(event, **payload)` | 订阅 / 广播事件 |
-| `ctx.add_viewer(name, **fields)` | 注册打开方式（查看器） |
+| `ctx.add_viewer(name, **fields)` | 注册查看器 |
 | `ctx.add_page(key, title, factory, **fields)` | 往主窗口加一个页面 |
 | `ctx.provide(name, obj)` / `ctx.require(name)` / `ctx.has(name)` | 插件之间交换运行期对象 |
 | `ctx.host` | 宿主服务对象（高级用法，一般用不到） |
@@ -201,7 +201,7 @@ button = ui.IconTextButton(FluentIcon.HEART, "示例动作", self)   # 图标 + 
   "api_version": ">=1.0 <2.0",
   "entry": "plugin.py",
   "libraries": [
-    {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、播放页 MediaViewer"}
+    {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、注册表 ViewerRegistry"}
   ]
 }
 ```
@@ -256,7 +256,7 @@ class ImageViewerPlugin(ViewerPlugin):
 ```json
 {
   "id": "builtin.image",
-  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.dialog"}],
+  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}],
   "data": {"viewer": "data/viewer.json"}
 }
 ```
@@ -276,7 +276,7 @@ class ImageViewerPlugin(ViewerPlugin):
 {
   "depends": [
     {"id": "builtin.lib.viewer"},
-    {"id": "builtin.lib.dialog"},
+    {"id": "builtin.lib.ui"},
     {"id": "other.storage", "version": ">=1.2 <2", "optional": true}
   ]
 }
@@ -319,7 +319,7 @@ plugins/<id>/
 | `插件初始化失败，详见日志` | `setup(ctx)` 里抛异常（常见：`require()` 的接口不存在、读数据文件时字段缺失） |
 | 贡献的东西没出现在界面上 | 扩展点名写错（用 `ExtensionPoint` 常量）、插件被禁用、或界面没刷新（重新打开该页试试）；回调抛异常只记日志，看日志确认 |
 | 改了插件选项没有生效 | 选项改动会让插件重新载入，重新打开界面即可；如果 `setup()` 里没读 `ctx.option()` 就不会生效 |
-| 想让插件默认不启用 | 「插件」页把它设为「禁用」（状态存在 `config/plugins.json`） |
+| 想让插件默认不启用 | 「插件」页把它设为「禁用」（状态存在 `.configs/plugins.json`） |
 
 排查时的几个顺手动作：
 
@@ -368,7 +368,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)                            # 订
 data = ctx.data("info")                                                     # 读 data/ 里的文件
 value = ctx.option("zoom_step", 1.25)                                       # 读插件选项
 ctx.add_page("hello", "演示页", self._build, icon="HOME")                    # 加一个页面
-ctx.add_viewer("我的查看器", extensions=["abc"], factory=self._view)         # 注册打开方式
+ctx.add_viewer("我的查看器", extensions=["abc"], factory=self._view)         # 注册查看器
 ctx.require("dialog")                                                       # 用别的插件提供的接口
 ```
 

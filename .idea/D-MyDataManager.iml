@@ -22,6 +22,7 @@
       <excludeFolder url="file://$MODULE_DIR$/tests/_tmp" />
       <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets" />
       <excludeFolder url="file://$MODULE_DIR$/tests/_scratch" />
+      <excludeFolder url="file://$MODULE_DIR$/.logs/_gates/tmp/pyc314/Program/PyCharm/python/LeetCode/D-MyDataManager/.venv" />
     </content>
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />

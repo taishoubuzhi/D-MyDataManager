@@ -1,4 +1,7 @@
-"""图片查看器：缩放、适应窗口、原始大小、旋转，并可在同目录图片间切换。"""
+"""图片查看器：缩放、适应窗口、原始大小、旋转，并可在同目录图片间切换。
+
+工具条按钮与图片画布来自 builtin.lib.ui，缩放 / 旋转逻辑仍在本模块。
+"""
 
 from __future__ import annotations
 
@@ -7,11 +10,18 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QTransform
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, ToolButton
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from qfluentwidgets import FluentIcon
 
 from app.sdk.data import human_size, image_info
-from app.sdk.ui import COMPACT_MARGINS, clear_scroll_background
+from app.sdk.ui import COMPACT_MARGINS
+from dm_plugin.builtin.lib.ui.plugin import (
+    caption,
+    image_canvas,
+    status_label,
+    tool_button,
+    toolbar,
+)
 
 ZOOM_STEP = 1.25
 ZOOM_MIN = 0.05
@@ -64,79 +74,66 @@ class ImageViewer(QWidget):
         self._siblings = sibling_images(self._path, extensions)
         self._index = self._siblings.index(self._path) if self._path in self._siblings else 0
         self._pixmap = QPixmap(str(self._path))
-        self.caption = self._describe()
+        self.caption = self._path.name
         self._build_ui()
         self._apply()
+        if self._fit:
+            self._scale = self._fit_scale()
+            self._apply()
 
     # ------------------------------------------------------------------ 界面
-    def _mode(self) -> Qt.TransformationMode:
-        return Qt.TransformationMode.SmoothTransformation if self._smooth else Qt.TransformationMode.FastTransformation
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
-        self._prev_button = ToolButton(FluentIcon.LEFT_ARROW, self)
-        self._prev_button.clicked.connect(lambda: self._step(-1))
-        self._next_button = ToolButton(FluentIcon.RIGHT_ARROW, self)
-        self._next_button.clicked.connect(lambda: self._step(1))
-        self._zoom_out_button = ToolButton(FluentIcon.ZOOM_OUT, self)
-        self._zoom_out_button.clicked.connect(lambda: self._zoom(1 / self._step_factor))
-        self._zoom_in_button = ToolButton(FluentIcon.ZOOM_IN, self)
-        self._zoom_in_button.clicked.connect(lambda: self._zoom(self._step_factor))
-        self._fit_button = ToolButton(FluentIcon.FIT_PAGE, self)
-        self._fit_button.clicked.connect(self._fit_window)
-        self._actual_button = ToolButton(FluentIcon.ZOOM, self)
-        self._actual_button.clicked.connect(self._actual_size)
-        self._rotate_button = ToolButton(FluentIcon.ROTATE, self)
-        self._rotate_button.clicked.connect(self._rotate)
-        for button in (
-            self._prev_button,
-            self._next_button,
-            self._zoom_out_button,
-            self._zoom_in_button,
-            self._fit_button,
-            self._actual_button,
-            self._rotate_button,
-        ):
-            bar.addWidget(button)
-        bar.addStretch(1)
-        self._zoom_label = CaptionLabel("100%", self)
-        bar.addWidget(self._zoom_label)
-        self._index_label = CaptionLabel("", self)
-        bar.addWidget(self._index_label)
-        root.addLayout(bar)
+        bar, row = toolbar(self)
+        row.addWidget(tool_button(bar, FluentIcon.ZOOM_IN, "放大", lambda: self._zoom(self._step_factor)))
+        row.addWidget(tool_button(bar, FluentIcon.ZOOM_OUT, "缩小", lambda: self._zoom(1.0 / self._step_factor)))
+        row.addWidget(tool_button(bar, FluentIcon.FIT_PAGE, "适应窗口", self._fit_window))
+        row.addWidget(tool_button(bar, FluentIcon.ZOOM, "原始大小", self._actual_size))
+        row.addWidget(tool_button(bar, FluentIcon.ROTATE, "向右旋转", lambda: self._rotate(90)))
+        row.addWidget(tool_button(bar, FluentIcon.LEFT_ARROW, "上一张", lambda: self._step_image(-1)))
+        row.addWidget(tool_button(bar, FluentIcon.RIGHT_ARROW, "下一张", lambda: self._step_image(1)))
+        row.addStretch(1)
+        self._zoom_label = caption(bar, "100%")
+        row.addWidget(self._zoom_label)
+        self.status_label = status_label(bar, "")
+        row.addWidget(self.status_label)
+        root.addWidget(bar)
 
-        self._label = QLabel(self)
-        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidget(self._label)
-        clear_scroll_background(self._scroll)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._scroll, self._label = image_canvas(self)
         root.addWidget(self._scroll, 1)
 
-        for button, tip in (
-            (self._prev_button, "上一张"),
-            (self._next_button, "下一张"),
-            (self._zoom_out_button, "缩小"),
-            (self._zoom_in_button, "放大"),
-            (self._fit_button, "适应窗口"),
-            (self._actual_button, "原始大小"),
-            (self._rotate_button, "旋转 90°"),
-        ):
-            button.setToolTip(tip)
-
-        single = len(self._siblings) <= 1
-        self._prev_button.setEnabled(not single)
-        self._next_button.setEnabled(not single)
-        if not single:
-            self._index_label.setText(f"{self._index + 1}/{len(self._siblings)}")
-
     # ------------------------------------------------------------------ 行为
+    def _fit_scale(self) -> float:
+        if self._pixmap.isNull():
+            return 1.0
+        available = self._scroll.viewport().size()
+        width = max(1, self._pixmap.width())
+        height = max(1, self._pixmap.height())
+        return max(ZOOM_MIN, min(available.width() / width, available.height() / height, ZOOM_MAX))
+
+    def _apply(self) -> None:
+        transform = QTransform()
+        transform.rotate(self._rotation)
+        transformed = self._pixmap.transformed(transform, Qt.TransformationMode.SmoothTransformation)
+        scaled = max(1, int(transformed.width() * self._scale))
+        shown = transformed.scaled(
+            scaled,
+            max(1, int(transformed.height() * self._scale)),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation if self._smooth else Qt.TransformationMode.FastTransformation,
+        )
+        self._label.setPixmap(shown)
+        self._label.resize(shown.size())
+        self._update_status()
+
+    def _viewport_size(self) -> tuple[int, int]:
+        """画布视口尺寸（适应窗口时按它算比例）。"""
+        size = self._scroll.viewport().size()
+        return size.width(), size.height()
+
     def _describe(self) -> str:
         pieces = [self._path.name]
         try:
@@ -150,30 +147,19 @@ class ImageViewer(QWidget):
             pieces.append(f"{info['frames']} 帧（显示首帧）")
         return " · ".join(pieces)
 
-    def _load(self, path: Path) -> None:
-        self._path = path
-        self._pixmap = QPixmap(str(path))
-        self._rotation = 0
-        self._scale = 1.0
-        self._fit = True  # 切图后重新适应窗口
+    def _update_status(self) -> None:
         self.caption = self._describe()
-        self._index_label.setText(f"{self._index + 1}/{len(self._siblings)}")
-        self._apply()
-
-    def _step(self, delta: int) -> None:
-        if len(self._siblings) <= 1:
-            return
-        self._index = (self._index + delta) % len(self._siblings)
-        self._load(self._siblings[self._index])
+        self._zoom_label.setText(f"{self._scale * 100:.0f}%")
+        self.status_label.setText(self.caption)
 
     def _zoom(self, factor: float) -> None:
         self._fit = False
-        self._scale = max(ZOOM_MIN, min(ZOOM_MAX, self._scale * factor))
+        self._scale = max(ZOOM_MIN, min(self._scale * factor, ZOOM_MAX))
         self._apply()
 
     def _fit_window(self) -> None:
         self._fit = True
-        self._scale = 1.0
+        self._scale = self._fit_scale()
         self._apply()
 
     def _actual_size(self) -> None:
@@ -181,47 +167,25 @@ class ImageViewer(QWidget):
         self._scale = 1.0
         self._apply()
 
-    def _rotate(self) -> None:
-        self._rotation = (self._rotation + 90) % 360
+    def _rotate(self, degrees: int) -> None:
+        self._rotation = (self._rotation + degrees) % 360
+        if self._fit:
+            self._scale = self._fit_scale()
         self._apply()
 
-    def _viewport_size(self) -> tuple[int, int]:
-        area = self._scroll.viewport().size()
-        return area.width(), area.height()
-
-    def _apply(self) -> None:
-        if self._pixmap.isNull():
-            self._label.setText("无法显示该图片（格式可能不受支持）")
-            self._label.adjustSize()
+    def _step_image(self, delta: int) -> None:
+        if len(self._siblings) < 2:
             return
-        pixmap = self._pixmap
-        if self._rotation:
-            pixmap = pixmap.transformed(QTransform().rotate(self._rotation), self._mode())
-        scale = self._scale
-        if self._fit and pixmap.width() and pixmap.height():
-            width, height = self._viewport_size()
-            # 视口尚未布局完成时先不缩放，避免首帧把图片算得过小；showEvent / resizeEvent 会再算一次
-            if width > 8 and height > 8:
-                scale = min(width / pixmap.width(), height / pixmap.height())
-                scale = max(ZOOM_MIN, min(ZOOM_MAX, scale))
-        self._scale = scale
-        size = pixmap.size() * scale
-        target = pixmap.scaled(
-            max(1, int(size.width())),
-            max(1, int(size.height())),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            self._mode(),
-        )
-        self._label.setPixmap(target)
-        self._label.resize(target.size())
-        self._zoom_label.setText(f"{int(round(scale * 100))}%")
+        self._index = (self._index + delta) % len(self._siblings)
+        self._path = self._siblings[self._index]
+        self._pixmap = QPixmap(str(self._path))
+        self._rotation = 0
+        if self._fit:
+            self._scale = self._fit_scale()
+        self._apply()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().resizeEvent(event)
         if self._fit:
-            self._apply()
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt 命名
-        super().showEvent(event)
-        if self._fit:
+            self._scale = self._fit_scale()
             self._apply()

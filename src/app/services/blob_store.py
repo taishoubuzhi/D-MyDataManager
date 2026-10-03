@@ -87,9 +87,49 @@ class BlobStore:
         path = self.path_of(rel_path)
         if path.exists():
             path.unlink()
+            self.prune_empty_parents(path)
             logger.debug("已删除仓库文件：{}", rel_path)
             return True
         return False
+
+    # ------------------------------------------------------------- 空目录清理
+    def prune_empty_parents(self, path: str | Path) -> int:
+        """删掉文件后顺手收掉空掉的哈希目录（`ab/cd`），返回删掉的目录数。
+
+        只往上走到仓库根为止：根目录本身、非空目录、被占用的目录都不动。
+        """
+        removed = 0
+        folder = Path(path).parent
+        while folder != self.root and self.root in folder.parents:
+            try:
+                if any(folder.iterdir()):
+                    break
+                folder.rmdir()
+            except OSError as exc:
+                logger.debug("空目录删除失败，留待下次清理：{}（{}）", folder, exc)
+                break
+            removed += 1
+            folder = folder.parent
+        return removed
+
+    def sweep_empty_dirs(self) -> int:
+        """收掉仓库里所有空目录（删内容留下的 `ab/cd`、空的 pack 世代目录）。"""
+        removed = 0
+        folders = sorted(
+            (p for p in self.root.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        )
+        for folder in folders:
+            try:
+                if any(folder.iterdir()):
+                    continue
+                folder.rmdir()
+            except OSError as exc:
+                logger.debug("空目录删除失败，留待下次清理：{}（{}）", folder, exc)
+                continue
+            removed += 1
+        return removed
 
     # ----------------------------------------------------------------- 统计
     def iter_files(self):

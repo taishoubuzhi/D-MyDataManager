@@ -22,7 +22,7 @@ _engine: Engine | None = None
 _session_factory: sessionmaker | None = None
 
 # 表结构版本：低版本库启动时原地补列升级，高于当前程序的库则备份并重建
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 # 全文检索：FTS5 虚拟表（trigram 分词，支持中文子串匹配）+ 同步触发器
 FTS_TABLE = "items_fts"
@@ -161,9 +161,14 @@ def _reset_for_schema_change() -> None:
 # 3 -> 4：users 补 is_default（默认用户/管理员），archive_entries 补所属用户
 # 4 -> 5：archives 补 pinned（标记的存档不参与自动清理）
 # 5 -> 6：archive_entries 补 is_hidden（存档记录隐藏状态，还原时据此对齐）
+# 6 -> 7：存档内容改按块存进 pack 数据文件（新增 pack_files / chunks / file_manifests /
+#         manifest_chunks 表），archives 补 logical_size、archive_entries 补 manifest_id
+# 7 -> 8：放弃分块，内容改整份压缩存储：四张块/清单/pack 表合并成 contents，
+#         archive_entries 去掉 manifest_id（内容身份只看 checksum）
 _COLUMN_PATCHES: dict[str, tuple[tuple[str, str], ...]] = {
     "archives": (
         ("pinned", "ALTER TABLE archives ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"),
+        ("logical_size", "ALTER TABLE archives ADD COLUMN logical_size BIGINT NOT NULL DEFAULT 0"),
     ),
     "tags": (
         ("is_global", "ALTER TABLE tags ADD COLUMN is_global BOOLEAN NOT NULL DEFAULT 0"),
@@ -203,6 +208,7 @@ _DATA_PATCHES: tuple[str, ...] = (
     "UPDATE archive_entries SET user_name = COALESCE("
     "(SELECT name FROM users WHERE users.id = archive_entries.user_id), '') "
     "WHERE user_name = ''",
+    "UPDATE archives SET logical_size = total_size WHERE logical_size = 0",
 )
 
 _INDEX_PATCHES: tuple[str, ...] = (
@@ -210,6 +216,23 @@ _INDEX_PATCHES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_users_is_default ON users(is_default)",
     "CREATE INDEX IF NOT EXISTS ix_archive_entries_user_id ON archive_entries(user_id)",
 )
+
+#: 7 -> 8 退场的旧表（分块时代的块 / 清单 / pack 索引）
+_LEGACY_TABLES: tuple[str, ...] = ("manifest_chunks", "file_manifests", "chunks", "pack_files")
+
+
+def _drop_chunked_storage(connection, tables: set[str]) -> None:
+    """7 -> 8：删掉分块时代的列与表，内容改由 `contents` 一张表描述。"""
+    if "archive_entries" in tables:
+        columns = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(archive_entries)")}
+        if "manifest_id" in columns:
+            connection.exec_driver_sql("DROP INDEX IF EXISTS ix_archive_entries_manifest_id")
+            connection.exec_driver_sql("ALTER TABLE archive_entries DROP COLUMN manifest_id")
+    dropped = [name for name in _LEGACY_TABLES if name in tables]
+    for name in dropped:
+        connection.exec_driver_sql(f"DROP TABLE IF EXISTS {name}")
+    if dropped:
+        logger.warning("内容改为整份压缩存储，已删除旧的块 / 清单 / pack 索引表：{}", "、".join(dropped))
 
 
 def _dedupe_global_tags(connection) -> None:
@@ -270,6 +293,8 @@ def _upgrade_schema() -> None:
                 if column not in columns:
                     connection.exec_driver_sql(statement)
                 columns.add(column)
+        if version < 8:
+            _drop_chunked_storage(connection, tables)
         for statement in _DATA_PATCHES:
             try:
                 connection.exec_driver_sql(statement)

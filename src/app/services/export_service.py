@@ -5,17 +5,15 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import json
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from ..core.config import store_dir
 from ..db.models import DataItem, DataType
 from ..repositories import ItemRepository
-from .blob_store import BlobStore
+from .content_store import ContentStore
 
 MANIFEST_FIELDS = [
     "id",
@@ -47,9 +45,9 @@ class ExportResult:
 
 
 class ExportService:
-    def __init__(self, session: Session, store: BlobStore | None = None) -> None:
+    def __init__(self, session: Session, store: ContentStore | None = None) -> None:
         self.session = session
-        self.store = store or BlobStore(store_dir())
+        self.store = store or ContentStore(session)
         self.items = ItemRepository(session)
 
     def manifest_rows(self, items: list[DataItem]) -> list[dict]:
@@ -119,11 +117,9 @@ class ExportService:
             if item.type == DataType.TEXT and item.content:
                 path.write_text(item.content, encoding="utf-8")
                 return True
-            source = self.store.path_of(self.store.rel_path_for(item.checksum)) if item.checksum else None
-            if source is None or not source.exists():
+            if not item.checksum or not self.store.export_content(item.checksum, path):
                 logger.warning("源文件缺失，跳过：{}", item.name)
                 return False
-            shutil.copy2(source, path)
             return True
         except Exception as exc:
             logger.error("导出失败 {}：{}", item.name, exc)

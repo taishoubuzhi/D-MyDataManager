@@ -30,6 +30,17 @@ def _fail(prefix: str, problems: list[str]) -> None:
     assert not problems, f"{prefix}：{detail}"
 
 
+def _set_usage_filter(page, mode: str, first: str, second: str = "") -> None:
+    """像用户那样驱动「数据项数」的数值筛选（选模式 + 填输入框）。"""
+    from app.ui.components.data_table import NUMBER_MODES
+
+    field = page.filter_bar._fields["usage"]
+    field.combo.setCurrentIndex([item[1] for item in NUMBER_MODES].index(mode))
+    field.line.setText(first)
+    field.line2.setText(second)
+    page.filter_bar._sync_number(field.combo, field.line2)
+
+
 def _boom(*args, **kwargs):
     """普通用户不该走到的确认框 / 输入框。"""
     raise AssertionError("普通用户不应看到系统级确认框")
@@ -156,6 +167,27 @@ def tag_page_rows(case: Case) -> None:
             if cell is None or cell.text() != "全局":
                 problems.append(f"按归属筛选「全局」后第 {row} 行的归属不是「全局」")
         page._on_reset_filters()
+
+        usages = {index: float(number["usage"]) for index, number in enumerate(page._row_numbers)}
+        top_use = max(usages.values())
+        _set_usage_filter(page, "eq", str(int(top_use)))
+        visible = {row for row, _tag in page._visible_rows()}
+        expected = {row for row, value in usages.items() if value == top_use}
+        if visible != expected:
+            problems.append(f"「数据项数 等于 {int(top_use)}」命中行 {sorted(visible)} 应为 {sorted(expected)}")
+        _set_usage_filter(page, "between", "0", str(int(top_use)))
+        visible = {row for row, _tag in page._visible_rows()}
+        expected = {row for row, value in usages.items() if 0 < value < top_use}
+        if visible != expected:
+            problems.append(
+                f"「数据项数 区间 0~{int(top_use)}」命中行 {sorted(visible)} 应为 {sorted(expected)}"
+            )
+        _set_usage_filter(page, "lt", "0")
+        if page._visible_rows():
+            problems.append("「数据项数 小于 0」不应有可见行")
+        page._on_reset_filters()
+        if len(page._visible_rows()) != len(tags):
+            problems.append("重置「数据项数」筛选后没有恢复全部标签")
     finally:
         dispose_window(window)
     _fail("标签页行语义", problems)
@@ -529,7 +561,7 @@ def superuser_permissions(case: Case) -> None:
         # 回归点 2：装了插件、有选中行时，非管理员下 11 个改动按钮全部禁用。
         # 隔离夹具的插件目录是空的，先导入一个仓库内置插件让列表非空、有选中行，
         # 否则 _sync_detail 不会同步「启用 / 更多选项 / 删除」的可用态。
-        sample = ROOT / "plugins" / "builtin.lib.dialog"
+        sample = ROOT / "plugins" / "builtin.lib.ui"
         if not sample.exists():
             problems.append(f"找不到内置插件目录 {sample}，插件页权限判据不完整")
         else:

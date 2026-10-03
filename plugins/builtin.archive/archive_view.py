@@ -1,4 +1,7 @@
-"""压缩包查看器：列出条目、预览文本内容、整体解压后用系统程序打开。"""
+"""压缩包查看器：列出条目、预览文本内容、整体解压后用系统程序打开。
+
+工具条、列表与预览区都来自 builtin.lib.ui：这里只把筛选、选中与解压接成回调。
+"""
 
 from __future__ import annotations
 
@@ -7,20 +10,21 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from PyQt6.QtWidgets import QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import (
-    CaptionLabel,
-    FluentIcon,
-    ListWidget,
-    PlainTextEdit,
-    PushButton,
-    SearchLineEdit,
-)
+from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import FluentIcon
 
 from app.sdk import ui
 from app.sdk.data import ArchiveMember, archive_members, archive_read, decode_text, human_size, looks_binary
 from app.sdk.ui import COMPACT_MARGINS
-from app.sdk.ui import IconTextButton
+from dm_plugin.builtin.lib.ui.plugin import (
+    ListPanel,
+    caption,
+    icon_button,
+    search_edit,
+    status_label,
+    text_area,
+    toolbar,
+)
 
 PREVIEW_LIMIT = 64 * 1024
 
@@ -75,32 +79,23 @@ class ArchiveViewer(QWidget):
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self._filter = SearchLineEdit(self)
-        self._filter.setPlaceholderText("筛选条目名称")
-        self._filter.setFixedWidth(220)
-        self._filter.textChanged.connect(self._reload)
-        bar.addWidget(self._filter)
-        bar.addStretch(1)
-        self.status_label = CaptionLabel(self.caption, self)
-        bar.addWidget(self.status_label)
-        self._extract_button = IconTextButton(FluentIcon.ZIP_FOLDER, "解压并打开", self)
-        self._extract_button.clicked.connect(self._on_extract)
-        bar.addWidget(self._extract_button)
-        external_button = IconTextButton(FluentIcon.LINK, "用系统程序打开", self)
-        external_button.clicked.connect(lambda: ui.open_default(self._path))
-        bar.addWidget(external_button)
-        root.addLayout(bar)
+        bar, row = toolbar(self)
+        self._filter = search_edit(bar, placeholder="筛选条目名称", width=220, on_change=lambda _text: self._reload())
+        row.addWidget(self._filter)
+        row.addStretch(1)
+        self.status_label = status_label(bar, self.caption)
+        row.addWidget(self.status_label)
+        row.addWidget(icon_button(bar, FluentIcon.ZIP_FOLDER, "解压并打开", self._on_extract))
+        row.addWidget(icon_button(bar, FluentIcon.LINK, "用系统程序打开", lambda: ui.open_default(self._path)))
+        root.addWidget(bar)
 
         body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(8)
-        self._list = ListWidget(self)
-        self._list.setFixedWidth(340)
-        self._list.currentRowChanged.connect(self._on_select)
-        body.addWidget(self._list)
-        self._preview = PlainTextEdit(self)
-        self._preview.setReadOnly(True)
+        self._panel = ListPanel(self, title="", width=340, on_select=self._on_select)
+        self._list = self._panel.list
+        body.addWidget(self._panel.card)
+        self._preview = text_area(self, read_only=True)
         body.addWidget(self._preview, 1)
         root.addLayout(body, 1)
 
@@ -115,12 +110,17 @@ class ArchiveViewer(QWidget):
         return [member for member in self._members if keyword in member.name.lower()]
 
     def _reload(self) -> None:
-        self._list.clear()
         members = self._shown_members()
-        for member in members:
-            label = member.name + ("/" if member.is_dir else "")
-            extra = "" if member.is_dir else f"   {human_size(member.size)}"
-            self._list.addItem(QListWidgetItem(f"{label}{extra}"))
+        self._panel.set_items(
+            [
+                (
+                    index,
+                    member.name + ("/" if member.is_dir else ""),
+                    "" if member.is_dir else f"{member.name}   {human_size(member.size)}",
+                )
+                for index, member in enumerate(members)
+            ]
+        )
         shown = len(members)
         self.status_label.setText(f"{shown}/{len(self._members)} 个条目 · {self.caption}")
         if shown:
@@ -128,11 +128,11 @@ class ArchiveViewer(QWidget):
         else:
             self._preview.setPlainText("没有匹配的条目")
 
-    def _on_select(self, row: int) -> None:
+    def _on_select(self, data, _text: str) -> None:
         members = self._shown_members()
-        if row < 0 or row >= len(members):
+        if data is None or not (0 <= int(data) < len(members)):
             return
-        member = members[row]
+        member = members[int(data)]
         if member.is_dir:
             self._preview.setPlainText("这是一个目录条目。")
             return

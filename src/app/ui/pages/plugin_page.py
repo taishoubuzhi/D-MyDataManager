@@ -86,7 +86,7 @@ class PluginPage(Page):
         # 整段说明改挂在页面标题上：鼠标停住才弹出来，不再铺在页面上
         if self.header is not None:
             self.header.add_hint(
-                "启用 / 禁用会立即重建查看器注册表：禁用「打开方式」插件后，对应格式会退回系统默认程序。"
+                "启用 / 禁用会立即重建查看器注册表：禁用「查看器」插件后，对应格式会退回系统默认程序。"
             )
         self.permission_hint = CaptionLabel(
             "只有默认用户可以导入、启用、编辑或删除插件；其他用户可以查看、筛选与打开插件目录。", self
@@ -137,7 +137,7 @@ class PluginPage(Page):
         self.reverse_button.toggled.connect(self._on_reverse)
         sort_row.addWidget(self.reverse_button)
         sort_row.addStretch(1)
-        # 从「打开方式」页跳过来会带上贡献筛选，列表可能只列出一部分插件：
+        # 从「查看器」页跳过来会带上贡献筛选，列表可能只列出一部分插件：
         # 计数文案写清「已筛选」，并给一个一键回到全部插件的按钮。
         self.reset_button = IconTextButton(FluentIcon.SYNC, "清除筛选", self)
         self.reset_button.setToolTip("清空关键词与四个筛选下拉，回到「全部插件」")
@@ -251,7 +251,7 @@ class PluginPage(Page):
 
     # ------------------------------------------------------------------ 筛选
     def apply_contribution(self, point: str) -> None:
-        """从「打开方式」页跳转过来时自动筛成指定扩展点，未知扩展点时回到全部。"""
+        """从「查看器」页跳转过来时自动筛成指定扩展点，未知扩展点时回到全部。"""
         index = self.point_box.findData(point)
         self.point_box.setCurrentIndex(index if index >= 0 else 0)
         self._reload()

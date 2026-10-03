@@ -1,7 +1,7 @@
 # 运行期数据（不随代码分发）
-/logs/
+/.logs/
 /.resources/
-/config/
+/.configs/
 /data/
 /cache/
 /exports/

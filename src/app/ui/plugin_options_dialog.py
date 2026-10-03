@@ -4,8 +4,8 @@
 
 * **插件选项** —— 插件在 `plugin.json` 的 `options` 里声明，用户改完存在插件状态文件里，
   插件下次载入时用 `api.option("键")` 读回来。
-* **打开方式** —— 该插件注册了查看器时，程序本体通过 `app.open_with` 扩展接口让用户
-  把某个扩展名（或整组）指定成「用这个插件打开」，不必去「打开方式」页逐个格式设置。
+* **查看器** —— 该插件注册了查看器时，程序本体通过 `viewer.open` 扩展接口让用户
+  把某个扩展名（或整组）指定成「用这个插件打开」，不必去「查看器」页逐个格式设置。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from ..core.extensions import extension_registry
 from ..core.plugin_options import OPTION_BOOL, OPTION_CHOICE
 from ..services import PluginInfo
 from ..core.signals import signalBus
-from ..services.open_with_service import OPEN_WITH_EXTENSION, open_with_api
+from ..sdk import viewers as viewer_api
 from ..services.plugin_service import plugin_service
 from .framework import clear_scroll_background, toast_error, toast_success
 from .framework import IconTextButton
@@ -44,7 +44,7 @@ class PluginOptionsDialog(MessageBoxBase):
         self.info = info
         self.service = service
         # 扩展接口由主程序在启动时登记；测试 / 自检里没登记时退回模块级接口实现
-        self._open_with = extension_registry.provider(OPEN_WITH_EXTENSION) or open_with_api
+        self._open_with = extension_registry.provider(viewer_api.OPEN_EXTENSION) or viewer_api
         self._editors: dict[str, Callable[[], object]] = {}
         self._checks: dict[str, tuple[CheckBox, str]] = {}
         self._viewers = service.viewers_of(info.id)
@@ -64,7 +64,7 @@ class PluginOptionsDialog(MessageBoxBase):
         has_options = self._build_options(layout)
         has_viewers = self._build_viewers(layout)
         if not has_options and not has_viewers:
-            layout.addWidget(CaptionLabel("该插件还没有声明可配置的选项，也没有可指定的打开方式。", holder))
+            layout.addWidget(CaptionLabel("该插件还没有声明可配置的选项，也没有可指定的查看器。", holder))
         layout.addStretch(1)
         area.setWidget(holder)
         clear_scroll_background(area)
@@ -118,7 +118,7 @@ class PluginOptionsDialog(MessageBoxBase):
         layout.addWidget(card)
         return True
 
-    # ---------------------------------------------------------- 打开方式控件
+    # ---------------------------------------------------------- 查看器控件
     def _build_viewers(self, layout: QVBoxLayout) -> bool:
         if not self._viewers or self._open_with is None:
             return False
@@ -126,7 +126,7 @@ class PluginOptionsDialog(MessageBoxBase):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(14, 12, 14, 12)
         card_layout.setSpacing(6)
-        card_layout.addWidget(BodyLabel("打开方式：勾选后这些格式用本插件打开", card))
+        card_layout.addWidget(BodyLabel("查看器：勾选后这些格式用本插件打开", card))
         for viewer in self._viewers:
             card_layout.addWidget(CaptionLabel(f"{viewer.name}（{viewer.id}）", card))
             for extension in viewer.extensions:

@@ -1,4 +1,4 @@
-"""自检套件入口（REWRITE.md §7）。
+"""自检套件入口。
 
 用法：
     .venv\\Scripts\\python.exe scripts\\selfcheck.py --list

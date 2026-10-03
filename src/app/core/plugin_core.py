@@ -1,6 +1,6 @@
 """插件协议核心：清单白名单、依赖解析、`dm_plugin` 命名空间与载入阶段。
 
-协议全文见 `plugins/PLUGIN_PROTOCOL.md`（设计稿 `logs/_rewrite/plugin_refactor_plan.md`）。
+协议全文见 `plugins/PLUGIN_PROTOCOL.md`（设计稿 `.logs/_rewrite/plugin_refactor_plan.md`）。
 这里只做「核心必须认识」的事：校验清单、解析依赖与版本范围、把插件目录挂成
 `dm_plugin.<id>` 包、按阶段载入并把失败定位到具体阶段。
 """

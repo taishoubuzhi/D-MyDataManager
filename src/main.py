@@ -28,7 +28,6 @@ from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import dispose_engine, init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
-from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.services.privacy_service import privacy  # noqa: E402
 from app.ui.framework import install_app_theme, install_tooltips  # noqa: E402
@@ -235,11 +234,9 @@ def main() -> int:
 
     # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
-    # 打开方式接口：插件可以用它查 / 改某个扩展名该由哪个查看器打开
-    plugin_service.bootstrap(OPEN_WITH_EXTENSION, open_with_api)
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     viewers = plugin_service.load_viewers()
-    _stage(7, f"插件系统已就绪（扩展点 2 个、登记打开方式 {viewers} 个）")
+    _stage(7, f"插件系统已就绪（扩展点 2 个、登记查看器 {viewers} 个）")
 
     window = MainWindow()
     window.show()

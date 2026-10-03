@@ -22,7 +22,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 
 | 扩展点 | 标签 | 值结构 | 生效位置 | 稳定级别 |
 | --- | --- | --- | --- | --- |
-| `app.viewer` | 打开方式 | 由 `ctx.add_viewer()` 构造 | 「打开方式」页、条目打开流程 | 稳定 |
+| `app.viewer` | 查看器 | 由 `ctx.add_viewer()` 构造 | 「查看器」页、条目打开流程 | 稳定 |
 | `app.ui.page` | 页面 | 由 `ctx.add_page()` 构造 | 主窗口左侧导航 + 堆叠页 | 稳定 |
 | `app.ui.manage.toolbar` | 数据管理工具栏 | `{"text", "callback", "icon", "tip"}` | 数据管理页工具栏 | 稳定 |
 | `app.ui.manage.item_menu` | 条目菜单 | `{"text", "callback", "icon"}` | 数据行右键菜单 | 稳定 |
@@ -164,7 +164,7 @@ def _settings_card(self, parent):
 
 ## 3. 非界面扩展点
 
-### 3.1 `app.viewer`：打开方式（查看器）
+### 3.1 `app.viewer`：查看器
 
 用 `ctx.add_viewer()` 注册，而不是直接 `contribute`：
 
@@ -174,7 +174,7 @@ ctx.add_viewer(
     extensions=["png", "jpg"],          # 认领的扩展名
     factory=self.create_view,           # (path, parent) -> QWidget
     opener=self.open_view,              # 可选：(path, parent) -> (bool, str)，插件自己弹窗（推荐）
-    kind="image",                       # 打开方式分组：image/video/audio/archive/text/code/markdown/spreadsheet
+    kind="image",                       # 查看器分组：image/video/audio/archive/text/code/markdown/spreadsheet
     description="查看图片",
     capabilities=["缩放", "旋转"],
     host="dialog",                      # 显示在哪个宿主里，内置弹窗外壳为 "dialog"
@@ -183,12 +183,12 @@ ctx.add_viewer(
 )
 ```
 
-- `kind` 是**查看器元数据**（「打开方式」页的分组与图标），不是插件类型；一个插件可以注册多个查看器，`kind` 各不相同。
-- 注册后会出现在「打开方式」页的插件下拉里，用户可以按扩展名指定用哪个查看器打开；规则存 `config/open_with.json`。
-- 查看器控件由 `host` 决定挂在哪：内置弹窗外壳（`builtin.lib.dialog`）用 `ctx.require("dialog")` 取到，页面会显示在程序本体之外的独立窗口里。
+- `kind` 是**查看器元数据**（「查看器」页的分组与图标），不是插件类型；一个插件可以注册多个查看器，`kind` 各不相同。
+- 注册后会出现在「查看器」页的插件下拉里，用户可以按扩展名指定用哪个查看器打开；规则存 `.configs/viewers.json`。
+- 查看器控件由 `host` 决定挂在哪：内置弹窗外壳（`builtin.lib.ui`）用 `ctx.require("dialog")` 取到，页面会显示在程序本体之外的独立窗口里。
 - **推荐做法（也是内置 7 个查看器的做法）**：把 `opener` 一起登记，让插件自己建窗口、自己弹；程序侧的
   `open_viewer()` 会优先调它，界面代码因此完全住在插件里。内置工具箱是 `builtin.lib.viewer` 的 `plugin.py`
-  （`ViewerPlugin` 基类 + `ViewerWindow` 窗口外壳 + `MediaViewer` 播放页）—— 继承 `ViewerPlugin` 只实现
+  （`ViewerPlugin` 基类 + `ViewerWindow` 窗口外壳 + 注册表 `ViewerRegistry`）—— 继承 `ViewerPlugin` 只实现
   `create_view(path, parent=None)` 即可，登记与弹窗都由基类完成。只给 `factory` 的老式写法仍然可用
   （程序用宿主把控件包一层），但视图控件仍必须来自插件自己的目录。
 
@@ -200,8 +200,8 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 
 - 页面注册成 `plugin.<key>` 路由，程序把它挂进主窗口堆叠页并按需加左侧导航项。
 - `factory` 返回一个 QWidget；插件被禁用 / 卸载后页面与导航项一起消失。
-- 左侧导航的顺序是固定的：内置页面按内置顺序（设置恒在最下面），插件页面按载入顺序追加；
-  追加不下的插件页面只出现在内置的「页面管理」页里（在那一页里仍可打开），这一页只读、不改布局。
+- 左侧导航的顺序是固定的：内置页面按内置顺序（设置恒在最下面），插件页面按载入顺序追加，
+  最多显示 7 个，追加不下的只出现在内置的「页面管理」页里（那一页每行点整行即进入该页面）。
 - 页面挂了 `session` 之类资源时，在 `Plugin.teardown()` 里释放（主窗口关闭时也会逐个调用）。
 
 ## 4. 事件

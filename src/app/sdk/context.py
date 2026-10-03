@@ -167,7 +167,7 @@ class PluginContext:
     # ---- 程序扩展点的便捷封装 ---------------------------------------
 
     def add_viewer(self, name: str, **fields: Any) -> Contribution:
-        """注册一个打开方式（查看器）。"""
+        """注册一个查看器。"""
         return self._services.add_viewer(self.plugin_id, name, **fields)
 
     def add_page(self, key: str, title: str, factory: Callable, **fields: Any) -> Contribution:

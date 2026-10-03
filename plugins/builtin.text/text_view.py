@@ -1,16 +1,27 @@
-"""文本与代码查看器：猜测编码、可切换编码、自动换行、复制全文。"""
+"""文本与代码查看器：猜测编码、可切换编码、自动换行、复制全文。
+
+页面结构由 builtin.lib.ui 的工具条与控件工厂给出，这里只接行为回调。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtGui import QFontDatabase, QTextCursor
-from PyQt6.QtWidgets import QApplication, QHBoxLayout, QPlainTextEdit, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, CheckBox, ComboBox, FluentIcon, PlainTextEdit, PushButton
+from PyQt6.QtGui import QTextCursor
+from PyQt6.QtWidgets import QApplication, QPlainTextEdit, QVBoxLayout, QWidget
+from qfluentwidgets import FluentIcon
 
 from app.sdk.data import ENCODINGS, read_text
 from app.sdk.ui import COMPACT_MARGINS
-from app.sdk.ui import IconTextButton
+from dm_plugin.builtin.lib.ui.plugin import (
+    caption,
+    check_box,
+    combo_box,
+    icon_button,
+    status_label,
+    text_area,
+    toolbar,
+)
 
 AUTO_ENCODING = "自动检测"
 
@@ -29,32 +40,19 @@ class TextViewer(QWidget):
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        bar.addWidget(CaptionLabel("编码", self))
-        self._combo = ComboBox(self)
-        self._combo.addItem(AUTO_ENCODING)
-        self._combo.addItems(list(ENCODINGS))
-        self._combo.setFixedWidth(140)
-        self._combo.currentTextChanged.connect(self._on_encoding)
-        bar.addWidget(self._combo)
-        self._wrap = CheckBox("自动换行", self)
-        self._wrap.setChecked(True)
-        self._wrap.stateChanged.connect(self._on_wrap)
-        bar.addWidget(self._wrap)
-        copy_button = IconTextButton(FluentIcon.COPY, "复制全文", self)
-        copy_button.clicked.connect(self._on_copy)
-        bar.addWidget(copy_button)
-        bar.addStretch(1)
-        self.status_label = CaptionLabel("", self)
-        bar.addWidget(self.status_label)
-        root.addLayout(bar)
+        bar, row = toolbar(self)
+        row.addWidget(caption(bar, "编码"))
+        self._combo = combo_box(bar, items=(AUTO_ENCODING, *ENCODINGS), width=140, on_change=self._on_encoding)
+        row.addWidget(self._combo)
+        self._wrap = check_box(bar, text="自动换行", checked=True, on_change=self._on_wrap)
+        row.addWidget(self._wrap)
+        row.addWidget(icon_button(bar, FluentIcon.COPY, "复制全文", self._on_copy))
+        row.addStretch(1)
+        self.status_label = status_label(bar, "")
+        row.addWidget(self.status_label)
+        root.addWidget(bar)
 
-        self._edit = PlainTextEdit(self)
-        self._edit.setReadOnly(True)
-        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        font.setPointSize(10)
-        self._edit.setFont(font)
+        self._edit = text_area(self, read_only=True, monospace=True)
         root.addWidget(self._edit, 1)
 
     # ------------------------------------------------------------------ 行为
@@ -82,8 +80,8 @@ class TextViewer(QWidget):
         self._encoding = "" if text == AUTO_ENCODING else text
         self._load()
 
-    def _on_wrap(self) -> None:
-        mode = QPlainTextEdit.LineWrapMode.WidgetWidth if self._wrap.isChecked() else QPlainTextEdit.LineWrapMode.NoWrap
+    def _on_wrap(self, checked: bool = True) -> None:
+        mode = QPlainTextEdit.LineWrapMode.WidgetWidth if checked else QPlainTextEdit.LineWrapMode.NoWrap
         self._edit.setLineWrapMode(mode)
 
     def _on_copy(self) -> None:

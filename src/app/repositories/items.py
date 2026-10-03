@@ -130,6 +130,31 @@ class ItemRepository(Repository[DataItem]):
         stmt = select(DataItem).where(DataItem.checksum == checksum, DataItem.is_deleted.is_(False))
         return list(self.session.scalars(stmt))
 
+    def by_checksums(self, checksums, *, include_deleted: bool = False) -> list[DataItem]:
+        """按内容校验和批量取数据项；`include_deleted=True` 时连回收站项一起返回。"""
+        wanted = [value for value in dict.fromkeys(checksums) if value]
+        if not wanted:
+            return []
+        stmt = select(DataItem).where(DataItem.checksum.in_(wanted)).order_by(DataItem.id)
+        if not include_deleted:
+            stmt = stmt.where(DataItem.is_deleted.is_(False))
+        return list(self.session.scalars(stmt))
+
+    def by_names(self, names, *, include_deleted: bool = False, user_id: int | None = None) -> list[DataItem]:
+        """按文件名批量取数据项（存档条目按「归属 + 文件名」找回对应项时用）。
+
+        `include_deleted=True` 连回收站项一起返回；`user_id` 限定归属用户。
+        """
+        wanted = [value for value in dict.fromkeys(names) if value]
+        if not wanted:
+            return []
+        stmt = select(DataItem).where(DataItem.name.in_(wanted)).order_by(DataItem.id)
+        if not include_deleted:
+            stmt = stmt.where(DataItem.is_deleted.is_(False))
+        if user_id is not None:
+            stmt = stmt.where(DataItem.user_id == user_id)
+        return list(self.session.scalars(stmt))
+
     def by_ids(self, ids) -> list[DataItem]:
         wanted = [int(value) for value in ids]
         if not wanted:

@@ -6,12 +6,31 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, FluentIcon, StrongBodyLabel, TitleLabel
 
 from .tokens import CARD_SPACING, DETAIL_MARGINS, PANEL_MARGINS
 from .tooltips import hint_badge
+
+
+class ClickCard(CardWidget):
+    """整块可点的卡片：按下与抬起都在卡片自己身上时发出 `clicked`。
+
+    卡片里的按钮等子控件自己吃掉鼠标事件，所以点它们不会连带触发整块点击。
+    """
+
+    clicked = pyqtSignal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        inside = self.rect().contains(event.position().toPoint())
+        super().mouseReleaseEvent(event)
+        if inside and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
 
 
 class PageHeader(QWidget):

@@ -13,11 +13,11 @@
 ## 依赖
 
 - builtin.lib.viewer（查看器基类）
-- builtin.lib.dialog（弹窗外壳）
+- builtin.lib.ui（弹窗外壳）
 
 ## 贡献
 
-- 打开方式（app.viewer）：kind = spreadsheet，认领 xlsx / xlsm / csv / tsv，
+- 查看器（app.viewer）：kind = spreadsheet，认领 xlsx / xlsm / csv / tsv，
   能力：工作表切换 / 前 300 行预览 / 分隔符识别。
 
 ## 数据文件

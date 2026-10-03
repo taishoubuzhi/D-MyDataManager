@@ -7,7 +7,7 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `harness.py` | `IsolatedCase` / `TempDir`：把数据库、库文件夹、内容仓库、封面与导出目录重定向到 `tests/_tmp/<类名小写>/`，不读写真实的 `.resources/`、`config/`、`logs/` |
+| `harness.py` | `IsolatedCase` / `TempDir`：把数据库、库文件夹、内容仓库、封面与导出目录重定向到 `tests/_tmp/<类名小写>/`，不读写真实的 `.resources/`、`.configs/`、`.logs/` |
 | `dataset.py` | 多样化语料生成（`Corpus` / `build_corpus`），导入类用例与 `scripts/seed_demo.py` 共用 |
 | `test_<主题>.py` | 按主题新增的用例模块（一个主题一个模块，例如隐藏数据 `test_hidden.py`、隐私保护 `test_privacy.py`） |
 | `_tmp/`、`_scratch/` | 运行时临时目录，已在 `.gitignore` 中 |
@@ -52,5 +52,5 @@ $env:DM_KEEP_TMP=1                                                            # 
 - 改完哪块代码，只跑对应主题的模块；**不再全量 `unittest discover`**。
 - 需要整体回归时跑自检套件：`.venv\Scripts\python.exe scripts\selfcheck.py`
   （`data` / `services` / `pages` / `flows` 四层，末行 `RESULT failures=N`），它在临时目录与全新数据库上跑，
-  不碰真实 `.resources/` 与 `config/`；只跑某一项用 `--only <检查名> --verbose`，列全部检查用 `--list`。
-  旧套件（`scripts/dev_check*.py`）已在功能对等后删除，旧实现见只读快照 `logs/_rewrite/legacy_snapshot/scripts/`。
+  不碰真实 `.resources/` 与 `.configs/`；只跑某一项用 `--only <检查名> --verbose`，列全部检查用 `--list`。
+  旧套件（`scripts/dev_check*.py`）已在功能对等后删除，旧实现见只读快照 `.logs/_rewrite/legacy_snapshot/scripts/`。

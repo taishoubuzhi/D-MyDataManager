@@ -39,7 +39,7 @@ class ExtensionPoint:
     OPEN_RESOLVER = "app.item.open.resolver"
 
     _LABELS = {
-        VIEWER: "打开方式",
+        VIEWER: "查看器",
         PAGE: "页面",
         MANAGE_TOOLBAR: "数据管理工具栏",
         MANAGE_ITEM_MENU: "条目菜单",

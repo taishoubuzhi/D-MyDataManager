@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
+
 from .harness import Case, build_window, check, dispose_window, ensure_app
 
 HOME_ROUTE = "homePage"
@@ -18,8 +21,9 @@ MANAGE_ROUTE = "managePage"
 TAG_ROUTE = "tagPage"
 WORKBENCH_ROUTE = "workbenchPage"
 SETTINGS_ROUTE = "settingsPage"
-#: 自检插件贡献的页面路由与插件 id。
+#: 自检插件贡献的页面路由 / 页面 key 与插件 id。
 PLUGIN_PAGE_ROUTE = "plugin.navpage"
+PLUGIN_PAGE_KEY = "navpage"
 PLUGIN_ID = "selfcheck.navpage"
 #: 直接经 `AppUiApi` 登记的插件页面 key（最后一个用来验证「挤不进侧栏」）。
 PAGE_KEYS = ("page1", "page2", "page3", "page4", "page5", "page6", "page7", "page8")
@@ -29,6 +33,12 @@ def _expect(problems: list[str], ok: bool, message: str) -> None:
     """记录一条不满足的判据（不抛异常，便于一次收集全部问题）。"""
     if not ok:
         problems.append(message)
+
+
+def _click_row(row) -> None:
+    """点页面管理里的一行：整行可点，行内还有「打开」按钮。"""
+    row.resize(240, 44)
+    QTest.mouseClick(row, Qt.MouseButton.LeftButton)
 
 
 def _layout_routes(layout, panel) -> list[str]:
@@ -111,10 +121,12 @@ def navigation_workbench(case: Case) -> None:
     from app.ui.framework.sections import PageHeader
     from app.ui.main_window import BUILTIN_PAGES, PLUGIN_SIDEBAR_LIMIT
 
-    _fixture, window = build_window(case)
-    page = window.workbench_page
     api = AppUiApi()
     previous = extension_registry.provider(APP_UI_EXTENSION)
+    # 先换上一个干净的 app.ui：内置插件贡献的页面（如查看器配置页）不该干扰导航判据
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
+    _fixture, window = build_window(case)
+    page = window.workbench_page
     problems: list[str] = []
     top_builtin = [getattr(window, attr).objectName() for attr, _t, _i, bottom in BUILTIN_PAGES if not bottom]
     bottom_builtin = [getattr(window, attr).objectName() for attr, _t, _i, bottom in BUILTIN_PAGES if bottom]
@@ -184,14 +196,24 @@ def navigation_workbench(case: Case) -> None:
         )
         import_row = page.row_for(IMPORT_ROUTE)
         if import_row is not None:
-            import_row.open_button.click()
+            _click_row(import_row)
         _expect(
             problems,
             window.stackedWidget.currentWidget() is window.import_page,
-            "点行内「打开」应切到该页面",
+            "点「导入」这一行应切到该页面",
         )
 
-        # ③ 插件页面按载入顺序追加；超出名额的只出现在页面管理里
+        # ②b 整行可点：行内没有按钮，点行的空白处也要切页
+        home_row = page.row_for(HOME_ROUTE)
+        if home_row is not None:
+            _click_row(home_row)
+        _expect(
+            problems,
+            window.stackedWidget.currentWidget() is window.home_page,
+            "点行的空白处也应切到该页面（整行可点）",
+        )
+
+        # ③ 插件页面按名额显示；超出名额的只出现在页面管理里
         plugin_service.bootstrap(APP_UI_EXTENSION, api)
         for key in PAGE_KEYS:
             api.add_page(key, f"自检页面 {key}", lambda: QWidget(window), icon="APPLICATION", plugin_id="selfcheck.plugin")
@@ -222,7 +244,7 @@ def navigation_workbench(case: Case) -> None:
         overflow_row = page.row_for(plugin_routes[-1])
         _expect(problems, overflow_row is not None, "溢出的插件页面也应在页面管理里有一行")
         if overflow_row is not None:
-            overflow_row.open_button.click()
+            _click_row(overflow_row)
         _expect(
             problems,
             window.stackedWidget.currentWidget() is not None
@@ -263,7 +285,11 @@ def navigation_workbench(case: Case) -> None:
         plugin_service.load()
         window._sync_plugin_pages()
         page.refresh()
-        _expect(problems, window.plugin_pages() == ("navpage",), f"插件页面应已装配，实际 {window.plugin_pages()}")
+        _expect(
+            problems,
+            PLUGIN_PAGE_KEY in window.plugin_pages(),
+            f"插件页面应已装配，实际 {window.plugin_pages()}",
+        )
         _expect(
             problems,
             PLUGIN_PAGE_ROUTE in window.sidebar_routes(),
@@ -274,16 +300,21 @@ def navigation_workbench(case: Case) -> None:
         plugin_service.load()
         window._sync_plugin_pages()
         page.refresh()
-        _expect(problems, not window.plugin_pages(), f"插件禁用后不应残留页面，实际 {window.plugin_pages()}")
+        _expect(
+            problems,
+            PLUGIN_PAGE_KEY not in window.plugin_pages(),
+            f"插件禁用后不该残留它的页面，实际 {window.plugin_pages()}",
+        )
         _expect(
             problems,
             PLUGIN_PAGE_ROUTE not in window.sidebar_routes(),
             "插件禁用后侧栏项应消失",
         )
+        routes = {entry.route for entry in window.page_entries()}
         _expect(
             problems,
-            [entry.route for entry in window.page_entries()] == [*top_builtin, *bottom_builtin],
-            "插件页面消失后内置页清单应保持不变",
+            PLUGIN_PAGE_ROUTE not in routes and routes >= {*top_builtin, *bottom_builtin},
+            f"插件页面消失后内置页清单应保持不变，实际 {sorted(routes)}",
         )
     finally:
         api.clear()
@@ -299,8 +330,14 @@ def workbench_lists_builtin_pages(case: Case) -> None:
     `PageBase.auto_refresh` 只连信号、不会立刻刷新，而插件又是在主窗口之前载入的，
     所以这里不借助自检基座的逐个刷新，直接构造主窗口看页面自己有没有填一次。
     """
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.extensions import extension_registry
+    from app.services.plugin_service import plugin_service
     from app.ui.main_window import BUILTIN_PAGES, MainWindow
 
+    api = AppUiApi()
+    previous = extension_registry.provider(APP_UI_EXTENSION)
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
     ensure_app()
     window = MainWindow()
     problems: list[str] = []
@@ -317,13 +354,14 @@ def workbench_lists_builtin_pages(case: Case) -> None:
         if rows:
             first = window.workbench_page.row_for(getattr(window, "home_page").objectName())
             if first is not None:
-                first.open_button.click()
+                _click_row(first)
             _expect(
                 problems,
                 window.stackedWidget.currentWidget() is window.home_page,
-                f"点「首页」行的「打开」应切到首页，实际 {window.stackedWidget.currentWidget()}",
+                f"点「首页」这一行应切到首页，实际 {window.stackedWidget.currentWidget()}",
             )
     finally:
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous if previous is not None else api)
         dispose_window(window)
     assert not problems, "页面管理页未通过：" + "；".join(problems)
 

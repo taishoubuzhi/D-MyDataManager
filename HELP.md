@@ -63,7 +63,7 @@
   `paths.make_dir()` 建目录失败只告警不致命，`paths.release_locked_root()` 每个进程只放行一次（`_released` 标志）。
   `_bootstrap_data()`（建目录 + 开库 + 补数据）失败时 `_degrade_protection()` 会关掉两个开关并强制放行再重试一次；
   仍然失败则打印 `python src/main.py --unlock` 的应急提示并返回码 2。`--unlock` 只强制放行、不改设置。
-  会话标记 `config/session.json`（`paths.SESSION_FILE`）在启动时写入、退出时删除，残留即说明上次异常退出并记入日志。
+  会话标记 `.configs/session.json`（`paths.SESSION_FILE`）在启动时写入、退出时删除，残留即说明上次异常退出并记入日志。
   退出路径是 `aboutToQuit` + `atexit` 双保险：`_lock_on_exit()` 先 `dispose_engine()`（让 WAL 收尾写回 `data.db`）再 `privacy.end_session()`，
   幂等（`main._locked`）。非 Windows 平台 `is_supported()` 为假，一律跳过并只打日志。
 - `tests/test_hidden.py` / `tests/test_privacy.py` 覆盖隐藏流转、ACL 命令构造、会话标记与启动自愈；自检套件的 `settings_privacy_group`（沿用旧界面门禁 `privacy_group` 的判据）检查设置页分组与「打开不立刻锁定、关闭立刻放行」。
@@ -93,14 +93,14 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 `scripts/selfcheck.py` 是自检套件：按 `data`（纯函数与库结构）、`services`（服务层）、`pages`
 （页面结构与交互）、`flows`（端到端流程）四层组织，每项检查在自己的临时目录与全新数据库上运行，
-只调用公开契约，**不碰真实的 `.resources/` 与 `config/`**，因此不需要备份还原，随时可重跑；末行固定输出
+只调用公开契约，**不碰真实的 `.resources/` 与 `.configs/`**，因此不需要备份还原，随时可重跑；末行固定输出
 `RESULT failures=N`，N>0 时退出码为 1。无图形界面的环境先设 `$env:QT_QPA_PLATFORM='offscreen'`。
 `src\main.py --self-check` 在源码仓库里等价于全量自检；打包后没有 `scripts/` 目录，会退化为
 「能建好界面就退出」的冒烟测试。
 
 旧套件（`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`）在功能对等后已删除：
 它内部 `init_db(force=True)` 重建数据库、运行前备份真实库、结束后自动还原；需要对照旧实现时看只读快照
-`logs/_rewrite/legacy_snapshot/scripts/` 或 git 历史，旧 34 项检查到新检查名的逐项对应见 `REWRITE.md` §7.1。
+`.logs/_rewrite/legacy_snapshot/scripts/` 或 git 历史。
 
 单元测试按主题拆分：改哪块代码就只跑对应的模块（`.venv\Scripts\python.exe -m unittest tests.test_manage -v`），
 不再全量 `unittest discover`；文件名、基类与模板等范式见 `tests/README.md`，隔离目录与语料由 `tests/harness.py`
@@ -122,7 +122,8 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 批量操作只处理有权限的标签，其余计入「跳过」（`TaxonomyService.set_tag_global()` / `rename_tag()` / `delete_tag()` / `cleanup_unused()`）。
 
 「标签」页（`src/app/ui/pages/tag_page.py`）用表格展示：`prepare_table(self.table, movable=True)` 让表头可拖动，
-`fit_columns(min_width=64, max_width=220)` 按内容自适应列宽；表头的 `TableFilterBar` 提供名称 / 归属 / 创建者 / 数据项数四列筛选，
+`fit_columns(min_width=64, max_width=220)` 按内容自适应列宽；表头的 `TableFilterBar` 提供名称 / 归属 / 创建者 / 数据项数四列筛选
+（「数据项数」是数值列：可选「等于 / 大于 / 小于 / 区间」，区间为严格两侧，行内数值由 `_row_numbers` 给出），
 `_apply_filters()` 用 `match_filters()` + `setRowHidden()` 处理，结果由「显示 X / Y 个标签」标注，被隐藏行的选中会被忽略。
 表格首列是勾选框（`TAG_CHECK_COLUMN = 0`，名称 / 归属等列整体右移一列），选择条上的三态框与「全选 / 全不选 / 反选」按钮同步勾选状态
 （全选只作用于当前显示的行）；勾选后可以「批量转为全局 / 批量转为个人 / 批量删除」——只有当前用户创建的标签会被处理，
@@ -136,7 +137,9 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 
 `users` 表的 `is_default` 标记默认用户（管理员）：结构升级到 `SCHEMA_VERSION` 4 时把 `MIN(id)` 置位，种子数据建的第一个用户即管理员
 （`src/app/db/seed.py` 的 `User(name=DEFAULT_USER, is_default=True)`，`UserRepository.default()` / `ensure_default()` 优先取它）。
-`UserService.is_admin()` 决定界面权限：默认用户能在「用户」页新建 / 重命名 / 删除任意用户并设置或清除其口令，也才能用存档页的「还原整个存档」，也才能执行设置页与插件页的系统级操作（见下）；
+`UserService.is_admin()` 决定界面权限：默认用户能在「用户」页新建 / 重命名 / 删除任意用户并设置或清除其口令，
+也才能执行设置页与插件页的系统级操作（见下）；存档页的「还原整个存档」对所有用户可见，但普通用户的范围收敛为
+本人的条目（`ArchivePage._restore_user_id()` + `visible_entries()`），默认用户才能整份回档所有用户的数据；
 普通用户可以改自己的用户名与口令、清除自己的口令，但**不能删除当前用户**：`UserService.delete()` 的 `allow_current` 默认为 False，删自己会把当前用户静默切到默认用户（等于提权），所以服务层直接拒绝，界面也把当前用户卡片上的删除按钮置灰。口令按用户独立保存（`src/app/core/security.py`），切换用户与解锁隐藏数据都用当前用户口令。
 「清除口令」按钮只对已设口令的用户显示（`UserPage._clear_password()`）：默认用户可以清除任何用户的口令，其他用户只能清除自己的，越权时给出提示。
 
@@ -168,8 +171,9 @@ SettingCard（设置页）或说明文字（插件页）标注原因；处理器
 
 ## 数据概览页
 
-首页（`src/app/ui/pages/home_page.py`）是仪表盘：7 张 KPI 卡（数据总量 / 占用空间 / 今日导入 / 用户数 / 分类 / 标签数 / 存档数）由模块级
-`format_summary(overview(), users=, archives=)` 生成。整页由四张分区卡片组织（`framework` 的 `section_card()`：概览 / 快捷操作 / 最近导入 / 类型分布），
+首页（`src/app/ui/pages/home_page.py`）是仪表盘：8 张 KPI 卡（数据总量 / 占用空间 / 今日导入 / 用户数 / 分类 / 标签数 / 存档数 / 存档占用）由模块级
+`format_summary(overview(), users=, archives=, archive_bytes=, archive_logical=)` 生成。「存档占用」是全部存档内容在内容仓库里
+真实落盘的字节数（跨存档按内容去重），副标题给出存档份数与逻辑大小。整页由四张分区卡片组织（`framework` 的 `section_card()`：概览 / 快捷操作 / 最近导入 / 类型分布），
 每张卡片都带标题与一句话说明：概览卡装 KPI 卡、快捷操作卡装「导入数据 / 数据管理 / 打开资源文件夹 / 新建存档」四个按钮、
 最近导入卡装最近条目（点击发 `focusItem`）、类型分布卡装 `type_distribution()` 生成的 `ProgressBar` 条。
 标题行右侧是「当前用户」下拉：切换即 `UserService.set_current()` + `signalBus.userChanged`，设了口令的用户会先弹口令框，口令错误则回退到原用户。
@@ -205,11 +209,13 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 显隐状态分别记进 `Layout/Show-Category-Panel` / `Layout/Show-Filter-Panel`，重启后按上次的样子复原。
 左侧分类栏默认**全部收起**（配置项 `Layout/Expand-Categories` 打开后启动即展开），用户手动展开 / 收起某个分类后刷新列表仍按用户的
 状态显示；右侧筛选区的类型 / 标签 / 关键词三个分组默认**全部折叠**，展开哪几个就记进 `Layout/Expanded-Filters`，下次启动照着恢复。
-每页条数、两栏显隐、分类栏与筛选栏的折叠状态都存在 `config/config.json` 的 `Layout` 组里，也可以在「设置 → 外观」里改
+每页条数、两栏显隐、分类栏与筛选栏的折叠状态都存在 `.configs/config.json` 的 `Layout` 组里，也可以在「设置 → 外观」里改
 （「每页条数」下拉、「分类栏默认展开」开关）。
-右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**打开方式**（系统默认程序 /
+右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**查看器**（系统默认程序 /
 点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
+「移入回收站」只在选中项里确有未删除项时可用（`ItemService.delete()` 也会先滤掉已在回收站里的项并返回真实条数），
+全部已删除时按钮禁用、即便误触发也只会提示「选中的数据都已在回收站里」。
 `ManagePage.move_selected(category_id)` 把选中项批量移到目标分类（`None` 表示「未分类」），走 `ItemService.set_category()`，文件跟随到
 `<库>/<用户名>/<分类链>/`；工具栏的「移动到分类」按钮与右键菜单共用它。
 
@@ -218,6 +224,15 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 存档是「快照 + 引用」：`Archive` 记录快照本身，`ArchiveEntry` 记录每个数据项当时的校验和、分类与路径，
 `Blob` 按 SHA-256 内容寻址存放，相同内容只存一份（`src/app/services/archive_service.py`）。
 `ArchiveService.entry_state()` 把条目与当前数据对比为 same / changed / removed / missing，还原只处理与当前不一致的条目。
+**新建存档只收录未删除的数据项**（`create()` 走 `_all_items(include_deleted=False)`）：回收站里的项不会进新快照，
+所以刚建完的存档预览恒为「零变更」；反过来，快照建好之后才被删掉的项仍在存档里，还原时按「撤销删除」恢复。
+
+回档分两种方式：**恢复式（`restore`，默认）**保留当前数据、把存档里的内容补回或替换；
+**覆盖式（`mirror`）**以存档为镜像、把存档里没有的现有项收进回收站，只能对整个存档执行、且只有默认用户可用。
+「还原整个存档」会打开「回档变更」对话框（`src/app/ui/components/archive_restore_dialog.py`）：默认用户下头部有
+两个单选可在两种方式间切换，切换时立刻用 `preview_restore(scope, 新模式)` 重新预演并刷新清单，清单为空则禁用
+「确认回档」；普通用户与条目回档不显示切换控件，服务层 `_plan()` 也会对带 `user_id` 的 `mirror` 抛
+`PermissionError("覆盖式回档仅管理员可用")`。设置里 **关闭 `Archive/Restore-Preview` 就只走恢复式**（没有弹窗即没有切换入口）。
 
 自动清理可按数量 / 容量 / 时间 / 关闭（设置 → 存储 → 存档自动清理，对应 `prune()` / `prune_by_size()` / `prune_by_age()` /
 `auto_prune()`），从最早的快照开始删并始终保留最新一份；**已标记的存档（`Archive.pinned`）会被全部清理策略跳过**，
@@ -225,7 +240,22 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 存档页的「标记存档 / 取消标记」按钮跟随选中存档（未选中时禁用），列表项与详情都会标出【已标记】。
 存档页（`src/app/ui/pages/archive_page.py`）用 `SegmentedWidget` + `QStackedWidget` 分成两个页签（`TAB_ARCHIVES` = `archives` /
 `TAB_ENTRIES` = `entries`，`TAB_INDEX` / `tab_index(route_key)` 做键位映射）：**存档列表**页签是上方那排存档表格
-（逐列筛选 + `Pager` 分页，每页条数读配置项 `Layout/Page-Size`，与数据管理页共用），**存档内条目**页签是明细表，含「所属用户」列，供管理员核对跨用户快照。
+（逐列筛选 + `Pager` 分页，每页条数读配置项 `Layout/Page-Size`，与数据管理页共用；筛选栏除名称 / 备注 / 标记外，
+创建时间按天给「在该日 / 之后 / 之前 / 区间」，条目数 / 逻辑大小 / 实际占用 / 去重率给「等于 / 大于 / 小于 / 区间」，
+数值与时间列排在下半行），**存档内条目**页签是明细表，
+列定义在 `ENTRY_COLUMNS` / 表头 `ENTRY_HEADERS`（**首列是勾选框「选择」**，其后是名称 / 类型 / 大小 / 分类 / 标签 / 所属用户 / 状态；因此各列序号比 `ENTRY_COLUMNS` 右移一位，代码里用 `ENTRY_HEADERS.index(...)` 取值），上方自带第二条
+`TableFilterBar`（`entry_filter_bar`）：文本列模糊匹配，类型 / 所属用户 / 状态是选项列，大小是「等于 / 大于 / 小于 / 区间」
+数值列，候选值由 `_refresh_entry_options()` 按当前存档实际出现的取值实时给出，重启筛选不丢用户已选的值；
+「分类」与「标签」是筛选栏下方两个并排的可折叠分组（`FilterSection`，与数据管理页同款：搜索框 + 三态全选框 + 复选）——
+分类按「用户名 / 分类」分组展开（只看得到自己的分组），标签列出当前存档里出现过的标签，两边都是勾选即筛选。
+条目状态走
+`ArchiveService.states_for()` 批量计算（含「库内文件已丢失」：档案还在仓库里、但库内那份文件被直接在磁盘上删掉了，
+这时回档会「补回文件」而不是误报一致）；「还原整个存档」按钮在有筛选时变成「还原筛选结果（N 项）」，
+只回档筛出来的条目（筛不出条目只提示、不发起回档），没有筛选才是整档范围 —— 普通用户下这个范围由
+`_restore_user_id()` 收敛为本人，所以普通用户也能安全地按「所属用户」筛选后整份回退自己的部分。
+存档页覆写了 `refresh()`（`auto_refresh(signalBus.itemsChanged, signalBus.archivesChanged)` 接的就是它），
+所以别处删改数据或新建存档后，存档列表与**条目状态会立刻重取**：在数据管理里删掉一项、再进「存档内条目」，
+那一行的状态已经是「已删除」，不会再停在「一致（无需还原）」；
 用户点选一条存档会自动切到「存档内条目」页签，也可以随时手动切回去；程序化刷新（恢复选中行、重载列表）时用 `blockSignals`
 屏蔽信号，不会强行抢走页签。`tab_keys()` / `current_tab()` / `switch_tab(route_key)` 是给外部（如跳转逻辑）用的接口。
 
@@ -233,6 +263,54 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 可以「批量标记 / 批量取消标记 / 批量删除」。**已标记的存档不能直接删除**：单条删除会提示先取消标记，
 批量删除会跳过它们并在确认框与结果提示里说明跳过数量；服务层 `ArchiveService.delete()` 对已标记的存档返回 `False`
 （自动清理策略同样跳过已标记的存档）。
+
+「存档内条目」页签用的是同一套勾选（首列勾选框 + 三态「全选本页」+ 已选计数），选择条上另有
+**「只选不一致」「清空选择」「下一个不一致」**：前者一次勾上所有与当前数据不一致的条目，后者逐条滚动并选中
+（到底回到第一条，方便一条条核对）。打开一个新存档时会**自动勾选不一致的条目**；不一致的行**整行加粗**、
+状态列用主题强调色，单元格的悬停提示写明具体状态（内容已变化 / 已删除 / 存档文件缺失 / 库内文件已丢失）。
+双击不一致的行会切到数据管理页并定位该数据项（`signalBus.focusItem`）；点「还原选中条目」时优先用勾选的条目，
+一条都没勾才退回表格里选中的行。判据是 `ENTRY_INCONSISTENT_STATES`（`same` 之外的状态都算不一致）。
+
+存档页的操作行在「清理无用文件」旁边还有两个入口：**校验存档**（`verify("quick")`，整库比对索引与文件系统，
+通过就提示「校验通过」，报出问题时先弹确认框、再让用户决定跑一次深度校验 `verify("deep")` —— 深度校验会解压
+每份内容重算 SHA-256）与**优化空间**（有内容还在用旧的压缩编码时出现，点击先回收没有索引引用的内容文件、
+再按当前方案把旧编码内容重压一遍，提示几份内容换了编码、回收了多少字节；清理同时收掉空掉的哈希目录，
+删内容之后不会在内容仓库里留下空文件夹）。`verify()` 自己会写日志——通过时一行
+`完整性校验通过（quick|deep）：N 份内容 / M 个文件`，有问题时一行 `完整性校验发现问题：…` 加逐条
+`校验发现：…`，所以控制台 / 日志文件里能看到校验结果，不必只靠界面提示。仓库详情在存档表格上方一行的统计提示里
+（`_storage_hint()`：内容份数、实际占用与压缩后大小），同一行还报「共 N 个存档，筛选后 M 个 · 总占用 X」——总占用是全部存档内容
+在仓库里真实落盘的大小（跨存档按内容去重），`ArchiveService.archive_usage()` 提供。表格另有「逻辑大小 / 实际占用 / 去重率」三列 ——
+逻辑大小是条目大小之和，实际占用是**这份存档**的内容去重后真正落盘的量（`footprints()`，不再是新建存档时的增量占用），
+去重率 = `1 - 实际 / 逻辑`（逻辑 ≤ 0 或实际 ≥ 逻辑时显示「—」）。点选存档后的详情里，对比标签说的是**回档将做什么**
+（「回档将：新增 N，撤销删除 N…」），若当前另有存档里没有的数据项，会另注「当前另有 N 项不在存档中（回档会保留）」——
+它和点「还原整个存档」时的提示同源，因此不会出现「标签说有新增、提示却说无需回档」的矛盾。
+「回档变更」对话框把每条变更按种类分组列出（文件 / 分类 / 归属三列，清单高度按条目数在 220-420 之间伸缩，
+单元格挂完整内容的悬停提示）：**「内容缺失」的条目也在清单里**（`CHANGE_MISSING`，存档里没有内容、回档补不回来），
+`RestoreReport.actionable` 才是「有没有真能执行的变更」的判据——它为假时确认与「先存档再回档」两个按钮禁用，
+头部摘要会写明「其中没有可回档的变更」。
+
+所有内容都**整份压缩**后按内容寻址存一个文件（一份内容一个文件、一条内容记录，同一内容不重复占空间）。
+压缩优先用 **zstd**（Python 3.14 起进入标准库 `compression.zstd`），解释器没有它时自动退回 deflate（zlib）；
+文本类用更高级别，已压缩格式（视频 / 音频 / 图片 / 压缩包等）与压不动的内容直接原样保存 —— 方案由
+`content_store.policy_for()` 按文件名与 MIME 挑选，两种编码的旧内容都能正常读取。旧编码的内容会在
+**自动清理**与「优化空间」时重新压缩（`needs_recode()` 数出待升级内容，`recompress()` 重压），无需重建存档。
+
+从分块版本升级上来时，`SCHEMA_VERSION` 自动从 7 升到 8：旧的块 / pack / 清单索引表会被删除，
+旧的 `store/packs/` 数据文件随后由自动清理当作没有索引引用的文件回收（`library/**` 真实文件不受影响）。
+升级后旧存档的内容文件需要按新机制重建一次 —— 用下面的「重新加载存档文件」即可。
+
+**重新加载存档文件**（仅默认用户可见，`_load_identity()` 里按 `user.is_default` 显隐）用于索引与真实文件
+对不上时的修复：点击先跑 `plan_rebuild()` 预检（直接使用现有文件 / 从存档还原文件 / 与存档不一致，
+以存档为准各有多少），确认后交给 `ArchiveRebuildWorker` 后台线程按 `restore`（还原文件）→ `rebuild`
+（重建索引）两阶段推进，进度写进 `busy`；重建期间所有写存档入口被禁用（服务层另有一层互斥），
+非默认用户或重建进行中调用会被服务层以 `PermissionError` / `RebuildBlocked` 挡住。
+
+设置 → 存储里与存档相关的卡片只剩一张：**自动清理无用内容**（`Archive/Auto-Cleanup`，默认开启）——
+启动后、创建存档、删除 / 批量删除、`prune*` 之后回收没有索引引用的内容文件，并按当前方案重写旧编码内容
+（分块时期的「碎片整理阈值」「整份压缩上限」「整份压缩收益」三张卡已随分块方案一并删除）。
+自动清理的执行时机是：启动后延迟 1.5 秒一次（`main_window.showEvent` 里 `QTimer.singleShot(1500, ...)`）、
+创建存档后、删除 / 批量删除后、`prune*` 之后各一次。存档页「按策略清理」按钮的提示框会写明当前清理策略
+（`policy_summary()` + 「创建存档时自动执行」），标题下不再单独占一行。
 
 ## 导入页与批量导入
 
@@ -272,10 +350,10 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 
 `src/app/ui/components/data_table.py` 提供列表页共用的小工具（标签页 / 存档页 / 导入页都在用）：
 
-- `TableFilterBar`（`configure([(键, 显示名, "text"|"choice"), ...])` + `set_options()` / `set_filter()` / `filters()` / `reset()`，`changed` 信号）：贴在表格上方的 Excel 式逐列筛选栏，文本列子串匹配、选项列精确匹配；`reset()` 只在确有变化时发信号；
+- `TableFilterBar`（`configure([(键, 显示名, "text"|"choice"|"number"|"date"[, 选项]), ...])` + `set_options()` / `set_filter()` / `filters()` / `has_filters()` / `reset()`，`changed` 信号）：贴在表格上方的 Excel 式逐列筛选栏，文本列子串匹配、选项列精确匹配；数值列给「不限 / 等于 / 大于 / 小于 / 区间」模式（区间才显示第二个输入框，`解析数字` 时 `unit="size"` 接受 `512KB` / `1.5MB`），日期列给「不限 / 在该日 / 在该日之后 / 在该日之前 / 区间」模式（用 qfluentwidgets `DatePicker`，按天）；选项里 `row: 1` 可把该列排到筛选栏第二行；`reset()` 只在确有变化时发信号；
 - `prepare_table(table, *, movable=True)`：隐藏行号、整行多选、只读、表头可拖动（`setSectionsMovable`）、列宽 Interactive；
 - `fit_columns(table, *, min_width=72, max_width=260, weights=None)`：先按内容量宽再夹紧，权重列吃剩余宽度；
-- `match_filters(values, filters)`：判断一行是否命中全部筛选条件（忽略大小写的子串匹配，空条件跳过）。
+- `match_filters(values, filters, numbers=None, sets=None)`：判断一行是否命中全部筛选条件——文本列忽略大小写的子串匹配、选项列精确匹配、数值 / 日期列命中 4 元区间 `(下限, 含下限, 上限, 含上限)`、集合条件（分类 / 标签）要求被勾选的值全在行内集合里；空条件一律跳过。
 
 动态重建列表时，摘掉旧控件必须走 `src/app/ui/framework/feedback.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
 PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘掉的条目都会变成一闪而过的小顶层窗口（`ManagePage._clear_layout()`、
@@ -285,7 +363,7 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 
 ## 界面样式统一
 
-页面骨架尺寸统一取自「插件管理 / 打开方式管理 / 存档管理 / 标签管理」这一套风格，常量与构件都在 `src/app/ui/framework/`（间距与构件）与 `src/app/ui/components/`：
+页面骨架尺寸统一取自「插件管理 / 查看器管理 / 存档管理 / 标签管理」这一套风格，常量与构件都在 `src/app/ui/framework/`（间距与构件）与 `src/app/ui/components/`：
 
 - `PAGE_MARGINS = (24, 20, 24, 20)`、`PAGE_SPACING = 12`：所有页面的外层边距与间距（`ScrollPage` / `Page` 基类建好正文布局，内容用 `add_header()` / `add_section()` / `add_widget()` / `add_row()` 加进去）；
 - `PANEL_MARGINS = (12, 12, 12, 12)`：列表面板卡片；`DETAIL_MARGINS = (16, 14, 16, 14)`：详情 / 表单卡片；`COMPACT_MARGINS = (10, 8, 10, 8)`：紧凑正文（查看器正文、筛选面板内层）；`KPI_MARGINS = (14, 8, 14, 8)`：KPI / 统计卡片内边距；`SCROLL_GUTTER = 6`：滚动区右侧留白（避免内容贴住滚动条）；
@@ -305,7 +383,7 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
 设置页的 `PushSettingCard` 自带原生按钮，已用 `SettingsPage` 里的 `ActionCard`（继承它并换成 `PushButton`）替换。
 纯文本标签也能图标化：`framework/labels.py` 的 `IconTextLabel`（工厂 `icon_text_label(图标, 文字, parent)`，只画图标的用 `icon_label(...)`）
 平时画「图标 + 文字」，`Layout/Simple-Display` 不是 `none` 时只留图标、文字挪进悬停提示（`default` 挡位下同一个容器里共用同一枚图标的标签仍保留文字）；筛选栏的分组标题与「范围与排序」、导入页的字段标签、
-打开方式页的字段名、插件页的两栏标题、数据管理页的「用户」与概览页的「当前用户」都改用它，纯文本按钮（自动编号、每组只保留最新、
+查看器页的字段名、插件页的两栏标题、数据管理页的「用户」与概览页的「当前用户」都改用它，纯文本按钮（自动编号、每组只保留最新、
 全部取消勾选、清空选择、重置筛选）也都补上了图标。标签内部图标固定 18 px 且贴左、文字紧随其后（`addWidget(..., AlignVCenter)` + `addStretch(1)`），放在很宽的容器里也不会被推到中间；信息行可以传 `keep_text=True`：即使打开简化显示也保留文字（用户卡片的三行信息就是这么写的）；
 自检 `icon_text_labels` 逐项验「平时有文字、简化显示只留图标且有同一段提示」与「图标 18 px、贴左、文字紧跟图标」。
 「设置 → 外观」另有「每页条数」（`Layout/Page-Size`，50 / 100 / 200 / 500）、「分类栏默认展开」（`Layout/Expand-Categories`）与「悬停提示延迟（毫秒）」（`Layout/Tooltip-Delay`，默认 2000，0 表示立刻弹出）三张卡。
@@ -367,22 +445,24 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 没有同名全局标签、但库里已有同名**个人**标签时，会先建好全局标签再把这些个人标签并入它（`TagRepository.merge_shadow_copies()`），
 避免凭空多出一个同名全局副本；历史库里已经存在的这种副本由启动时的 `database._merge_shadow_tags()` 修复（`item_tags` 的引用改到全局标签后删除个人标签行）。
 
-## 打开方式与查看器插件
+## 查看器机制与查看器插件
 
-打开文件走 `src/app/services/open_with_service.py`：`OpenWithService.resolve(path)` 按顺序决定用哪种方式 —— 自定义规则且填了程序 →
-`custom`；自定义规则没填程序 → `ask`（交给系统选择）；规则为内置且指定了 `viewer_id` 且该查看器还在 → 用指定查看器（查看器已不存在时
-回退到该扩展名的默认查看器，reason 记为「指定插件不可用」）；规则为内置但没指定 → 该扩展名的默认查看器；没有可用查看器 → 回退 `inherit`；
-没有规则时，有内置查看器就用内置，否则用系统默认。规则按扩展名（不含点）存在 `config/open_with.json`，形如 `{mode, program, args, viewer_id}`，
-`mode` 取 `builtin` / `inherit` / `custom`，参数里的 `{path}` 会替换成实际路径（没有占位符时自动补在末尾，见 `src/app/core/shell.py` 的 `build_command()`）。
+打开行为全部由插件 `builtin.lib.viewer` 通过 `viewer.open` 扩展接口提供：程序侧 `app.sdk.viewers` 只留类型别名（`ViewerInfo` / `ViewerFactory` /
+`ViewerOpener`）与调度门面（注册表搬到了 `plugins/builtin.lib.viewer/registry.py`）
+（`open_path()` / `open_viewer_with()` / `open_system()`，拿不到接口时退回系统默认）。插件里的 `ViewerRules.resolve(path)` 按顺序决定用哪种方式 ——
+自定义规则且填了程序 → `custom`；自定义规则没填程序 → `ask`（交给系统选择）；规则为内置且指定了 `viewer_id` 且该查看器还在 → 用指定查看器
+（已不存在时回退到该扩展名的默认查看器）；规则为内置但没指定 → 该扩展名的默认查看器；没有可用查看器 → 回退 `inherit`；
+没有规则时，有内置查看器就用内置，否则用系统默认。规则按扩展名（不含点）存在 `.configs/viewers.json`（旧版 `.configs/open_with.json`
+首次读取时自动迁移），形如 `{mode, program, args, viewer_id}`，`mode` 取 `builtin` / `inherit` / `custom`，
+参数里的 `{path}` 会替换成实际路径（没有占位符时自动补在末尾，见 `src/app/core/shell.py` 的 `build_command()`）。
 
-「打开方式」页（`src/app/ui/pages/open_with_page.py`）以「库里出现过的所有文件格式」为列表（`viewer_registry.extensions()` ∪ 已配置规则 ∪
-`ItemService.extensions_in_use()`，可按扩展名 / 插件名搜索），选中后在右侧配置：打开方式下拉（「使用插件打开」/「继承系统默认」/「自定义程序」/
-「每次询问」，可用项由 `OpenWithService.available_modes()` 决定）、具体插件下拉（仅「使用插件打开」且该格式有多个查看器时可选，「自动」表示按注册顺序）、
-自定义程序与参数，另有「保存」「恢复默认」「测试打开」。当前状态直接写在列表项上（如 `.png — 使用插件（图片查看器）· 库中 12 项`）。
+「查看器」页同样由该插件以**插件页面**形式提供（`plugins/builtin.lib.viewer/config_page.py`，页面模板来自 UI 工具库 `builtin.lib.ui`）：
+以「库里出现过的所有文件格式」为列表（`ctx.host.file_formats()` ∪ 已配置规则，可按扩展名 / 插件名搜索），选中后在右侧配置：打开方式下拉
+（「使用查看器」/「继承系统默认」/「自定义程序」，可用项由 `ViewerRules.available_modes()` 决定）、具体查看器下拉（仅「使用查看器」且该格式有多个查看器时可选，
+「自动」表示按注册顺序）、自定义程序与参数，另有「保存」「恢复默认」「测试打开」。
 
-主程序在 `src/main.py` 里用 `plugin_service.bootstrap("app.open_with", open_with_api)` 把 `OpenWithApi` 登记为扩展接口，插件可以据此查询 /
-修改打开方式（`set_viewer` / `use_viewer_for_all` / `reset_viewer` 等）；执行外部程序、交给系统选择、在资源管理器中定位分别是
-`shell.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
+插件可以用 `ctx.require("viewer.open")` 拿到 `ViewerOpenApi` 查询 / 修改查看器（`set_viewer` / `use_viewer_for_all` / `reset_viewer` 等）；
+执行外部程序、交给系统选择、在资源管理器中定位分别是 `app.sdk.ui.open_with_program()` / `ask_open_with()` / `reveal()`，失败只记日志、不抛异常。
 
 ### 插件协议（v4）
 
@@ -400,7 +480,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
   "api_version": ">=1.0 <2.0",
   "entry": "sample_plugin.py",
   "class": "SampleViewerPlugin",
-  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.dialog"}],
+  "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}],
   "data": {"viewer": "data/viewer.json"},
   "builtin": false
 }
@@ -416,7 +496,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 - `provides` 与 `libraries` 的分工：`provides` 声明的扩展接口是**运行期对象**，别人用 `ctx.require("名字")` 取，插件禁用时随之消失、
   消费方要自己兜底；`libraries` 声明的库模块是**可 import 的代码**，别人用 `from dm_plugin.<id>.plugin import ...` 拿到类 / 函数
   （可继承、可实例化、有 IDE 补全）。清单里的 `provides` 只用于声明与展示，不参与校验。
-- `depends` 支持简写（`"builtin.lib.dialog"`）与对象（`{"id": ..., "version": ">=1.0", "optional": true}`）两种写法；
+- `depends` 支持简写（`"builtin.lib.ui"`）与对象（`{"id": ..., "version": ">=1.0", "optional": true}`）两种写法；
   `optional` 的依赖缺失只跳过、不算失败；`incompatible` 声明互斥插件，`load_after` 只调整载入顺序、不建立依赖关系。
   缺依赖、版本不满足、互斥、重复声明、循环依赖都会让插件载入失败（个别失败不影响其它插件与程序启动）。
 - `data` 把数据文件的**路径**写进清单，插件用 `ctx.data("viewer")` / `ctx.data_path("viewer")` 读回来：清单里只放参数，不放数据。
@@ -438,31 +518,34 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 ### 查看器
 
-内置的查看器是一套「工具库 + 七个具体插件」：`builtin.lib.viewer`（`plugin.py` 提供 `ViewerPlugin` 基类、`ViewerWindow`
-窗口外壳与 `MediaViewer` 媒体播放页）、`builtin.lib.dialog`（`provides: dialog`，提供弹窗外壳），以及
+内置的查看器是一套「工具库 + 七个具体插件」：`builtin.lib.viewer`（`plugin.py` 提供 `ViewerPlugin` 基类与 `ViewerWindow`
+窗口外壳，`registry.py` 提供注册表 `ViewerRegistry`）、`builtin.lib.ui`（`provides: dialog` / `ui`，提供弹窗外壳、页面模板与控件工厂），以及
 `builtin.image` / `builtin.text` / `builtin.markdown` / `builtin.spreadsheet` / `builtin.archive` / `builtin.audio` / `builtin.video`
 （图片 / 文本 / Markdown / 表格 / 压缩包 / 音频 / 视频）—— 每个查看器的视图代码就放在**自己的插件目录**里
-（例如 `plugins/builtin.image/image_view.py`），程序里没有任何查看器界面代码。
+（例如 `plugins/builtin.image/image_view.py`），程序里没有任何查看器界面代码；音频与视频的播放控件由界面工具库提供
+（`builtin.lib.ui` 的 `PlayerPanel` 与 `format_time()`，`QtMultimedia` 到真正播放时才导入），
+两个插件都直接继承它（`AudioViewer` / `VideoViewer`），只差一个 `shows_video` 开关。
 每个查看器把显示名、`kind`、宿主、扩展名、能力写在自己的 `data/viewer.json` 里；基类的 `setup()` 读它、`ctx.require("dialog")`
 之后调 `ctx.add_viewer(...)` 登记，子类只实现 `create_view(path, parent=None)` 返回视图控件。查看器控件是普通 `QWidget`，
 构造签名 `(path, parent=None)`，可提供 `caption` 属性作为补充说明。
 
 弹窗由插件自己完成：基类在登记查看器时同时登记 `opener`（`ViewerPlugin.open_view()`），它用自己目录里的视图配上
-`ViewerWindow` 外壳，再向 `dialog` 扩展接口（`builtin.lib.dialog` 用 `ctx.provide("dialog", DialogApi())` 登记）要一个独立顶层
+`ViewerWindow` 外壳，再向 `dialog` 扩展接口（`builtin.lib.ui` 用 `ctx.provide("dialog", DialogApi())` 登记）要一个独立顶层
 窗口（Esc 或标题栏关闭按钮退出）；缺少该插件时提示「缺少弹窗工具库（dialog），请到「插件」页启用后重试」。
-程序侧只剩调度：`src/app/ui/viewers/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把
-`factory` 控件包一层兜底。数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出
-`ItemService.file_path_of()` 的路径，交给 `src/app/ui/viewers/open_flow.py` 的 `open_path()` 打开；右键「打开方式」里的
-点名查看器与「系统默认程序 / 交给系统选择…」分别走同模块的 `open_viewer_with()` 与 `open_system()`。
+程序侧只剩调度：`app.sdk.viewers` 的 `open_path()` / `open_viewer_with()` / `open_system()` 通过 `viewer.open` 扩展接口把活儿交给插件
+（`plugins/builtin.lib.viewer/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。
+数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开；
+右键「查看器」里的点名查看器与「系统默认程序 / 交给系统选择…」分别走 `open_viewer_with()` 与 `open_system()`。
 
-查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者）。`PluginService.load_viewers()`
-（`src/main.py` 启动时调用；历史命名，实际就是 `load()`）先清空 `ViewerRegistry` 与 `ExtensionRegistry`，再按上面的顺序载入所有
-已启用插件，单个插件出错只把错误记在该插件上。禁用「打开方式」插件后，对应格式会退回系统默认程序。
+查看器由 `plugins/builtin.lib.viewer/registry.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），模块级实例 `viewer_registry`
+随 `viewer.open` 扩展接口一起由插件持有。`PluginService.load()`（`src/main.py` 启动时调用；历史命名 `load_viewers()`）先取旧接口调
+`api.clear()` 清空注册表、再清空 `ExtensionRegistry`，然后按上面的顺序载入所有已启用插件，单个插件出错只把错误记在该插件上；
+插件卸载时 `_drop_plugin_state()` 调 `api.unregister_plugin(plugin_id)`。禁用「查看器」插件后，对应格式会退回系统默认程序。
 启动时的控制台输出分三层，程序侧不需要再打印任何东西：`app.sdk` 第一次被导入时播报一次
 「SDK 已载入：版本 1.0」（`app.sdk.sdk_banner()`），随后每载入成功一个插件各来一行「插件 `<id>` 已载入」，
 最后由 `PluginService.loaded_summary()` 给一句汇总，形如
 「插件载入：库插件 2 个（已启用 2、未启用 0）、功能插件 8 个（已启用 7、未启用 1）」——
-不再按扩展点统计「几个打开方式、几个查看器」，只看库插件 / 功能插件的数量与启停情况；
+不再按扩展点统计「几个查看器」，只看库插件 / 功能插件的数量与启停情况；
 有插件载入失败时句尾补「N 个插件载入失败（见插件页）」。查看器共用的纯函数在 SDK 里（`app.sdk.data`，插件可直接 import）：
 文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
 
@@ -470,12 +553,12 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 插件用清单里的 `options` 声明用户可配置项（`src/app/core/plugin_options.py` 的 `parse_options()`：`bool` / `text` / `choice` 三种，
 `key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，`choice` 必须有 `choices` 且默认值必须在其中）。「插件」页的「插件选项」按钮弹出
-`src/app/ui/plugin_options_dialog.py` 的 `PluginOptionsDialog`，按声明生成控件并把改动写进 `config/plugins.json` 里该插件的 `settings`
+`src/app/ui/plugin_options_dialog.py` 的 `PluginOptionsDialog`，按声明生成控件并把改动写进 `.configs/plugins.json` 里该插件的 `settings`
 （`PluginService.set_option()` / `reset_options()` / `options_of()`）；插件在 `setup(ctx)` 里用 `ctx.option("键")` 读回（取值经
 `coerce_option()` 规范化，无法识别时回退默认值），选项改动后插件会整体重新载入，因此读到的值立即生效。若插件注册了查看器，
-该对话框还会列出其扩展名的勾选框，勾选即调用 `app.open_with` 的 `set_viewer()`，用户不必去「打开方式」页逐个设置。
+该对话框还会列出其扩展名的勾选框，勾选即调用 `viewer.open` 扩展接口的 `set_viewer()`，用户不必去「查看器」页逐个设置。
 「插件」页按贡献（按扩展点分组）/ 来源（内置 / 外部）/ 创建者 / 状态与关键词筛选，支持按默认顺序 / 名称 / 来源 / 创建者 / 状态 / 版本 / 贡献
-排序并切换正序、逆序（`PluginService.all(query, state, source, author, contribution, order, reverse)` 与 `PLUGIN_ORDERS`）。计数文案直接说明状态：没有筛选时是「共 N 个插件」，被筛过时是「已筛选：X / 共 N 个插件」并在旁边出现「清除筛选」按钮（从「打开方式」页跳过来会按该扩展点自动筛选，列表因此只列出一部分插件）。
+排序并切换正序、逆序（`PluginService.all(query, state, source, author, contribution, order, reverse)` 与 `PLUGIN_ORDERS`）。计数文案直接说明状态：没有筛选时是「共 N 个插件」，被筛过时是「已筛选：X / 共 N 个插件」并在旁边出现「清除筛选」按钮（从「查看器」页跳过来会按该扩展点自动筛选，列表因此只列出一部分插件）。
 列表项右侧由 `components/plugin_delegate.py` 的 `PluginItemDelegate` 自绘一枚状态徽章（已启用 / 已禁用 / 载入失败，色调取自
 `PluginInfo.state_tone`），列表行按两行画：第一行插件名（`TITLE_ROLE`），第二行「类型 · 来源 · 贡献」（`SUBTITLE_ROLE`，小一号、淡一些），
 两行都按可用宽度省略、并裁剪在右侧徽章左边（`PluginItemDelegate` 覆写 `initStyleOption()` 清掉基类要画的文本，`paint()` 里自己按 `SE_ItemViewItemText` 画两行）；
@@ -484,7 +567,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 再分两栏列出「协议与接口」（贡献 / 依赖插件 / 扩展接口 / 提供库 / 适用管理器版本 / 入口文件）与「清单与选项」（清单数据 / 插件选项摘要 / 清单路径），
 不再是一条把八件事用 `·` 串起来的长句；自检 `plugin_display` 校验代理类型、每行的徽章数据与详情徽章的内容，并断言每行有标题 / 副标题、行高够两行、文字不会压到右侧徽章上。
 操作包括导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名 / 说明 / 备注、打开插件目录（内置插件同样可以打开）、
-「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`（`{"version": 1, "plugins": {...}}`）。内置插件不能删除；
+「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `.configs/plugins.json`（`{"version": 1, "plugins": {...}}`）。内置插件不能删除；
 清单里声明了 `provides` 却没有实际注册（或反过来）时，程序只在该插件的备注里写一条「清单声明的扩展接口没有注册：`<名字>`」提示，
 不算载入失败，补上注册重新载入后会自动清掉；
 载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。启动时控制台按「启动 1/8 … 8/8」报告阶段（日志系统 / 缩放 / 会话 / 隐私 / 数据库 / 界面框架 / 插件系统 / 主窗口），插件部分先打印「插件扫描完成：发现 N 个（启用 X、未启用 Y、清单有误 Z）」，载入完成后打印汇总「插件载入：共 N 个（已启用 X、未启用 Y）；库插件 …、功能插件 …」，每个载入成功的插件各一条「已载入」、失败的逐条 `warning`；自检 `plugin_load_summary` 与 `startup_stage_logs` 会校验这套输出。
@@ -497,7 +580,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 插件除了提供查看器与扩展接口，还能往界面上加东西。程序定义了 10 个扩展点（`src/app/sdk/points.py` 的 `ExtensionPoint`）：
 概览卡片（`app.ui.home.kpi`）、设置卡片（`app.ui.settings.card`）、数据管理工具栏（`app.ui.manage.toolbar`）、条目右键菜单
-（`app.ui.manage.item_menu`）、详情面板行（`app.ui.detail.panel`）、导入筛选器（`app.ui.import.filter`）、打开方式（`app.viewer`）、
+（`app.ui.manage.item_menu`）、详情面板行（`app.ui.detail.panel`）、导入筛选器（`app.ui.import.filter`）、查看器（`app.viewer`）、
 页面（`app.ui.page`）；另有 `app.data.import.hook` 与 `app.item.open.resolver` 是**协议预留**、程序侧尚未接线。
 界面上的扩展点由 `src/app/ui/framework/contributions.py` 统一读取，插件用 `ctx.contribute(扩展点, {...})` 贡献，
 插件被禁用时贡献随之撤销；某个回调抛异常只记日志，不会影响页面。
@@ -511,9 +594,9 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 `plugin_service.bootstrap("app.ui", AppUiApi())`（`src/app/core/app_ui.py`）把 `app.ui` 接口登记进 `extension_registry`，
 插件登记后主窗口（`src/app/ui/main_window.py` 的 `_sync_plugin_pages()`）会按 `PageSpec.route`（`plugin.<key>`）装配 / 移除导航项与堆叠页，
 页面工厂抛异常时退化成一条提示页而不影响其它页面；`load()` 每次重载都会重新提供 `app.ui` 并调用它的 `sync_plugins(已载入插件 id)`，
-因此**插件的页面会随启用 / 禁用自动出现与消失**。左侧导航的顺序固定：内置页面按内置顺序
-（设置恒在最下面），插件页面按载入顺序追加；追加不下的插件页面只出现在内置的「页面管理」页里
-（在那一页里仍可打开），「页面管理」只读、不改布局。`app.ui` 之外，插件还可以
+因此**插件的页面会随启用 / 禁用自动出现与消失**。左侧导航的顺序是固定的：内置页面按内置顺序（设置恒在最下面），
+插件页面按载入顺序追加，最多显示 7 个（`src/app/ui/main_window.py` 的 `PLUGIN_SIDEBAR_LIMIT`），追加不下的只出现在内置的
+**「页面管理」页**（`src/app/ui/pages/workbench_page.py`）里 —— 那一页每行都**点整行（或行尾的「打开」）直接进入**。`app.ui` 之外，插件还可以
 `ctx.provide(name, provider)` 暴露自己的扩展接口供其它插件 `ctx.require(name)` 使用。
 
 **写插件的完整说明（最小插件、SDK 全部接口、库插件、目录规范、排错）见仓库根目录的 [PLUGIN.md](PLUGIN.md)；

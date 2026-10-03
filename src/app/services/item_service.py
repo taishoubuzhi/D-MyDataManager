@@ -9,18 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..core import paths, shell
-from ..core.config import store_dir
 from ..db.models import ArchiveEntry, DataItem, DataType, Library
 from ..repositories import BlobRepository, ItemRepository, TagRepository
 from . import feature_service
-from .blob_store import BlobStore
 from .library_service import LibraryService
+from .content_store import ContentStore
 
 
 class ItemService:
-    def __init__(self, session: Session, store: BlobStore | None = None) -> None:
+    def __init__(self, session: Session, store: ContentStore | None = None) -> None:
         self.session = session
-        self.store = store or BlobStore(store_dir())
+        self.store = store or ContentStore(session)
         self.items = ItemRepository(session)
         self.tags = TagRepository(session)
         self.blobs = BlobRepository(session)
@@ -35,11 +34,13 @@ class ItemService:
         changed_content = "content" in fields and fields["content"] != item.content
         item = self.items.update(item, **fields)
         if changed_content:
-            checksum, _store_rel, size = self.store.put_text(item.content)
+            checksum, store_rel, size = self.store.put_text(
+                item.content, name=item.name, mime=item.mime or "text/plain"
+            )
             item.checksum = checksum
             item.size = size
             self._sync_text_file(item)
-            self.blobs.register(checksum, size, "text/plain", self.store.rel_path_for(checksum))
+            self.blobs.register(checksum, size, "text/plain", store_rel)
             feature_service.replace_features(self.session, item)
             self.session.flush()
         return item
@@ -89,12 +90,16 @@ class ItemService:
 
     # ----------------------------------------------------------------- 回收站
     def delete(self, items: list[DataItem]) -> int:
-        count = self.items.soft_delete(items)
+        """把数据项移入回收站；已在回收站里的项会被跳过（重复删除没有意义）。"""
+        targets = [item for item in items if not item.is_deleted]
+        if not targets:
+            return 0
+        count = self.items.soft_delete(targets)
         # 广播条目删除事件：插件可以订阅 item.deleted
         from ..sdk import Events
         from .plugin_service import plugin_service
 
-        for item in items:
+        for item in targets:
             plugin_service.publish(Events.ITEM_DELETED, item_id=item.id, name=item.name)
         return count
 
@@ -113,7 +118,8 @@ class ItemService:
             if blob is not None:
                 blob.ref_count = max(0, blob.ref_count - 1)
                 if blob.ref_count == 0 and not self._archived(item.checksum):
-                    self.store.remove(blob.rel_path)
+                    if blob.rel_path:  # 分块内容没有松散文件，块由 pack 可达性 GC 回收
+                        self.store.remove(blob.rel_path)
                     self.session.delete(blob)
         count = self.items.purge(items)
         logger.info("已彻底删除 {} 个数据项", count)
@@ -138,7 +144,7 @@ class ItemService:
         return path if path is not None and path.exists() else None
 
     def open_item(self, item: DataItem) -> bool:
-        """用系统默认程序打开；内置查看器由界面层按「打开方式」规则处理。"""
+        """用系统默认程序打开；内置查看器由查看器插件库按规则处理。"""
         path = self.file_path_of(item)
         if path is None:
             logger.warning("文件不存在，无法打开：{}", item.name)
@@ -156,7 +162,7 @@ class ItemService:
         return str(path) if path else item.source_path
 
     def extensions_in_use(self, user_id: int | None = None) -> dict[str, int]:
-        """库里实际出现的扩展名 → 数量，供「打开方式」页列出可配置的格式。"""
+        """库里实际出现的扩展名 → 数量，供「查看器」页列出可配置的格式。"""
         from ..repositories import ItemFilter
 
         filters = ItemFilter(include_hidden=True, include_deleted=True)

@@ -51,7 +51,7 @@ def config_items() -> list[ConfigItem]:
 
 
 def reset_config() -> None:
-    """把所有设置项恢复为默认值并写回 config/config.json。"""
+    """把所有设置项恢复为默认值并写回 .configs/config.json。"""
     for item in config_items():
         qconfig.set(item, item.defaultValue)
 

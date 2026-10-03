@@ -59,6 +59,8 @@ class FilterSection(CardWidget):
     def __init__(self, title: str, parent: QWidget | None = None, collapsed: bool = False, icon=None) -> None:
         super().__init__(parent)
         self._boxes: dict = {}
+        self._groups: list[tuple[str, list]] | None = None
+        self._group_labels: dict[str, CaptionLabel] = {}
         self._syncing = False
         self._collapsed = bool(collapsed)
 
@@ -122,7 +124,15 @@ class FilterSection(CardWidget):
 
     def set_items(self, items: list[tuple[object, str]]) -> None:
         """按 (键, 显示名) 更新选项，保留已有的勾选状态。"""
-        wanted = list(items)
+        self.set_groups([("", list(items))])
+
+    def set_groups(self, groups: list[tuple[str, list[tuple[object, str]]]]) -> None:
+        """按「分组标题 + 选项」更新选项：标题非空时在选项上方单独占一行。
+
+        用来表达层级（比如分类按「用户名 / 分类」两层展开）；只传一个空标题的分组时
+        与 `set_items()` 等价，勾选状态同样按 (键) 保留。
+        """
+        wanted = [(key, label) for _title, items in groups for key, label in items]
         keys = {key for key, _label in wanted}
         for key in [key for key in self._boxes if key not in keys]:
             box = self._boxes.pop(key)
@@ -135,6 +145,9 @@ class FilterSection(CardWidget):
                 self._boxes[key] = box
             elif box.text() != label:
                 box.setText(label)
+        self._groups = [
+            (str(title), [key for key, _label in items]) for title, items in groups
+        ]
         self._rebuild()
 
     def checked_keys(self) -> set:
@@ -158,20 +171,44 @@ class FilterSection(CardWidget):
         query = self.search.text().strip().lower()
         while self.grid.count():
             self.grid.takeAt(0)
-        shown: list[CheckBox] = []
-        for box in self._boxes.values():
-            visible = not query or query in box.text().lower()
-            box.setVisible(visible)
-            if visible:
-                shown.append(box)
-        for index, box in enumerate(shown):
-            self.grid.addWidget(box, index // 2, index % 2)
+        groups = self._groups or [("", list(self._boxes))]
+        shown = 0
+        row = 0
+        used: set[str] = set()
+        for title, keys in groups:
+            boxes = [self._boxes[key] for key in keys if key in self._boxes]
+            visible = [box for box in boxes if not query or query in box.text().lower()]
+            for box in boxes:
+                box.setVisible(box in visible)
+            if not visible:
+                continue
+            if title:
+                label = self._group_label(title)
+                used.add(title)
+                label.setVisible(True)
+                self.grid.addWidget(label, row, 0, 1, 2)
+                row += 1
+            for index, box in enumerate(visible):
+                self.grid.addWidget(box, row + index // 2, index % 2)
+            row += (len(visible) + 1) // 2
+            shown += len(visible)
+        for title, label in self._group_labels.items():
+            if title not in used:
+                label.hide()
         if shown or not self._boxes:
             self._empty.hide()
         else:
             self._empty.setVisible(True)
             self.grid.addWidget(self._empty, 0, 0, 1, 2)
         self._sync_all()
+
+    def _group_label(self, title: str) -> CaptionLabel:
+        """分组标题（复用一个控件，避免反复重建）。"""
+        label = self._group_labels.get(title)
+        if label is None:
+            label = CaptionLabel(title, self.body)
+            self._group_labels[title] = label
+        return label
 
     def _sync_all(self) -> None:
         """让三态框反映分组内的勾选情况：全不选 / 部分选中 / 全选。"""

@@ -1,6 +1,6 @@
 """插件协议检查：清单白名单、数据引用、导入边界、插件类契约、多库与载入诊断。
 
-方案见 logs/_rewrite/plugin_refactor_plan.md 第 12 节；只走公开契约（清单文件、
+方案见 .logs/_rewrite/plugin_refactor_plan.md 第 12 节；只走公开契约（清单文件、
 app.core.plugin_core 的解析函数、app.services.plugin_service 的服务层 API）。
 需要「坏插件 / 多库插件」这类样本时，一律写进用例自己的隔离插件目录。
 """
@@ -116,7 +116,7 @@ def plugin_manifest_whitelist(case: Case) -> None:
         assert not unknown, f"{info.id} 清单出现协议外的字段：{unknown}"
         ids.append(info.id)
     assert len(ids) == len(set(ids)), f"插件 id 重复：{sorted(ids)}"
-    assert "builtin.lib.viewer" in ids and "builtin.lib.dialog" in ids, f"缺少库插件：{sorted(ids)}"
+    assert "builtin.lib.viewer" in ids and "builtin.lib.ui" in ids, f"缺少库插件：{sorted(ids)}"
 
     base = {"id": "demo.probe", "name": "探针", "version": "1.0", "api_version": ">=1.0 <2.0", "entry": "plugin.py"}
     removed_type = _manifest_error({**base, "kind": "viewer"})
@@ -440,12 +440,14 @@ def plugin_viewer_extensions(case: Case) -> None:
     """扩展名只由插件 data/viewer.json 声明：注册表与清单一致，程序里不再写死扩展名表。"""
     from app.sdk import data as viewer_data
     from app.core.plugin_core import load_manifest
-    from app.core.viewers import viewer_registry
+    from app.sdk.viewers import open_api
 
     for legacy in LEGACY_EXTENSION_TABLES:
         assert not hasattr(viewer_data, legacy), f"扩展名表不应再写死在数据解析模块里：{legacy}"
 
     install_builtin_plugins()
+    registry = open_api()
+    assert registry is not None, "载入内置插件后应提供 viewer.open 扩展接口"
     viewer_infos = [
         info for info in (load_manifest(folder, builtin=True) for folder in _manifest_dirs()) if "viewer" in info.data
     ]
@@ -454,7 +456,7 @@ def plugin_viewer_extensions(case: Case) -> None:
     for info in viewer_infos:
         payload = json.loads((info.path / info.data["viewer"]).read_text(encoding="utf-8"))
         expected = {str(item).lower().lstrip(".") for item in payload["extensions"]}
-        registered = viewer_registry.by_id(info.id)
+        registered = registry.viewer_by_id(info.id)
         assert registered is not None, f"{info.id} 没有注册查看器"
         assert set(registered.extensions) == expected, (
             f"{info.id} 注册的扩展名与 data/ 不一致：{sorted(set(registered.extensions) ^ expected)}"
@@ -462,11 +464,11 @@ def plugin_viewer_extensions(case: Case) -> None:
         assert registered.plugin_id == info.id, f"{info.id} 的查看器归属不对：{registered.plugin_id!r}"
         for extension in expected:
             declared.setdefault(extension, []).append(info.id)
-    assert sorted(viewer_registry.plugin_ids()) == sorted(info.id for info in viewer_infos), (
+    assert sorted(registry.plugin_ids()) == sorted(info.id for info in viewer_infos), (
         "查看器注册表登记的插件与清单不一致"
     )
     for extension, owners in sorted(declared.items()):
-        found = viewer_registry.for_suffix(f"sample.{extension}")
+        found = registry.viewer_for(f"sample.{extension}")
         assert found is not None, f"扩展名 {extension} 解析不到查看器"
         if len(owners) == 1:
             assert found.plugin_id == owners[0], f"扩展名 {extension} 应解析给 {owners[0]}，实际 {found.plugin_id}"

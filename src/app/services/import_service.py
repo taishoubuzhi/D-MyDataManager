@@ -16,7 +16,7 @@ from loguru import logger
 from sqlalchemy.orm import Session
 
 from ..core import paths
-from ..core.config import config, store_dir
+from ..core.config import config
 from ..db.models import Category, DataItem, DataType, Library, Version, guess_type
 from ..db.seed import UNCATEGORIZED_NAME
 from ..repositories import (
@@ -26,8 +26,9 @@ from ..repositories import (
     TagRepository,
 )
 from . import feature_service
-from .blob_store import BlobStore, sha256_of
+from .blob_store import sha256_of
 from .library_service import LibraryService
+from .content_store import ContentStore
 from .privacy_service import guarded
 from .taxonomy_service import is_uncategorized
 from .user_service import UserService
@@ -101,10 +102,10 @@ class ImportService:
         self,
         session: Session,
         library: Library | None = None,
-        store: BlobStore | None = None,
+        store: ContentStore | None = None,
     ) -> None:
         self.session = session
-        self.store = store or BlobStore(store_dir())
+        self.store = store or ContentStore(session)
         self.libraries = LibraryService(session, store=self.store)
         self.library = library or self.libraries.ensure_default()
         self.items = ItemRepository(session)
@@ -131,7 +132,7 @@ class ImportService:
             name = timestamp_name()
 
         policy = config.duplicatePolicy.value
-        checksum, _store_rel, size = self.store.put_text(content)
+        checksum, _store_rel, size = self.store.put_text(content, name=name, mime="text/plain")
         if policy == "skip" and self.items.by_checksum(checksum):
             logger.info("文本内容已存在，按策略跳过：{}", name)
             return None
@@ -249,8 +250,8 @@ class ImportService:
         item.tags = self.tags.ensure_many(list(item.tag_names) + list(tags or []), user_id=item.user_id)
         if data_type is DataType.IMAGE:
             item.cover_path = feature_service.make_cover(path, checksum)
-        self.store.put_file(target)
-        self._register_blob(checksum, size, mime)
+        _checksum, store_rel, _size = self.store.put_file(target, name=name, mime=mime)
+        self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)
         self.session.flush()
         logger.info("已导入文件：{} -> {}", path.name, rel_path)
@@ -416,8 +417,8 @@ class ImportService:
         item.tags = self.tags.ensure_many(tags or [], user_id=item.user_id)
         if data_type is DataType.IMAGE:
             item.cover_path = feature_service.make_cover(path, checksum)
-        self.store.put_file(path)
-        self._register_blob(checksum, size, mime)
+        _checksum, store_rel, _size = self.store.put_file(path, name=path.name, mime=mime)
+        self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)
         self._add_version(item, "扫描登记")
         self.session.flush()
@@ -440,8 +441,11 @@ class ImportService:
             self.session.flush()
         return category.id
 
-    def _register_blob(self, checksum: str, size: int, mime: str) -> None:
-        self.blobs.register(checksum, size, mime, self.store.rel_path_for(checksum))
+    def _register_blob(self, checksum: str, size: int, mime: str, store_rel: str | None = None) -> None:
+        """登记内容引用；`store_rel` 为空串表示内容已分块、没有松散文件。"""
+        if store_rel is None:
+            store_rel = self.store.rel_path_for(checksum)
+        self.blobs.register(checksum, size, mime, store_rel)
 
     def _add_version(self, item: DataItem, label: str) -> None:
         blob = self.blobs.by_checksum(item.checksum)

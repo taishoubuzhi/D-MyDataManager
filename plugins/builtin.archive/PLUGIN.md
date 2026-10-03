@@ -13,11 +13,11 @@
 ## 依赖
 
 - builtin.lib.viewer（查看器基类）
-- builtin.lib.dialog（弹窗外壳）
+- builtin.lib.ui（弹窗外壳）
 
 ## 贡献
 
-- 打开方式（app.viewer）：kind = archive，认领 zip / jar / whl / apk / tar / gz / tgz / bz2 / tbz / tbz2 / xz / txz，
+- 查看器（app.viewer）：kind = archive，认领 zip / jar / whl / apk / tar / gz / tgz / bz2 / tbz / tbz2 / xz / txz，
   能力：条目列表 / 压缩比 / 包内文本预览。
 
 ## 数据文件

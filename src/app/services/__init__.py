@@ -8,7 +8,7 @@ from .import_service import ImportResult, ImportService, timestamp_name
 from .item_service import ItemService
 from .library_service import LibraryService, sanitize_dir_name
 from .maintenance import reset_config, reset_runtime_data, reset_to_defaults
-from .open_with_service import OpenDecision, OpenRule, OpenWithService
+from .content_store import ContentStore, preferred_codec
 from .plugin_service import PluginHost, PluginInfo, PluginService, plugin_service
 from .stats_service import overview, recent, storage_usage, type_breakdown
 from .taxonomy_service import CategoryNode, TaxonomyService, is_uncategorized
@@ -19,15 +19,13 @@ __all__ = [
     "ArchiveService",
     "BlobStore",
     "CategoryNode",
+    "ContentStore",
     "ExportResult",
     "ExportService",
     "ImportResult",
     "ImportService",
     "ItemService",
     "LibraryService",
-    "OpenDecision",
-    "OpenRule",
-    "OpenWithService",
     "PluginHost",
     "PluginInfo",
     "PluginService",
@@ -39,6 +37,7 @@ __all__ = [
     "make_cover",
     "overview",
     "plugin_service",
+    "preferred_codec",
     "recent",
     "replace_features",
     "reset_config",

@@ -12,14 +12,12 @@ from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
-    CardWidget,
     FluentIcon,
-    PushButton,
     StrongBodyLabel,
 )
 
 from ...core.signals import signalBus
-from ..framework import COMPACT_MARGINS, ROW_SPACING, ScrollPage, clear_layout
+from ..framework import COMPACT_MARGINS, ROW_SPACING, ClickCard, ScrollPage, clear_layout
 from ..framework import IconTextButton
 
 #: 本页自己的路由名。
@@ -59,14 +57,14 @@ class NavEntry:
 class WorkbenchPage(ScrollPage):
     page_name = WORKBENCH_ROUTE
     page_title = "页面管理"
-    page_subtitle = "全部页面一览；左侧导航顺序固定，插件页面过多时多出来的只在这里打开。"
+    page_subtitle = "全部页面一览；点一行（或行尾的「打开」）就能进去；左侧导航顺序固定，插件页面过多时多出来的只在这里打开。"
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.section_card, self.rows_layout = self.add_section(
             "页面",
-            "内置页面与插件页面都在这里列出，点「打开」即可切过去；左侧导航顺序固定：设置恒在最下面，"
-            "插件页面按载入顺序追加，追加不下的只在这里打开。",
+            "内置页面与插件页面都在这里列出，点任意一行（或行尾的「打开」）即可切过去；"
+            "左侧导航顺序固定：设置恒在最下面，插件页面按载入顺序追加，追加不下的只在这里打开。",
         )
         self.rows_layout.setSpacing(ROW_SPACING)
         self.rows: list[QWidget] = []
@@ -92,7 +90,7 @@ class WorkbenchPage(ScrollPage):
         self.rows_layout.addStretch(1)
 
     def _build_row(self, entry: NavEntry) -> QWidget:
-        row = CardWidget(self)
+        row = ClickCard(self)
         row.setObjectName(f"navRow.{entry.route}")
         layout = QHBoxLayout(row)
         layout.setContentsMargins(*COMPACT_MARGINS)
@@ -113,6 +111,8 @@ class WorkbenchPage(ScrollPage):
         open_button.clicked.connect(lambda: self._on_open(entry.route))
         layout.addWidget(open_button)
 
+        row.clicked.connect(lambda route=entry.route: self._on_open(route))
+        row.setToolTip(f"{entry.title} · 点这一行即可打开")
         row.route = entry.route
         row.title_text = entry.title
         row.open_button = open_button

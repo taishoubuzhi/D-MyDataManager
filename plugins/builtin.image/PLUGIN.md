@@ -13,11 +13,11 @@
 ## 依赖
 
 - builtin.lib.viewer（查看器基类 ViewerPlugin）
-- builtin.lib.dialog（弹窗外壳，host = dialog）
+- builtin.lib.ui（弹窗外壳，host = dialog）
 
 ## 贡献
 
-- 打开方式（扩展点 app.viewer）：viewer_id = builtin.image，kind = image，
+- 查看器（扩展点 app.viewer）：viewer_id = builtin.image，kind = image，
   认领 png / jpg / jpeg / jpe / bmp / gif / webp / tif / tiff / ico / ppm / pgm / jfif（13 个，见 data/viewer.json），
   能力：缩放 / 旋转 / 适应窗口 / 图片信息。
 

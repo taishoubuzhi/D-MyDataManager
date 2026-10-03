@@ -4,6 +4,8 @@
 - 主键统一 `id`，时间统一 `created_at` / `updated_at`（本地时间）。
 - 标签使用关联表（多对多），关键词保留为 JSON 列表，二者语义不同。
 - 文件内容存放在内容寻址仓库（`Blob`），`DataItem.file_path` 只是相对引用。
+- 每份内容整份压缩后按内容寻址存一个文件（`Content` 记录原始大小与实际占用），
+  压缩方案按数据类型挑选，压不动就原样保存。
 - 存档（`Archive` / `ArchiveEntry`）记录某一时刻的库快照，用于回溯。
 """
 
@@ -295,6 +297,9 @@ class Archive(Base):
 
     `pinned` 为真表示已标记：自动清理（按数量 / 容量 / 时间）不会删除它，
     只能先取消标记，或由用户在存档页手动删除。
+
+    `total_size` 是这次存档实际新增的存储占用，`logical_size` 是条目逻辑大小之和；
+    两者差距越大，说明去重与压缩省下的越多。
     """
 
     __tablename__ = "archives"
@@ -304,6 +309,7 @@ class Archive(Base):
     note: Mapped[str] = mapped_column(String(512), default="")
     item_count: Mapped[int] = mapped_column(Integer, default=0)
     total_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    logical_size: Mapped[int] = mapped_column(BigInteger, default=0)
     new_blobs: Mapped[int] = mapped_column(Integer, default=0)
     pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
@@ -317,6 +323,7 @@ class ArchiveEntry(Base):
     """存档中的一条数据记录。
 
     user_id / user_name 记录条目所属用户，还原时据此放回该用户的分类目录。
+    `checksum` 是这份内容的身份（仓库里按它取内容；取不到就是「库内文件已丢失」）。
     """
 
     __tablename__ = "archive_entries"
@@ -338,6 +345,26 @@ class ArchiveEntry(Base):
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
 
     archive: Mapped["Archive"] = relationship(back_populates="entries")
+
+
+class Content(Base):
+    """内容索引：一份内容 = 仓库里的一个文件（整份压缩存储，不再分块）。
+
+    `checksum` 是**压缩前原始字节**的 sha256，也是去重身份：同一份内容只落一份文件。
+    `size` 是原始字节长度，`stored_size` 是实际占用的字节数；`name` / `mime` 只用来
+    在整理时判断该用哪种压缩方案。
+    """
+
+    __tablename__ = "contents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    checksum: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    size: Mapped[int] = mapped_column(BigInteger, default=0)
+    codec: Mapped[str] = mapped_column(String(16), default="raw")
+    stored_size: Mapped[int] = mapped_column(BigInteger, default=0)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    mime: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
 class AppMeta(Base):

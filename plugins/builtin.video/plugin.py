@@ -6,7 +6,7 @@ from dm_plugin.builtin.lib.viewer.plugin import ViewerPlugin
 
 
 class VideoViewerPlugin(ViewerPlugin):
-    """播放视频文件，播放控制由媒体控件自己实现。"""
+    """播放视频文件，播放控制由界面工具库的 PlayerPanel 提供。"""
 
     def create_view(self, path, parent=None):
         from .video_view import VideoViewer

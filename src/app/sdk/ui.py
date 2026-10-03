@@ -20,8 +20,10 @@ __all__ = [
     "PANEL_MARGINS",
     "ROW_SPACING",
     "SCROLL_GUTTER",
+    "ask_open_with",
     "clear_scroll_background",
     "open_default",
+    "open_with_program",
     "reveal",
     "simple_display",
     "simple_mode",
@@ -72,6 +74,20 @@ def open_default(path: str | Path) -> bool:
     from ..core import shell
 
     return bool(shell.open_default(path))
+
+
+def ask_open_with(path: str | Path) -> bool:
+    """弹出系统的「选择程序」对话框，让用户挑一个程序打开文件。"""
+    from ..core import shell
+
+    return bool(shell.ask_open_with(path))
+
+
+def open_with_program(program: str | Path, args: str, path: str | Path) -> bool:
+    """用指定程序打开文件；`args` 里可以用 `{path}` 占位。"""
+    from ..core import shell
+
+    return bool(shell.open_with_program(str(program), args, path))
 
 
 def reveal(path: str | Path) -> bool:

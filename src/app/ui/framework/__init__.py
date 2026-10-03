@@ -36,7 +36,7 @@ from .feedback import (
     toast_warning,
 )
 from .page import Page, PageBase, ScrollPage
-from .sections import PageHeader, caption, empty_state, page_header, panel_card, section_card, toolbar
+from .sections import ClickCard, PageHeader, caption, empty_state, page_header, panel_card, section_card, toolbar
 from .settings_cards import NumberSettingCard
 from .tooltips import (
     HINT_BADGE_SIZE,
@@ -110,6 +110,7 @@ __all__ = [
     "SQUARE_BUTTON_QSS",
     "TYPE_ICONS",
     "BusyTip",
+    "ClickCard",
     "HintBadge",
     "ICON_LABEL_SIZE",
     "IconTextLabel",

@@ -7,10 +7,9 @@ import datetime as dt
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..core.config import store_dir
 from ..db.models import Category, DataItem, DataType, Tag
 from ..repositories import ItemRepository
-from .blob_store import BlobStore
+from .content_store import ContentStore
 
 
 def type_label(value) -> str:
@@ -76,8 +75,8 @@ def type_breakdown(session: Session, user_id: int | None = None) -> list[dict]:
     return result
 
 
-def storage_usage(session: Session, store: BlobStore | None = None, user_id: int | None = None) -> dict:
-    blob_store = store or BlobStore(store_dir())
+def storage_usage(session: Session, store: ContentStore | None = None, user_id: int | None = None) -> dict:
+    blob_store = store or ContentStore(session)
     logical_stmt = select(func.coalesce(func.sum(DataItem.size), 0)).where(
         DataItem.is_deleted.is_(False)
     )

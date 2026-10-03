@@ -1,16 +1,25 @@
-"""Markdown 查看器：渲染视图与源码视图可自由切换。"""
+"""Markdown 查看器：渲染视图与源码视图可自由切换。
+
+两个视图与切换按钮都由 builtin.lib.ui 提供，这里只接渲染 / 源码数据与切换行为。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtGui import QFontDatabase
-from PyQt6.QtWidgets import QHBoxLayout, QStackedWidget, QTextBrowser, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from qfluentwidgets import FluentIcon
 
 from app.sdk.data import read_text
 from app.sdk.ui import COMPACT_MARGINS
-from app.sdk.ui import IconTextButton
+from dm_plugin.builtin.lib.ui.plugin import (
+    icon_button,
+    status_label,
+    text_area,
+    text_browser,
+    toolbar,
+    view_stack,
+)
 
 RENDER_INDEX = 0
 SOURCE_INDEX = 1
@@ -36,29 +45,18 @@ class MarkdownViewer(QWidget):
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self._toggle_button = IconTextButton(FluentIcon.CODE, "查看源码", self)
-        self._toggle_button.clicked.connect(self._toggle)
-        bar.addWidget(self._toggle_button)
-        bar.addStretch(1)
-        self.status_label = CaptionLabel(self.caption, self)
-        bar.addWidget(self.status_label)
-        root.addLayout(bar)
+        bar, row = toolbar(self)
+        self._toggle_button = icon_button(bar, FluentIcon.CODE, "查看源码", self._toggle)
+        row.addWidget(self._toggle_button)
+        row.addStretch(1)
+        self.status_label = status_label(bar, self.caption)
+        row.addWidget(self.status_label)
+        root.addWidget(bar)
 
-        self._stack = QStackedWidget(self)
-        self._browser = QTextBrowser(self._stack)
+        self._browser = text_browser(self, text=text, markdown=True)
         self._browser.setOpenExternalLinks(True)
-        self._browser.setMarkdown(text)
-        self._stack.addWidget(self._browser)
-
-        self._source = PlainTextEdit(self._stack)
-        self._source.setReadOnly(True)
-        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        font.setPointSize(10)
-        self._source.setFont(font)
-        self._source.setPlainText(text)
-        self._stack.addWidget(self._source)
+        self._source = text_area(self, text=text, read_only=True, monospace=True)
+        self._stack = view_stack(self, self._browser, self._source)
         root.addWidget(self._stack, 1)
 
     def _toggle(self) -> None:

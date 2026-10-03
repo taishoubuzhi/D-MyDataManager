@@ -12,7 +12,7 @@
       "id": "builtin.lib.viewer"
     },
     {
-      "id": "builtin.lib.dialog"
+      "id": "builtin.lib.ui"
     }
   ],
   "data": {

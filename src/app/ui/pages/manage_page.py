@@ -30,7 +30,7 @@ from qfluentwidgets import (
 )
 
 from ...core.signals import signalBus
-from ...core.viewers import Viewer
+from ...sdk.viewers import ViewerInfo, open_path, open_system, open_viewer_with, viewers_for
 from ...db import database
 from ...db.models import DataType
 from ...db.seed import UNCATEGORIZED_NAME
@@ -42,7 +42,6 @@ from ...repositories import (
 )
 from ...sdk import ExtensionPoint
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
-from ...services.open_with_service import MODE_ASK, open_with_service
 from ..framework import (
     icon_label,
     PAGE_SPACING,
@@ -57,7 +56,6 @@ from ..framework import (
     type_name,
 )
 from ..framework.contributions import icon_of, items, resolve, value_of
-from ..viewers.open_flow import open_path, open_system, open_viewer_with
 from ..dialogs import (
     CategoryConflictDialog,
     CategoryPickerDialog,
@@ -89,7 +87,7 @@ def range_ids(order: list[int], anchor: int, target: int) -> set[int]:
 #: 右键菜单条目：标识 → (单选文本, 多选文本)；多选文本里的 {count} 会替换成选中数量。
 MENU_LABELS: dict[str, tuple[str, str]] = {
     "open": ("直接打开", "直接打开"),
-    "open_with": ("打开方式", "打开方式"),
+    "open_with": ("查看器", "查看器"),
     "reveal": ("在文件夹中显示", "在文件夹中显示"),
     "copy": ("复制路径", "复制路径"),
     "move": ("移动到分类…", "移动到分类…（{count} 项）"),
@@ -129,12 +127,12 @@ def menu_items(count: int = 1) -> tuple[tuple[str, str], ...]:
     )
 
 
-def open_with_items(suffix: str) -> tuple[tuple[str, str, Viewer | None], ...]:
-    """「打开方式」子菜单：(标识, 文本, 查看器)，标识为 system / viewer:<id> / ask。"""
-    entries: list[tuple[str, str, Viewer | None]] = [("system", "系统默认程序", None)]
+def open_with_items(suffix: str) -> tuple[tuple[str, str, ViewerInfo | None], ...]:
+    """「查看器」子菜单：(标识, 文本, 查看器)，标识为 system / viewer:<id> / ask。"""
+    entries: list[tuple[str, str, ViewerInfo | None]] = [("system", "系统默认程序", None)]
     entries += [
         (f"viewer:{viewer.id}", f"{viewer.name}（{viewer.plugin_id}）", viewer)
-        for viewer in open_with_service.viewers_for(suffix)
+        for viewer in viewers_for(suffix)
     ]
     entries.append(("ask", "交给系统选择…", None))
     return tuple(entries)
@@ -340,6 +338,8 @@ class ManagePage(Page):
             self._buttons[key] = button
         self.restore_button = self._buttons["restore"]
         self.restore_button.setEnabled(False)
+        # 已在回收站的数据不能再移入回收站，没选中可删项时按钮保持置灰。
+        self._buttons["delete"].setEnabled(False)
         self._plugin_buttons = self._plugin_button_list(flow, host)
         scroll.setWidget(host)
         clear_scroll_background(scroll)
@@ -552,11 +552,13 @@ class ManagePage(Page):
         pager = getattr(self, "pager", None)
         if pager is not None:
             pager.set_selection(count, visible=len(getattr(self, "_items", ())))
-        # 还原只对回收站中已删除的数据有意义。
+        # 还原只对回收站中已删除的数据有意义，删除只对尚未删除的数据有意义。
+        selected = self.selected_items()
         if self.restore_button is not None:
-            self.restore_button.setEnabled(
-                any(item.is_deleted for item in self.selected_items())
-            )
+            self.restore_button.setEnabled(any(item.is_deleted for item in selected))
+        delete_button = self._buttons.get("delete")
+        if delete_button is not None:
+            delete_button.setEnabled(any(not item.is_deleted for item in selected))
 
     def _on_page_changed(self, page: int) -> None:
         self._page = page
@@ -767,7 +769,7 @@ class ManagePage(Page):
         return path.suffix if path is not None else ""
 
     def _on_open(self, item) -> None:
-        """打开数据：优先用内置查看器，没有内置方式时交给系统默认程序。"""
+        """打开数据：优先用内置查看器，没有内置查看器时交给系统默认程序。"""
         path = self._path_of(item)
         if path is None:
             return
@@ -776,7 +778,7 @@ class ManagePage(Page):
             self.toast_error("无法打开", message)
 
     def _on_open_system(self, item) -> None:
-        """右键「打开方式 → 系统默认程序」。"""
+        """右键「查看器 → 系统默认程序」。"""
         path = self._path_of(item)
         if path is None:
             return
@@ -785,16 +787,16 @@ class ManagePage(Page):
             self.toast_error("无法打开", message)
 
     def _on_open_ask(self, item) -> None:
-        """右键「打开方式 → 交给系统选择」。"""
+        """右键「查看器 → 交给系统选择」。"""
         path = self._path_of(item)
         if path is None:
             return
-        ok, message = open_system(path, MODE_ASK)
+        ok, message = open_system(path, ask=True)
         if not ok:
             self.toast_error("无法打开", message)
 
     def _on_open_with(self, item, viewer) -> None:
-        """右键「打开方式 → 点名某个插件」。"""
+        """右键「查看器 → 点名某个插件」。"""
         path = self._path_of(item)
         if path is None:
             return
@@ -842,8 +844,8 @@ class ManagePage(Page):
         return lines
 
     def _build_open_with_menu(self, item) -> RoundMenu:
-        """「打开方式」子菜单：系统默认程序 / 各内置查看器 / 交给系统选择。"""
-        menu = RoundMenu("打开方式", self)
+        """「查看器」子菜单：系统默认程序 / 各内置查看器 / 交给系统选择。"""
+        menu = RoundMenu("查看器", self)
         for key, text, viewer in open_with_items(self._suffix(item)):
             if key == "system":
                 menu.addAction(
@@ -865,7 +867,7 @@ class ManagePage(Page):
         return menu
 
     def _build_menu(self, item) -> RoundMenu:
-        """右键菜单：打开 / 打开方式（点名插件或系统）/ 批量操作（按选中数量调整）。"""
+        """右键菜单：打开 / 查看器（点名插件或系统）/ 批量操作（按选中数量调整）。"""
         count = len(self._selected)
         callbacks = {
             "open": lambda: self._on_open(item),
@@ -1009,15 +1011,23 @@ class ManagePage(Page):
         self.toast_success("已更新", f"{count} 项已{'隐藏' if target else '取消隐藏'}")
 
     def _on_delete(self) -> None:
-        items = self._require_selection()
+        selected = self._require_selection()
+        if not selected:
+            return
+        # 已在回收站里的项跳过，避免「重复删除」这种看起来没生效的操作。
+        items = [item for item in selected if not item.is_deleted]
         if not items:
+            self.toast_warning("无需操作", "选中的数据都已在回收站里")
             return
         if not confirm(self, "移入回收站", f"确定把选中的 {len(items)} 项移入回收站吗？"):
             return
         count = self.item_service.delete(items)
         self.session.commit()
         signalBus.itemsChanged.emit()
-        self.toast_success("已移入回收站", f"{count} 项")
+        if count:
+            self.toast_success("已移入回收站", f"{count} 项")
+        else:
+            self.toast_warning("未移入回收站", "选中的数据都已在回收站里")
 
     def _on_restore(self) -> None:
         items = [item for item in self._require_selection() if item.is_deleted]

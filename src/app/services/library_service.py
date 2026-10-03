@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..core import paths
-from ..core.config import library_root, store_dir
+from ..core.config import library_root
 from ..db.models import DataItem, Library, User
 from ..repositories import (
     BlobRepository,
@@ -28,7 +28,7 @@ from ..repositories import (
     TagRepository,
     UserRepository,
 )
-from .blob_store import BlobStore
+from .content_store import ContentStore
 from .privacy_service import guarded, privacy
 
 _INVALID_CHARS = '<>:"/\\|?*'
@@ -41,9 +41,9 @@ def sanitize_dir_name(name: str) -> str:
 
 
 class LibraryService:
-    def __init__(self, session: Session, store: BlobStore | None = None) -> None:
+    def __init__(self, session: Session, store: ContentStore | None = None) -> None:
         self.session = session
-        self.store = store or BlobStore(store_dir())
+        self.store = store or ContentStore(session)
         self.libraries = LibraryRepository(session)
         self.items = ItemRepository(session)
         self.categories = CategoryRepository(session)

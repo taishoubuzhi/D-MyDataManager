@@ -17,7 +17,6 @@ class SignalBus(QObject):
     requestImport = pyqtSignal()
     requestManage = pyqtSignal()
     requestArchive = pyqtSignal()
-    requestPlugins = pyqtSignal(str)
     focusItem = pyqtSignal(int)
     librariesChanged = pyqtSignal()
 

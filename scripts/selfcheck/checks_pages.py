@@ -607,11 +607,12 @@ def prose_moved_to_hints(case: Case) -> None:
         if plugins.header is None or "重建查看器注册表" not in plugins.header._title.toolTip():
             problems.append("插件页说明没有挂到标题的悬停提示上")
 
-        opened = window.open_with_page
-        window.switchTo(opened)
-        app.processEvents()
-        if opened.header is None or "自定义程序" not in opened.header._title.toolTip():
-            problems.append("打开方式页说明没有挂到标题的悬停提示上")
+        viewer_page = window._plugin_pages.get("viewer_config")
+        if viewer_page is not None:
+            window.switchTo(viewer_page)
+            app.processEvents()
+            if viewer_page.header is None or "自定义程序" not in viewer_page.header._title.toolTip():
+                problems.append("查看器配置页说明没有挂到标题的悬停提示上")
 
         assert not problems, "说明文字未改成悬停提示：" + "；".join(problems)
     finally:
@@ -816,18 +817,9 @@ def icon_text_labels(case: Case) -> None:
         # 先回到平时（非简化）布局，量「图标贴左、文字紧跟图标」：简化显示下文字标签会被布局收起
         config.set(config.simpleDisplay, "none")
         app.processEvents()
-        opened = window.open_with_page
-        window.switchTo(opened)
-        app.processEvents()
-        others = opened.findChildren(IconTextLabel)
-        if not others:
-            problems.append("打开方式页的字段标签还没有图标化")
-        _assert_label_alignment(list(labels) + list(others), problems)
+        _assert_label_alignment(list(labels), problems)
         config.set(config.simpleDisplay, "full")
         app.processEvents()
-        for label in others:
-            if label._text_label.isVisible():
-                problems.append(f"简化显示下「{label.text()}」还占着文字")
         assert not problems, "图标化标签未通过：" + "；".join(problems[:10])
     finally:
         config.set(config.simpleDisplay, "none")
@@ -921,7 +913,7 @@ def _assert_label_alignment(labels, problems: list[str]) -> None:
 
     for label in labels:
         if label._icon is None:
-            # 没有图标的标签（如「打开方式」这类分节说明）只有文字，本来就贴左
+            # 没有图标的标签（如「查看器」这类分节说明）只有文字，本来就贴左
             continue
         icon_label = label._icon_label
         if (icon_label.width(), icon_label.height()) != (ICON_LABEL_SIZE, ICON_LABEL_SIZE):

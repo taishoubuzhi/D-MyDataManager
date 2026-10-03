@@ -56,7 +56,7 @@ plugins/
 ```json
 {
   "depends": [
-    "builtin.lib.dialog",
+    "builtin.lib.ui",
     {"id": "builtin.lib.viewer"},
     {"id": "other.plugin", "version": ">=1.2 <2", "optional": true}
   ]
@@ -137,7 +137,7 @@ plugins/
 - `key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，同一个插件里不能重复。
 - `choice` 必须有非空 `choices`，且 `default` 必须是其中一个取值。
 - 插件里读：`ctx.option("zoom_step", 1.25)`；选项值由程序规范化，认不出的值回退默认值。
-- 用户在「插件」页改选项会写进 `config/plugins.json`，并**重新载入该插件**，所以 `setup()` 里读到的就是最新值。
+- 用户在「插件」页改选项会写进 `.configs/plugins.json`，并**重新载入该插件**，所以 `setup()` 里读到的就是最新值。
 
 ### 2.7 `provides` 与 `libraries` 的区别
 
@@ -158,11 +158,11 @@ plugins/
 
 - 消费方要**继承 / 实例化 / 静态检查** → 用 `libraries` 暴露代码。
 - 消费方要的是**「程序里当前那一个实例」**，并且希望它随插件启停而出现或消失 → 用 `provides` 暴露接口。
-- 两者可以同时用：`builtin.lib.dialog` 用 `libraries` 暴露 `DialogApi` / `PopupWindow` 两个**类**，同时用 `provides: dialog`
+- 两者可以同时用：`builtin.lib.ui` 用 `libraries` 暴露 `DialogApi` / `PopupWindow` 两个**类**，同时用 `provides: dialog`
   暴露当前那一个**宿主实例** —— 查看器库 `ctx.require("dialog")` 取的是后者，取不到时提示「缺少弹窗工具库（dialog）」。
 
 注意：清单里的 `provides` 不会校验「是否真的 provide 了」，也不会因此让插件载入失败：写了却没 `ctx.provide()`（或反过来）时，
-程序只在插件备注里记一条「清单声明的扩展接口没有注册：`<名字>`」（插件页可见，存在 `config/plugins.json` 的对应条目里），
+程序只在插件备注里记一条「清单声明的扩展接口没有注册：`<名字>`」（插件页可见，存在 `.configs/plugins.json` 的对应条目里），
 补上注册后重新载入会自动清掉。它对外是承诺、对程序是展示，所以要与代码保持一致。
 
 ## 3. 版本与版本范围
@@ -229,15 +229,15 @@ plugins/
 
   ```python
   from app.sdk import Plugin, PluginContext      # ✅ 允许
-  from dm_plugin.builtin.lib.dialog.plugin import DialogApi        # ✅ 允许（depends 里声明过；只能取 plugin.py）
-  from dm_plugin.builtin.lib.dialog.dialog_host import DialogApi   # ❌ 不允许：其他模块是实现细节
+  from dm_plugin.builtin.lib.ui.plugin import DialogApi        # ✅ 允许（depends 里声明过；只能取 plugin.py）
+  from dm_plugin.builtin.lib.ui.dialog_host import DialogApi   # ❌ 不允许：其他模块是实现细节
   from app.services.item_service import ItemService            # ❌ 自检会报错
   ```
 
   自检 `plugin_imports` 会扫描插件源码：`app` 下**只放行 `app.sdk`**（其余一律报错），`dm_plugin.<id>` 必须匹配已知插件 id、写进 `depends`，且只能落在对方的 `plugin.py`。
 - IDE 与桩：`dm_plugin` 是运行期合成包，仓库里由 `scripts/plugin_stubs.py` 按清单生成 `stubs/dm_plugin/**` 的 `.pyi` 桩（把 `stubs` 标成源码根即可消除编辑器标红）；自检 `plugin_stubs_current` 保证桩与清单同步。
 
-## 6. 状态文件 `config/plugins.json`
+## 6. 状态文件 `.configs/plugins.json`
 
 程序把用户对插件的操作存成一份 JSON：
 
@@ -257,4 +257,4 @@ plugins/
 - `version` 是状态文件版本（当前 `1`），用于将来迁移。
 - 每个插件一个条目：`enabled`（启用状态）、`settings`（`options` 的当前取值），外加插件页可编辑的显示名、备注等。
 - 文件不存在、损坏或插件已删除时按默认值处理（内置插件默认启用）。
-- 这份文件属于**运行期状态**，`config/` 不进版本库；删掉它相当于把所有插件恢复默认。
+- 这份文件属于**运行期状态**，`.configs/` 不进版本库；删掉它相当于把所有插件恢复默认。

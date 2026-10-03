@@ -138,6 +138,11 @@ class Config(QConfig):
     )
     keepSize = RangeConfigItem("Archive", "Keep-Size-MB", 2048, RangeValidator(64, 1_048_576))
     keepDays = RangeConfigItem("Archive", "Keep-Days", 30, RangeValidator(1, 3650))
+    # 回档前是否先弹「回档变更」清单确认（关闭后确认点只剩执行本身）
+    restorePreview = ConfigItem("Archive", "Restore-Preview", True, BoolValidator())
+
+    # 维护：自动清理无引用内容、残留文件与写残文件（启动后延迟一次 / 建存档后 / 删存档后）
+    autoCleanup = ConfigItem("Archive", "Auto-Cleanup", True, BoolValidator())
 
 
 config = Config()
@@ -266,6 +271,7 @@ def _rebase_library_paths(old_root: Path, new_root: Path) -> None:
 
 
 def load_config() -> None:
+    paths.migrate_app_dirs()
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     qconfig.load(str(paths.CONFIG_FILE), config)
     # 上一次退出时锁上的资源文件夹要先放行，否则迁移与建目录都会被拒绝

@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any
 
 from loguru import logger
 from PyQt6.QtCore import Qt

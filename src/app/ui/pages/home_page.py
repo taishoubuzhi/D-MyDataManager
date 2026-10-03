@@ -47,7 +47,7 @@ from ..framework import (
 from ..framework.contributions import icon_of, items, text_of, title_of, value_of
 from ..framework import IconTextButton, IconTextPrimaryButton, icon_label
 
-KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数")
+KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数", "存档占用")
 
 KPI_ICONS: dict[str, FluentIcon] = {
     "数据总量": FluentIcon.FOLDER,
@@ -57,6 +57,7 @@ KPI_ICONS: dict[str, FluentIcon] = {
     "分类": FluentIcon.LIBRARY,
     "标签数": FluentIcon.TAG,
     "存档数": FluentIcon.HISTORY,
+    "存档占用": FluentIcon.ZIP_FOLDER,
 }
 
 #: 每个 KPI 卡片的悬停说明：鼠标停在卡片（含里面的数字与标题）上才显示
@@ -68,6 +69,7 @@ KPI_HINTS: dict[str, str] = {
     "分类": "当前用户的分类数量；副标题是标签数量",
     "标签数": "当前用户的标签数量；副标题是回收站里的数据条数",
     "存档数": "当前用户的存档数量；副标题是检测到的重复内容组数",
+    "存档占用": "所有存档内容在内容仓库里真实占用的空间（跨存档去重后）；副标题是存档份数与逻辑大小",
 }
 
 
@@ -91,7 +93,12 @@ def type_distribution(
 
 
 def format_summary(
-    stats: Mapping[str, object], *, users: int = 0, archives: int = 0
+    stats: Mapping[str, object],
+    *,
+    users: int = 0,
+    archives: int = 0,
+    archive_bytes: int = 0,
+    archive_logical: int = 0,
 ) -> list[tuple[str, str, str]]:
     """把 overview() 的统计整理成 KPI 卡片：(标题, 数值, 副标题)。顺序与 KPI_TITLES 一致。"""
     storage = stats.get("storage") or {}
@@ -108,6 +115,11 @@ def format_summary(
         ("分类", str(int(stats.get("categories", 0))), f"标签 {int(stats.get('tags', 0))}"),
         ("标签数", str(int(stats.get("tags", 0))), f"回收站 {int(stats.get('trashed', 0))}"),
         ("存档数", str(int(archives)), f"重复 {int(stats.get('duplicate_groups', 0))} 组"),
+        (
+            "存档占用",
+            format_size(archive_bytes),
+            f"{int(archives)} 个存档 · 逻辑 {format_size(archive_logical)}",
+        ),
     ]
 
 
@@ -275,8 +287,15 @@ class HomePage(ScrollPage):
         stats = overview(self.session, user_id=user_id)
         users = len(UserService(self.session).list_users())
         archives = ArchiveRepository(self.session).count()
+        usage = ArchiveService(self.session).archive_usage()
 
-        entries = format_summary(stats, users=users, archives=archives)
+        entries = format_summary(
+            stats,
+            users=users,
+            archives=archives,
+            archive_bytes=int(usage.get("stored_size", 0)),
+            archive_logical=int(usage.get("logical_size", 0)),
+        )
         self._rebuild_cards(entries)
         self._sync_card_refs(entries)
         self._rebuild_plugin_cards()
@@ -311,6 +330,7 @@ class HomePage(ScrollPage):
         self._category_card = by_title["分类"]
         self._tag_card = by_title["标签数"]
         self._archive_card = by_title["存档数"]
+        self._archive_size_card = by_title["存档占用"]
 
     def _rebuild_plugin_cards(self) -> None:
         """插件贡献的概览卡片（扩展点 app.ui.home.kpi）：值可以给回调，每次刷新重算。"""

@@ -327,6 +327,15 @@ class SettingsPage(ScrollPage):
             group.addSettingCard(card)
         self._sync_prune_cards()
 
+        self._auto_cleanup_switch = SwitchSettingCard(
+            FluentIcon.BROOM,
+            "自动清理无用内容",
+            "启动后、创建或删除存档时回收没有索引引用的内容文件，并按当前方案重写旧内容",
+            configItem=config.autoCleanup,
+            parent=group,
+        )
+        group.addSettingCard(self._auto_cleanup_switch)
+
         rebuild_index = ActionCard("重建索引", FluentIcon.SYNC, "全文检索索引", "检索结果异常时重建索引", group)
         rebuild_index.clicked.connect(self._rebuild_search_index)
         group.addSettingCard(rebuild_index)

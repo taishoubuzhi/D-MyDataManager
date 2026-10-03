@@ -1,6 +1,6 @@
 """测试基类：把数据库、库文件夹、内容仓库与配置重定向到临时目录。
 
-所有测试都在 `tests/_tmp/<测试类名>/` 里运行，不会读写真实的 `resources/` 与 `config/`。
+所有测试都在 `tests/_tmp/<测试类名>/` 里运行，不会读写真实的 `.resources/` 与 `.configs/`。
 设置环境变量 `DM_KEEP_TMP=1` 可保留临时目录以便排查失败。
 """
 
@@ -56,13 +56,14 @@ class TempDir:
 def redirect_paths(root: Path) -> None:
     """把 paths 里的运行期目录整体指向临时根目录。"""
     data = paths.apply_resource_root(root / paths.RESOURCE_ROOT_NAME)
-    paths.LOG_DIR = root / "logs"
+    paths.LOG_DIR = root / paths.LOG_DIR_NAME
     paths.DEFAULT_EXPORT_DIR = root / "exports"
-    paths.CONFIG_DIR = root / "config"
+    paths.CONFIG_DIR = root / paths.CONFIG_DIR_NAME
     paths.CONFIG_FILE = paths.CONFIG_DIR / "config.json"
     paths.PLUGIN_DIR = root / "plugins"
     paths.PLUGIN_STATE_FILE = paths.CONFIG_DIR / "plugins.json"
-    paths.OPEN_WITH_FILE = paths.CONFIG_DIR / "open_with.json"
+    paths.VIEWER_RULES_FILE = paths.CONFIG_DIR / "viewers.json"
+    paths.LEGACY_VIEWER_RULES_FILE = paths.CONFIG_DIR / "open_with.json"
     paths.SESSION_FILE = paths.CONFIG_DIR / "session.json"
     paths.ensure_dirs()
     return data
@@ -72,7 +73,7 @@ def reset_config(root: Path) -> None:
     """把配置的保存目标改到临时目录，并把影响用例的配置项恢复为默认值。"""
     from qfluentwidgets import qconfig
 
-    target = root / "config" / "config.json"
+    target = root / paths.CONFIG_DIR_NAME / "config.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("{}", encoding="utf-8")
     qconfig.load(str(target), config)

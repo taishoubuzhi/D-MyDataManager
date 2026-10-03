@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from loguru import logger
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QWidget
 from qfluentwidgets import (
@@ -25,7 +25,6 @@ from .pages.archive_page import ArchivePage
 from .pages.home_page import HomePage
 from .pages.import_page import ImportPage
 from .pages.manage_page import ManagePage
-from .pages.open_with_page import OpenWithPage
 from .pages.plugin_page import PluginPage
 from .pages.settings_page import SettingsPage
 from .pages.tag_page import TagPage
@@ -43,7 +42,6 @@ BUILTIN_PAGES: tuple[tuple[str, str, FluentIcon, bool], ...] = (
     ("tag_page", "标签", FluentIcon.TAG, False),
     ("user_page", "用户", FluentIcon.PEOPLE, False),
     ("archive_page", "存档", FluentIcon.HISTORY, False),
-    ("open_with_page", "打开方式", FluentIcon.APPLICATION, False),
     ("plugin_page", "插件", FluentIcon.TILES, False),
     ("workbench_page", "页面管理", FluentIcon.LAYOUT, False),
     ("settings_page", "设置", FluentIcon.SETTING, True),
@@ -52,7 +50,6 @@ BUILTIN_PAGES: tuple[tuple[str, str, FluentIcon, bool], ...] = (
 #: 侧栏最多追加的插件页面图标数：默认窗口高度下不会把侧栏撑出滚动条，
 #: 超出的插件页面只出现在「页面管理」页里（内置页面永远全部显示）。
 PLUGIN_SIDEBAR_LIMIT = 7
-
 
 class MainWindow(FluentWindow):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -67,7 +64,6 @@ class MainWindow(FluentWindow):
         self.tag_page = TagPage(self)
         self.user_page = UserPage(self)
         self.archive_page = ArchivePage(self)
-        self.open_with_page = OpenWithPage(self)
         self.plugin_page = PluginPage(self)
         self.workbench_page = WorkbenchPage(self)
         self.settings_page = SettingsPage(self)
@@ -236,6 +232,8 @@ class MainWindow(FluentWindow):
         if self._centered:
             return
         self._centered = True
+        # 启动后延迟一次自动清理（§6）：先让界面画出来，避免卡在开屏。
+        QTimer.singleShot(1500, self.archive_page.auto_cleanup_startup)
         screen = QApplication.primaryScreen()
         if screen is None:
             return
@@ -247,7 +245,6 @@ class MainWindow(FluentWindow):
         signalBus.requestImport.connect(lambda: self.switchTo(self.import_page))
         signalBus.requestManage.connect(lambda: self.switchTo(self.manage_page))
         signalBus.requestArchive.connect(lambda: self.switchTo(self.archive_page))
-        signalBus.requestPlugins.connect(self._on_request_plugins)
         signalBus.pluginsChanged.connect(self._sync_plugin_pages)
         signalBus.focusItem.connect(self._on_focus_item)
         signalBus.micaEnableChanged.connect(self.setMicaEffectEnabled)
@@ -256,11 +253,6 @@ class MainWindow(FluentWindow):
         """从概览页的「最近导入」跳到数据管理页并选中对应的数据项。"""
         self.switchTo(self.manage_page)
         self.manage_page.focus_item(item_id)
-
-    def _on_request_plugins(self, point: str = "") -> None:
-        """从「打开方式」页跳到插件页并自动筛选成对应扩展点。"""
-        self.switchTo(self.plugin_page)
-        self.plugin_page.apply_contribution(point)
 
     def _on_libraries_changed(self) -> None:
         """库增删或扫描登记后重新绑定监听，并忽略本次内部写入。"""
@@ -286,7 +278,6 @@ class MainWindow(FluentWindow):
             self.tag_page,
             self.user_page,
             self.archive_page,
-            self.open_with_page,
             self.plugin_page,
             self.workbench_page,
             self.settings_page,

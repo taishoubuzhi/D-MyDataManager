@@ -1,7 +1,7 @@
 """自检套件的运行骨架：检查注册表、隔离环境与统一结果收集。
 
 每个检查都在自己的临时目录与全新数据库上运行（复用 `tests/harness.py` 的重定向
-工具），只调用公开契约，不接触真实的 `.resources/` 与 `config/`。
+工具），只调用公开契约，不接触真实的 `.resources/` 与 `.configs/`。
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ PAGE_ATTRS: tuple[str, ...] = (
     "tag_page",
     "user_page",
     "archive_page",
-    "open_with_page",
     "plugin_page",
     "workbench_page",
     "settings_page",

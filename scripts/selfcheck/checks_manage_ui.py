@@ -376,7 +376,7 @@ def manage_selection(case: Case) -> None:
             problems.append(f"多选右键菜单没有标注数量：{multi.get('move')!r}")
         entries = manage_module.open_with_items(".txt")
         if not entries or entries[0][0] != "system" or entries[-1][0] != "ask":
-            problems.append(f"打开方式菜单不是「系统默认程序…交给系统选择」：{[key for key, *_ in entries]}")
+            problems.append(f"查看器菜单不是「系统默认程序…交给系统选择」：{[key for key, *_ in entries]}")
         if tri_state(1, 3) != Qt.CheckState.PartiallyChecked:
             problems.append("三态计算：部分选中不是半选")
         page._selected = {rows[0].item.id}

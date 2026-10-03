@@ -39,7 +39,6 @@ from ..core.plugin_core import (
     resolve_dependencies,
 )
 from ..core.plugin_options import coerce_option, defaults
-from ..core.viewers import Viewer, viewer_registry
 from ..sdk import (
     Contribution,
     Events,
@@ -50,6 +49,7 @@ from ..sdk import (
     register_dependency_lookup,
     register_library_resolver,
 )
+from ..sdk.viewers import OPEN_EXTENSION, ViewerFactory, ViewerInfo, ViewerOpener, open_api
 
 STATE_VERSION = 1
 
@@ -88,9 +88,49 @@ class PluginHost:
     def __init__(self, service: "PluginService") -> None:
         self._service = service
 
-    def viewers(self) -> tuple[Viewer, ...]:
-        """当前登记的打开方式（含其他插件注册的）。"""
-        return tuple(viewer_registry.all())
+    def viewers(self) -> tuple[ViewerInfo, ...]:
+        """当前登记的查看器（含其他插件注册的）。"""
+        api = open_api()
+        return tuple(api.viewers()) if api is not None else ()
+
+    def file_formats(self) -> dict[str, int]:
+        """库里实际出现的文件格式（小写、不带点）→ 数量，供插件列出可配置的格式。"""
+        try:
+            from ..db.database import new_session
+
+            from .item_service import ItemService
+
+            with new_session() as session:
+                counts = ItemService(session).extensions_in_use()
+            return {str(key): int(value) for key, value in counts.items()}
+        except Exception:
+            logger.warning("读取库内文件格式失败，插件看到的是空字典")
+            return {}
+
+    def sample_path(self, suffix: str) -> str:
+        """库里某个格式的一个现存文件路径（没有就返回空串），供插件做「测试打开」。"""
+        wanted = str(suffix or "").strip().lower().lstrip(".")
+        if not wanted:
+            return ""
+        try:
+            from ..db.database import new_session
+            from ..repositories import ItemFilter
+            from .item_service import ItemService
+
+            filters = ItemFilter(include_hidden=True, include_deleted=True)
+            with new_session() as session:
+                service = ItemService(session)
+                for item in service.items.query(filters):
+                    path = Path(item.file_path or item.source_path)
+                    if path.suffix.lower().lstrip(".") != wanted:
+                        continue
+                    resolved = service.file_path_of(item)
+                    if resolved is not None:
+                        return str(resolved)
+            return ""
+        except Exception:
+            logger.warning("查找样本文件失败：{}", suffix)
+            return ""
 
     def open_path(self, path: str | Path) -> bool:
         """用系统默认程序打开文件。"""
@@ -534,8 +574,8 @@ class PluginService:
         name: str,
         *,
         extensions: Iterable[str] = (),
-        factory: Callable[[Path, object], object] | None = None,
-        opener: Callable[[Path], tuple[bool, str]] | None = None,
+        factory: ViewerFactory | None = None,
+        opener: ViewerOpener | None = None,
         kind: str = "text",
         description: str = "",
         capabilities: Sequence[str] = (),
@@ -543,7 +583,7 @@ class PluginService:
         host: str = "",
         order: int = 100,
     ) -> Contribution:
-        """注册一个打开方式，并记下对应贡献。"""
+        """注册一个查看器，并记下对应贡献。"""
         if factory is not None and not callable(factory):
             raise PluginError(f"查看器「{name}」没有可用的控件工厂（插件需自行创建视图）")
         clean: list[str] = []
@@ -557,19 +597,21 @@ class PluginService:
             viewer_id = f"{plugin_id}.{len(self._contributions.get(plugin_id, ())) + 1}"
         if host:
             self.require(plugin_id, host)  # 显示窗口由该扩展接口提供，缺了就注册失败
-        viewer = Viewer(
-            id=viewer_id,
+        api = open_api()
+        if api is None:
+            raise PluginError("程序没有提供查看器接口 viewer.open，无法注册查看器")
+        viewer = api.add_viewer(
+            plugin_id,
+            viewer_id=viewer_id,
             name=name,
             extensions=tuple(clean),
             kind=kind,
-            plugin_id=plugin_id,
             factory=factory,
             opener=opener,
             host=host,
             description=description,
             capabilities=tuple(capabilities),
         )
-        viewer_registry.register(viewer)
         return self.contribute(
             plugin_id,
             ExtensionPoint.VIEWER,
@@ -619,7 +661,9 @@ class PluginService:
     def load(self) -> int:
         """按依赖顺序载入所有启用的插件，返回注册的查看器数量。"""
         self.teardown_all()
-        viewer_registry.clear()
+        api = open_api()
+        if api is not None:
+            api.clear()
         extension_registry.clear()
         self._provide_bootstrap()
         register_library_resolver(self._resolve_library)
@@ -733,8 +777,10 @@ class PluginService:
         self._settings.pop(plugin_id, None)
         self._contexts.pop(plugin_id, None)
         self._plugins.pop(plugin_id, None)
+        api = open_api()
+        if api is not None:
+            api.unregister_plugin(plugin_id)
         extension_registry.drop_plugin(plugin_id)
-        viewer_registry.unregister_plugin(plugin_id)
         for event, handlers in list(self._handlers.items()):
             kept = [(owner, fn) for owner, fn in handlers if owner != plugin_id]
             if kept:
@@ -807,8 +853,8 @@ class PluginService:
             text += f"；{failures} 个插件载入失败（见插件页）"
         return text
 
-    def viewers_of(self, plugin_id: str) -> list[Viewer]:
-        """该插件注册的打开方式（未载入时先按需载入）。"""
+    def viewers_of(self, plugin_id: str) -> list[ViewerInfo]:
+        """该插件注册的查看器（未载入时先按需载入）。"""
         if not self._plugins and not self._loaded:
             self.load()
         return [item.value for item in self._contributions.get(plugin_id, ()) if item.point == ExtensionPoint.VIEWER]

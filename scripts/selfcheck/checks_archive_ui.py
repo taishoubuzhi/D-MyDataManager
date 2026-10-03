@@ -1,4 +1,4 @@
-"""L2 页面检查：存档页、打开方式页、插件页与图片查看器。
+"""L2 页面检查：存档页、查看器配置页、插件页与图片查看器。
 
 移植自旧门禁 `scripts/dev_check_ui.py` 的 _check_archive_tabs / _check_archive_owner /
 _check_archive_pin / _check_archive_table / _check_open_with / _check_plugins /
@@ -119,6 +119,29 @@ def _seed_archives(case: Case) -> tuple[int, int]:
     return int(plain.id), int(pinned.id)
 
 
+def _set_number_filter(bar, key: str, mode: str, first: str, second: str = "") -> None:
+    """像用户那样驱动数值筛选：选模式、填输入框（第二个只在区间模式用）。"""
+    from app.ui.components.data_table import NUMBER_MODES
+
+    field = bar._fields[key]
+    field.combo.setCurrentIndex([item[1] for item in NUMBER_MODES].index(mode))
+    field.line.setText(first)
+    field.line2.setText(second)
+    bar._sync_number(field.combo, field.line2)
+
+
+def _set_date_filter(bar, key: str, mode: str, first, second=None) -> None:
+    """驱动时间筛选：选模式、在日期选择控件上挑日期。"""
+    from app.ui.components.data_table import DATE_MODES
+
+    field = bar._fields[key]
+    field.picker.setDate(first)
+    if second is not None:
+        field.picker2.setDate(second)
+    field.combo.setCurrentIndex([item[1] for item in DATE_MODES].index(mode))
+    bar._sync_date(field.combo, field.picker2)
+
+
 def _row_of_archive(page, archive_id: int) -> int:
     """按存档 id 找当前页里的行号。"""
     for row, archive in enumerate(page._page_items):
@@ -143,7 +166,7 @@ def _archive_pinned(page, archive_id: int) -> bool:
 
 
 def _select_suffix(page, suffix: str) -> None:
-    """在「打开方式」页的格式列表里选中指定扩展名。"""
+    """在「查看器」配置页的格式列表里选中指定扩展名。"""
     from PyQt6.QtCore import Qt
 
     for row in range(page.suffix_list.count()):
@@ -306,8 +329,10 @@ def archive_table(case: Case) -> None:
             [table.item(row, column).text() if table.item(row, column) else "" for column in range(table.columnCount())]
             for row in range(table.rowCount())
         ]
-        _expect(problems, all(row[4].isdigit() for row in rows), f"条目数应为数字，实际 {[row[4] for row in rows]}")
-        _expect(problems, all(row[6] in ("已标记", "未标记") for row in rows), f"标记列应为已标记/未标记，实际 {[row[6] for row in rows]}")
+        count_column = headers.index("条目数")
+        pin_column = headers.index("标记")
+        _expect(problems, all(row[count_column].isdigit() for row in rows), f"条目数应为数字，实际 {[row[count_column] for row in rows]}")
+        _expect(problems, all(row[pin_column] in ("已标记", "未标记") for row in rows), f"标记列应为已标记/未标记，实际 {[row[pin_column] for row in rows]}")
         _expect(problems, any(row[1].startswith("【已标记】") for row in rows), "已标记的存档行应带「【已标记】」前缀")
 
         page.filter_bar.set_filter("name", "绝不存在的存档")
@@ -321,7 +346,7 @@ def archive_table(case: Case) -> None:
         page.filter_bar.set_filter("pinned", "已标记")
         _expect(problems, len(page._visible) == 1, f"按「已标记」筛选应只剩 1 个存档，实际 {len(page._visible)}")
         _expect(problems, table.rowCount() == 1, f"按「已标记」筛选后表格应只剩 1 行，实际 {table.rowCount()}")
-        _expect(problems, table.item(0, 6).text() == "已标记", f"筛选结果的标记列应为「已标记」，实际 {table.item(0, 6).text()!r}")
+        _expect(problems, table.item(0, pin_column).text() == "已标记", f"筛选结果的标记列应为「已标记」，实际 {table.item(0, pin_column).text()!r}")
         page.filter_bar.reset()
         _expect(problems, len(page._visible) == total, "重置「已标记」筛选后应恢复全部存档")
 
@@ -352,79 +377,385 @@ def archive_table(case: Case) -> None:
     assert not problems, "存档表格检查未通过：" + "；".join(problems)
 
 
-@check("open_with_page", "pages")
-def open_with_page(case: Case) -> None:
-    """打开方式页：格式清单、模式与查看器联动、保存 / 恢复默认与跳转插件页。"""
-    from pathlib import Path as _Path
+@check("archive_entry_filters", "pages")
+def archive_entry_filters(case: Case) -> None:
+    """条目明细：各列筛选、状态随数据变更即时刷新、普通用户的可见与回档范围。"""
+    from app.core.signals import signalBus
+    from app.db.models import DataItem as Item
+    from app.services import ArchiveService, ImportService, ItemService
+    from app.ui.framework import PageBase
+    from app.ui.pages.archive_page import ENTRY_HEADERS, ENTRY_STATE_LABELS
 
-    from app.core.extensions import extension_registry
-    from app.sdk import ExtensionPoint
-    from app.core.viewers import viewer_registry
-    from app.services.open_with_service import MODE_BUILTIN, MODE_CUSTOM, open_with_service
+    fixture, window = build_window(case)
+    page = window.archive_page
+    problems: list[str] = []
+    identity = (page._is_admin, page._user_id)
+    warnings: list[tuple] = []
+    restores: list[tuple] = []
+    try:
+        importer = ImportService(case.session)
+        theirs = importer.import_text("自检我的条目", "甲组内容", user_id=fixture.user_id)
+        mine = importer.import_text("自检默认条目", "乙组内容")
+        assert theirs is not None and mine is not None, "自检条目导入失败"
+        case.session.commit()
+        archive = ArchiveService(case.session).create(name="自检条目存档", note="筛选")
+        assert archive is not None, "创建自检存档失败"
+        case.session.commit()
 
-    install_builtin_plugins()
-    _fixture, window = build_window(case)
-    page = window.open_with_page
+        _expect(
+            problems,
+            type(page).refresh is not PageBase.refresh,
+            "存档页应覆写 refresh()，否则 itemsChanged / archivesChanged 接不到重取数逻辑",
+        )
+        page.refresh()
+        _select_archive(page, int(archive.id))
+
+        headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
+        _expect(problems, headers == list(ENTRY_HEADERS), f"条目表表头应为 {list(ENTRY_HEADERS)}，实际 {headers}")
+        entries = list(page._all_entries)
+        _expect(problems, len(entries) >= 2, f"存档内条目应至少有 2 项，实际 {len(entries)}")
+        _expect(problems, page.table.rowCount() == len(entries), "没有筛选时条目表应显示全部条目")
+        owners = {entry.user_name for entry in entries}
+        _expect(problems, fixture.user_name in owners, f"存档内条目应含 {fixture.user_name} 的条目，实际 {owners}")
+
+        page.toast_warning = lambda *args, **kwargs: warnings.append(args)  # type: ignore[method-assign]
+        page._confirm_and_restore = lambda *args, **kwargs: restores.append(args)  # type: ignore[method-assign]
+        page.entry_filter_bar.set_filter("name", "绝不存在的条目")
+        _expect(problems, page.table.rowCount() == 0, "名称筛选无结果时条目表应为空")
+        _expect(
+            problems,
+            page.restore_all_button.text() != "还原整个存档",
+            f"有筛选时按钮应改成只回档筛选结果，实际 {page.restore_all_button.text()!r}",
+        )
+        page._on_restore_all()
+        _expect(problems, len(warnings) == 1 and not restores, "筛选结果为空时应只提示、不发起回档")
+        page.entry_filter_bar.reset()
+        _expect(problems, page.table.rowCount() == len(entries), "重置筛选后应恢复全部条目")
+        _expect(problems, page.restore_all_button.text() == "还原整个存档", "没有筛选时按钮应回到整档文案")
+
+        # 用户报告的核心缺陷：数据管理里删掉一项后，存档条目仍显示「一致（无需还原）」。
+        name_column = ENTRY_HEADERS.index("名称")
+        state_column = ENTRY_HEADERS.index("状态")
+
+        def row_of(name: str) -> int:
+            for index in range(page.table.rowCount()):
+                if page.table.item(index, name_column).text() == name:
+                    return index
+            return -1
+
+        target_row = row_of("自检我的条目")
+        _expect(problems, target_row >= 0, "条目表里应能看到自检条目")
+        if target_row >= 0:
+            before_state = page.table.item(target_row, state_column).text()
+            _expect(problems, before_state == ENTRY_STATE_LABELS["same"], f"未改动前状态应为「一致」，实际 {before_state!r}")
+
+        ItemService(case.session).delete([case.session.get(Item, int(theirs.id))])
+        case.session.commit()
+        signalBus.itemsChanged.emit()
+        target_row = row_of("自检我的条目")
+        _expect(problems, target_row >= 0, "删除后条目表里仍应有该存档条目")
+        if target_row >= 0:
+            shown = page.table.item(target_row, state_column).text()
+            _expect(
+                problems,
+                shown == ENTRY_STATE_LABELS["removed"],
+                f"数据管理里删除后条目状态应即时变成「已删除」，实际 {shown!r}",
+            )
+        page.entry_filter_bar.set_filter("state", ENTRY_STATE_LABELS["removed"])
+        _expect(problems, page.table.rowCount() == 1, f"「已删除」筛选应命中 1 项，实际 {page.table.rowCount()}")
+        page.entry_filter_bar.reset()
+
+        page._is_admin, page._user_id = False, fixture.user_id
+        page.refresh()
+        _expect(
+            problems,
+            all(entry.user_id in (None, fixture.user_id) for entry in page._all_entries),
+            "普通用户只应看见自己的条目",
+        )
+        _expect(problems, not page.restore_all_button.isHidden(), "普通用户也应看到「还原整个存档」按钮")
+        _expect(problems, page._restore_user_id() == fixture.user_id, "普通用户整档回档的范围应是本人")
+        _expect(
+            problems,
+            "属于我" in page.restore_all_button.toolTip(),
+            f"普通用户的整档提示应说明范围，实际 {page.restore_all_button.toolTip()!r}",
+        )
+        page.entry_filter_bar.set_filter("user", fixture.user_name)
+        _expect(
+            problems,
+            page.table.rowCount() == len(page._all_entries),
+            "按所属用户筛选后应只剩该用户的条目",
+        )
+    finally:
+        page._is_admin, page._user_id = identity
+        dispose_window(window)
+    assert not problems, "存档条目筛选检查未通过：" + "；".join(problems)
+
+
+@check("archive_filter_modes", "pages")
+def archive_filter_modes(case: Case) -> None:
+    """存档列表的数值 / 时间筛选模式，以及条目明细的大小、分类分组与标签多选。"""
+    from PyQt6.QtCore import QDate
+
+    from app.services import ArchiveService, ImportService
+    from app.ui.components.data_table import DATE_MODES, NUMBER_MODES
+
+    fixture, window = build_window(case)
+    page = window.archive_page
     problems: list[str] = []
     try:
-        with _ToastRecorder(page) as toasts:
-            _expect(problems, "md" in viewer_registry.extensions(), "载入内置插件后注册表应包含 md 扩展名")
-            markdown = viewer_registry.by_id("builtin.markdown")
-            _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.markdown")
-            _expect(problems, markdown is not None and markdown.host == "dialog", "内置 markdown 查看器应交由弹窗插件托管")
-            _expect(problems, extension_registry.provider("dialog") is not None, "载入内置插件后应注册 dialog 弹窗工具库扩展")
-            _expect(
-                problems,
-                bool(viewer_registry.all()) and all(viewer.host == "dialog" for viewer in viewer_registry.all()),
-                "内置查看器都应声明依赖 dialog 弹窗工具库",
-            )
-            _expect(problems, open_with_service.resolve(_Path("示例.md")).is_builtin, "md 应解析到内置查看器")
+        importer = ImportService(case.session)
+        tagged = importer.import_text(
+            "筛选甲", "甲内容", category_id=fixture.category_child, tags=[fixture.tag, "第二标签"]
+        )
+        plain = importer.import_text("筛选乙", "乙内容")
+        assert tagged is not None and plain is not None, "自检条目导入失败"
+        case.session.commit()
+        archive = ArchiveService(case.session).create(name="筛选模式存档")
+        assert archive is not None, "创建筛选模式存档失败"
+        case.session.commit()
+        _seed_archives(case)
+        page.refresh()
 
-            _expect(problems, page.suffix_list.count() > 0, "格式列表不应为空")
-            _expect(problems, page.count_label.text().endswith("个格式"), f"格式计数文案不对：{page.count_label.text()!r}")
-            _select_suffix(page, "md")
-            _expect(problems, page.detail_title.text() == ".md", f"详情标题应为 .md，实际 {page.detail_title.text()!r}")
-            _expect(problems, "可用插件" in page.detail_viewers.text(), "详情应列出可用插件")
-            _expect(problems, "builtin.markdown" in page.detail_viewers.text(), "可用插件里应含 builtin.markdown")
+        modes = [item[1] for item in NUMBER_MODES]
+        count_field = page.filter_bar._fields["count"]
+        _expect(
+            problems,
+            [count_field.combo.itemData(index) for index in range(count_field.combo.count())] == modes,
+            "条目数筛选应提供「不限 / 等于 / 大于 / 小于 / 区间」五种模式",
+        )
+        _expect(problems, count_field.line is not None and count_field.line2 is not None, "数值筛选应有两个输入框")
+        date_modes = [item[1] for item in DATE_MODES]
+        created_field = page.filter_bar._fields["created"]
+        _expect(
+            problems,
+            [created_field.combo.itemData(index) for index in range(created_field.combo.count())] == date_modes,
+            "创建时间筛选应提供按天筛选的五种模式",
+        )
+        _expect(
+            problems,
+            created_field.picker is not None and created_field.picker2 is not None,
+            "创建时间筛选应有两个日期选择控件",
+        )
+        _expect(problems, count_field.line2.isHidden(), "「等于」模式下第二个输入框应隐藏")
+        _set_number_filter(page.filter_bar, "count", "between", "1", "5")
+        _expect(problems, not count_field.line2.isHidden(), "「区间」模式下第二个输入框应显示")
+        page.filter_bar.reset()
+        _expect(problems, count_field.line2.isHidden(), "重置后第二个输入框应隐藏")
 
-            custom_index = page.mode_box.findData(MODE_CUSTOM)
-            builtin_index = page.mode_box.findData(MODE_BUILTIN)
-            _expect(problems, builtin_index >= 0 and custom_index >= 0, "模式下拉应同时提供内置与自定义模式")
-            _expect(problems, page.viewer_box.count() >= 2 and page.viewer_box.itemData(0) == "", "查看器下拉应以「自动」开头")
-            _expect(problems, page.hint_label.text().strip() != "", "应给出当前模式的说明文案")
+        counts = {int(a.id): int(row["count"]) for a, row in zip(page._archives, page._archive_numbers)}
+        assert counts, "夹具应至少有 1 个存档"
+        top = max(counts.values())
 
-            page.mode_box.setCurrentIndex(custom_index)
-            _expect(problems, page.program_edit.isEnabled(), "自定义模式应启用程序路径输入")
-            _expect(problems, page.browse_button.isEnabled(), "自定义模式应启用「浏览」按钮")
-            page.mode_box.setCurrentIndex(builtin_index)
-            _expect(problems, not page.program_edit.isEnabled(), "内置模式应禁用程序路径输入")
-            _expect(problems, not page.browse_button.isEnabled(), "内置模式应禁用「浏览」按钮")
+        def visible_ids() -> set[int]:
+            return {int(archive.id) for archive in page._visible}
 
-            viewer_index = page.viewer_box.findData("builtin.markdown")
-            _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.markdown")
-            page.viewer_box.setCurrentIndex(viewer_index)
-            page._on_save()
-            rule = open_with_service.rule_for("md")
-            _expect(problems, rule is not None and rule.viewer_id == "builtin.markdown", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
-            _expect(problems, toasts.titles("success"), "保存成功应给出提示")
-            _select_other_suffix(page, "md")
-            _select_suffix(page, "md")
-            _expect(problems, "builtin.markdown" in page.detail_meta.text(), f"保存后状态应显示使用的插件，实际 {page.detail_meta.text()!r}")
+        _set_number_filter(page.filter_bar, "count", "eq", str(top))
+        _expect(
+            problems,
+            visible_ids() == {key for key, value in counts.items() if value == top},
+            f"「等于 {top}」应命中条目数相同的存档，实际 {sorted(visible_ids())}",
+        )
+        _set_number_filter(page.filter_bar, "count", "gt", str(top))
+        _expect(problems, not visible_ids(), f"「大于 {top}」不应有结果，实际 {sorted(visible_ids())}")
+        _set_number_filter(page.filter_bar, "count", "lt", "0")
+        _expect(problems, not visible_ids(), "「小于 0」不应有结果")
+        _set_number_filter(page.filter_bar, "count", "between", "0", str(top))
+        _expect(
+            problems,
+            visible_ids() == {key for key, value in counts.items() if 0 < value < top},
+            f"区间（严格两侧）应只命中条目数在 0 与 {top} 之间的存档，实际 {sorted(visible_ids())}",
+        )
+        page.filter_bar.reset()
+        _expect(problems, len(page._visible) == len(page._archives), "重置数值筛选后应恢复全部存档")
 
-            page._on_reset()
-            _expect(problems, not open_with_service.rule_for("md").viewer_id, "恢复默认后 md 不应再指定查看器")
+        _set_date_filter(page.filter_bar, "created", "after", QDate.currentDate().addDays(-1))
+        _expect(problems, len(page._visible) == len(page._archives), "「在该日之后」选昨天应命中今天创建的存档")
+        _set_date_filter(page.filter_bar, "created", "before", QDate.currentDate().addDays(-1))
+        _expect(problems, not page._visible, "「在该日之前」选昨天不应命中今天创建的存档")
+        _set_date_filter(page.filter_bar, "created", "day", QDate.currentDate())
+        _expect(problems, len(page._visible) == len(page._archives), "「在该日」选今天应命中全部存档")
+        _set_date_filter(
+            page.filter_bar,
+            "created",
+            "range",
+            QDate.currentDate().addDays(-1),
+            QDate.currentDate(),
+        )
+        _expect(problems, len(page._visible) == len(page._archives), "时间区间含首尾两天，应命中全部存档")
+        page.filter_bar.reset()
 
-            page._on_manage_plugins()
-            _expect(problems, window.stackedWidget.currentWidget() is window.plugin_page, "「管理插件」应跳到插件页")
-            _expect(
-                problems,
-                window.plugin_page.point_box.currentData() == ExtensionPoint.VIEWER,
-                "跳转后插件页应筛成查看器贡献",
-            )
-            window.switchTo(window.open_with_page)
+        _select_archive(page, int(archive.id))
+        entries = list(page._all_entries)
+        _expect(problems, len(entries) >= 2, f"存档内应有至少 2 个条目，实际 {len(entries)}")
+        sizes = {int(entry.id): float(page._entry_numbers[index]["size"]) for index, entry in enumerate(entries)}
+        biggest = max(sizes.values())
+        _set_number_filter(page.entry_filter_bar, "size", "gt", "0")
+        _expect(
+            problems,
+            page.table.rowCount() == sum(1 for value in sizes.values() if value > 0),
+            "「大小大于 0」应命中所有非空条目",
+        )
+        _set_number_filter(page.entry_filter_bar, "size", "eq", "1KB")
+        _expect(
+            problems,
+            page.table.rowCount() == sum(1 for value in sizes.values() if value == 1024),
+            "大小输入应支持 1KB 这类带单位写法",
+        )
+        _set_number_filter(page.entry_filter_bar, "size", "eq", str(int(biggest)))
+        _expect(
+            problems,
+            page.table.rowCount() == sum(1 for value in sizes.values() if value == biggest),
+            f"「等于 {int(biggest)}」应只命中大小相同的条目",
+        )
+        page.entry_filter_bar.reset()
+        _expect(problems, page.table.rowCount() == len(entries), "重置大小筛选后应恢复全部条目")
+
+        expected_groups: dict[str, set] = {}
+        for entry in entries:
+            expected_groups.setdefault(entry.user_name or "未知用户", set()).add(entry.category or "—")
+        actual_groups = {title: set(keys) for title, keys in page.entry_category_section._groups}
+        _expect(
+            problems,
+            actual_groups == expected_groups,
+            f"分类应按「用户名 / 分类」分组，实际 {actual_groups} 应为 {expected_groups}",
+        )
+        category = next(
+            (entry.category or "—" for entry in entries if int(entry.id) == int(tagged.id)), "—"
+        )
+        _expect(problems, category in page.entry_category_section._boxes, f"分类分组里应列出 {category}")
+        tagged_by_category = sum(1 for entry in entries if (entry.category or "—") == category)
+        page.entry_category_section._boxes[category].setChecked(True)
+        _expect(
+            problems,
+            page.table.rowCount() == tagged_by_category and tagged_by_category >= 1,
+            f"勾选分类 {category} 应命中 {tagged_by_category} 项，实际 {page.table.rowCount()}",
+        )
+        _expect(problems, page.restore_all_button.text() != "还原整个存档", "分类勾选后应改成只回档筛选结果")
+        page.entry_category_section._boxes[category].setChecked(False)
+        _expect(problems, page.table.rowCount() == len(entries), "取消分类勾选后应恢复全部条目")
+
+        tag_boxes = page.entry_tag_section.boxes
+        _expect(problems, fixture.tag in tag_boxes, f"标签筛选项应含 {fixture.tag}，实际 {sorted(tag_boxes)}")
+        tagged_count = sum(1 for entry in entries if fixture.tag in (entry.tags or []))
+        tag_boxes[fixture.tag].setChecked(True)
+        _expect(
+            problems,
+            page.table.rowCount() == tagged_count and tagged_count >= 1,
+            f"勾选标签 {fixture.tag} 应命中 {tagged_count} 项，实际 {page.table.rowCount()}",
+        )
+        page.entry_tag_section.all_box.click()
+        with_tag = sum(1 for entry in entries if entry.tags)
+        _expect(
+            problems,
+            page.table.rowCount() == with_tag,
+            f"标签全选应命中所有带标签的条目（{with_tag}），实际 {page.table.rowCount()}",
+        )
+        page.entry_tag_section.all_box.click()
+        _expect(problems, page.table.rowCount() == len(entries), "标签全不选后应恢复全部条目")
     finally:
         dispose_window(window)
-    assert not problems, "打开方式页检查未通过：" + "；".join(problems)
+    assert not problems, "存档筛选模式检查未通过：" + "；".join(problems)
+
+
+@check("viewer_config_page", "pages")
+def viewer_config_page(case: Case) -> None:
+    """查看器配置页（由 builtin.lib.viewer 插件提供）：格式清单、模式与查看器联动、保存 / 恢复默认。"""
+    from pathlib import Path as _Path
+
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.extensions import extension_registry
+    from app.sdk import viewers as viewer_api
+    from app.sdk.viewers import open_api
+    from app.services.plugin_service import plugin_service
+
+    # 插件登记配置页要先有 app.ui：按真实程序的顺序，先给接口再载入插件
+    ui_api = AppUiApi()
+    previous_ui = extension_registry.provider(APP_UI_EXTENSION)
+    plugin_service.bootstrap(APP_UI_EXTENSION, ui_api)
+    install_builtin_plugins()
+    registry = open_api()
+    assert registry is not None, "载入内置插件后应提供 viewer.open 扩展接口"
+    _fixture, window = build_window(case)
+    problems: list[str] = []
+    page = window._plugin_pages.get("viewer_config")
+    _expect(problems, page is not None, "查看器插件应把配置页注册成插件页面 viewer_config")
+    assert page is not None, "查看器配置页检查未通过：" + "；".join(problems)
+    api = extension_registry.provider(viewer_api.OPEN_EXTENSION)
+    _expect(problems, api is not None, "查看器插件应提供 viewer.open 扩展接口")
+    assert api is not None, "查看器配置页检查未通过：" + "；".join(problems)
+
+    from dm_plugin.builtin.lib.viewer import config_page as page_module
+    from dm_plugin.builtin.lib.viewer.rules import MODE_BUILTIN, MODE_CUSTOM
+
+    seen: list[tuple[str, str]] = []
+    original_success = page_module.toast_success
+    original_warning = page_module.toast_warning
+    page_module.toast_success = lambda _parent, title, content="": seen.append(("success", str(title)))
+    page_module.toast_warning = lambda _parent, title, content="": seen.append(("warning", str(title)))
+    try:
+        window.switchTo(page)
+        page.reload()
+        _expect(problems, "md" in registry.extensions(), "载入内置插件后注册表应包含 md 扩展名")
+        markdown = registry.viewer_by_id("builtin.markdown")
+        _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.markdown")
+        _expect(problems, markdown is not None and markdown.host == "dialog", "内置 markdown 查看器应交由界面工具库托管")
+        _expect(problems, extension_registry.provider("dialog") is not None, "界面工具库应提供 dialog 扩展")
+        _expect(
+            problems,
+            bool(registry.viewers()) and all(viewer.host == "dialog" for viewer in registry.viewers()),
+            "内置查看器都应声明依赖界面工具库",
+        )
+        _expect(problems, api.resolve(_Path("示例.md")).is_builtin, "md 应解析到内置查看器")
+
+        _expect(problems, page.suffix_list.count() > 0, "格式列表不应为空")
+        _expect(problems, page.count_label.text().endswith("个格式"), f"格式计数文案不对：{page.count_label.text()!r}")
+        _select_suffix(page, "md")
+        _expect(problems, page.detail_title.text() == ".md", f"详情标题应为 .md，实际 {page.detail_title.text()!r}")
+        _expect(problems, "可用查看器" in page.detail_viewers.text(), "详情应列出可用查看器")
+        _expect(problems, "builtin.markdown" in page.detail_viewers.text(), "可用查看器里应含 builtin.markdown")
+
+        custom_index = page.mode_box.findData(MODE_CUSTOM)
+        builtin_index = page.mode_box.findData(MODE_BUILTIN)
+        _expect(problems, builtin_index >= 0 and custom_index >= 0, "模式下拉应同时提供内置与自定义模式")
+        _expect(problems, page.viewer_box.count() >= 2 and page.viewer_box.itemData(0) == "", "查看器下拉应以「自动」开头")
+        _expect(problems, page.hint_label.text().strip() != "", "应给出当前模式的说明文案")
+
+        page.mode_box.setCurrentIndex(custom_index)
+        _expect(problems, page.program_edit.isEnabled(), "自定义模式应启用程序路径输入")
+        _expect(problems, page.browse_button.isEnabled(), "自定义模式应启用「浏览」按钮")
+        _expect(problems, page.args_edit.isEnabled(), "自定义模式应启用参数输入")
+        page.mode_box.setCurrentIndex(builtin_index)
+        _expect(problems, not page.program_edit.isEnabled(), "内置模式应禁用程序路径输入")
+        _expect(problems, not page.browse_button.isEnabled(), "内置模式应禁用「浏览」按钮")
+
+        viewer_index = page.viewer_box.findData("builtin.markdown")
+        _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.markdown")
+        page.viewer_box.setCurrentIndex(viewer_index)
+        page._on_save()
+        rule = api.rule_for("md")
+        _expect(problems, rule is not None and rule.viewer_id == "builtin.markdown", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
+        _expect(problems, [kind for kind, _title in seen if kind == "success"], "保存成功应给出提示")
+        _select_other_suffix(page, "md")
+        _select_suffix(page, "md")
+        _expect(problems, "builtin.markdown" in page.detail_meta.text(), f"保存后状态应显示使用的查看器，实际 {page.detail_meta.text()!r}")
+
+        page._on_reset()
+        reset_rule = api.rule_for("md")
+        _expect(
+            problems,
+            reset_rule is None or not reset_rule.viewer_id,
+            f"恢复默认后 md 不应再指定查看器，实际 {reset_rule}",
+        )
+
+        entries = window.page_entries()
+        titles = {entry.title for entry in entries}
+        _expect(problems, "查看器" in titles, f"插件配置页应出现在页面清单里，实际 {sorted(titles)}")
+    finally:
+        page_module.toast_success = original_success
+        page_module.toast_warning = original_warning
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous_ui if previous_ui is not None else ui_api)
+        dispose_window(window)
+    assert not problems, "查看器配置页检查未通过：" + "；".join(problems)
 
 
 @check("plugin_page_detail", "pages")
@@ -432,11 +763,12 @@ def plugin_page_detail(case: Case) -> None:
     """插件页：贡献 / 来源筛选、详情字段、启停开关与越权拒绝。"""
     from PyQt6.QtCore import Qt
 
-    from app.core.viewers import viewer_registry
     from app.sdk import ExtensionPoint
+    from app.sdk.viewers import open_api
     from app.services.plugin_service import SOURCE_BUILTIN, plugin_service
 
     install_builtin_plugins()
+    registry = open_api()
     _fixture, window = build_window(case)
     page = window.plugin_page
     problems: list[str] = []
@@ -522,8 +854,8 @@ def plugin_page_detail(case: Case) -> None:
             )
             _expect(
                 problems,
-                viewer_registry.by_id("builtin.image") is not None
-                and "png" in viewer_registry.by_id("builtin.image").extensions,
+                registry.viewer_by_id("builtin.image") is not None
+                and "png" in registry.viewer_by_id("builtin.image").extensions,
                 "内置图片插件应在清单数据里声明 png 扩展名",
             )
             _expect(problems, page.detail_meta.text().startswith("builtin.image"), f"副标题应以插件 id 开头，实际 {page.detail_meta.text()!r}")
@@ -667,9 +999,10 @@ def image_viewer(case: Case) -> None:
     """图片查看器：加载真实图片、缩放 / 适应窗口 / 原尺寸与内置查看器注册。"""
     from PyQt6.QtGui import QPixmap
 
-    from app.core.viewers import viewer_registry
+    from app.sdk.viewers import open_api
     from app.services.plugin_service import plugin_service
     install_builtin_plugins()
+    registry = open_api()
     from dm_plugin.builtin.image.image_view import ZOOM_STEP, ImageViewer
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -679,10 +1012,10 @@ def image_viewer(case: Case) -> None:
         _expect(problems, SAMPLE_IMAGE.is_file(), f"自检图片不存在：{SAMPLE_IMAGE}")
         info = plugin_service.get("builtin.image")
         _expect(problems, info is not None and info.enabled, "内置图片插件应已启用")
-        registered = viewer_registry.by_id("builtin.image")
+        registered = registry.viewer_by_id("builtin.image")
         _expect(problems, registered is not None, "内置图片查看器应注册为 builtin.image")
         _expect(problems, registered is not None and registered.host == "dialog", "内置图片查看器应交由弹窗插件托管")
-        _expect(problems, "png" in viewer_registry.extensions(), "查看器注册表应包含 png")
+        _expect(problems, "png" in registry.extensions(), "查看器注册表应包含 png")
 
         viewer = ImageViewer(SAMPLE_IMAGE, parent=window, fit_on_open=False, smooth=False)
         viewer.resize(400, 300)
@@ -737,10 +1070,11 @@ def image_viewer(case: Case) -> None:
 @check("plugin_page_contributions", "pages")
 def plugin_page_contributions(case: Case) -> None:
     """插件页按贡献分组：界面上没有类型概念，贡献筛选与查看器注册表一致。"""
-    from app.core.viewers import viewer_registry
     from app.sdk import ExtensionPoint
+    from app.sdk.viewers import open_api
 
     install_builtin_plugins()
+    registry = open_api()
     _fixture, window = build_window(case)
     page = window.plugin_page
     problems: list[str] = []
@@ -753,8 +1087,8 @@ def plugin_page_contributions(case: Case) -> None:
         )
         page.apply_contribution(ExtensionPoint.VIEWER)
         got = set(_listed_plugin_ids(page))
-        expected = set(viewer_registry.plugin_ids())
-        _expect(problems, got == expected, f"「打开方式」筛选应等于查看器注册表的插件：{sorted(got)} != {sorted(expected)}")
+        expected = set(registry.plugin_ids())
+        _expect(problems, got == expected, f"「查看器」筛选应等于查看器注册表的插件：{sorted(got)} != {sorted(expected)}")
         label = ExtensionPoint.label(ExtensionPoint.VIEWER)
         rows = {
             _listed_plugin_ids(page)[index]: page.plugin_list.item(index).text()
@@ -767,3 +1101,563 @@ def plugin_page_contributions(case: Case) -> None:
     finally:
         dispose_window(window)
     assert not problems, "插件贡献检查未通过：" + "；".join(problems)
+
+
+@check("archive_restore_dialog", "pages")
+def archive_restore_dialog(case: Case) -> None:
+    """回档变更弹窗：没有变更不弹窗；取消不动数据；「先存档再回档」先留快照再回档。"""
+    import app.ui.pages.archive_page as archive_module
+    from app.repositories import ItemFilter, ItemRepository
+    from app.services import ArchiveService, ImportService, ItemService
+
+    session = case.session
+    item = ImportService(session).import_text("回档弹窗笔记", "弹窗里的原始内容")
+    assert item is not None, "导入文本失败"
+    session.commit()
+    service = ArchiveService(session)
+    archive = service.create(note="弹窗基线")
+    session.commit()
+
+    _fixture, window = build_window(case)
+    page = window.archive_page
+    problems: list[str] = []
+    dialogs: list[object] = []
+    original_dialog = archive_module.RestoreDialog
+
+    class _StubDialog:
+        """替身弹窗：记下预览报告、方式与选择。"""
+
+        CANCEL = original_dialog.CANCEL
+        RESTORE = original_dialog.RESTORE
+        SNAPSHOT = original_dialog.SNAPSHOT
+        choice = CANCEL
+
+        def __init__(self, report, parent=None, *, allow_mirror=False, preview=None) -> None:
+            self.report = report
+            self.allow_mirror = allow_mirror
+            self.preview = preview
+            self.mode = getattr(report, "mode", "restore")
+            self.choice = _StubDialog.choice
+            dialogs.append(self)
+
+        def exec(self) -> bool:
+            return self.choice != "cancel"
+
+    archive_module.RestoreDialog = _StubDialog
+    widget = None
+    admin_widget = None
+    try:
+        with _ToastRecorder(page) as toast:
+            # 1) 没有变更：不弹窗，直接提示无需回档
+            result = page._confirm_and_restore(archive)
+            _expect(problems, result is None, "没有变更时不该回档")
+            _expect(problems, not dialogs, "没有变更时不该弹变更清单")
+            _expect(
+                problems,
+                toast.titles("success") == ["无需回档"],
+                f"没有变更时的提示不对：{toast.messages}",
+            )
+
+            # 2) 有变更但取消：弹窗出现、数据不动
+            ItemService(session).update(item, content="弹窗里改过的内容")
+            session.commit()
+            _StubDialog.choice = "cancel"
+            result = page._confirm_and_restore(archive)
+            _expect(problems, result is None, "取消后不该回档")
+            _expect(problems, len(dialogs) == 1, "有变更时应弹一次变更清单")
+            _expect(
+                problems,
+                dialogs and dialogs[0].report.restored == 1,
+                "变更清单的数字应与预览一致",
+            )
+            session.refresh(item)
+            _expect(problems, item.content == "弹窗里改过的内容", "取消后数据不该变")
+
+            # 3) 先存档再回档：快照 + 复原
+            _StubDialog.choice = "snapshot"
+            before = len(service.history(limit=200))
+            result = page._confirm_and_restore(archive)
+            _expect(problems, result is not None, "确认后应执行回档")
+            if result is not None:
+                snapshot = result.snapshot
+                _expect(problems, snapshot is not None, "「先存档再回档」应先建快照")
+                _expect(
+                    problems,
+                    snapshot is not None and snapshot.name.startswith("回档前快照"),
+                    f"快照名字不对：{snapshot.name if snapshot else ''}",
+                )
+                _expect(problems, result.restored == 1, f"回档结果不对：{result.summary()}")
+            _expect(problems, len(service.history(limit=200)) == before + 1, "快照数量不对")
+            contents = sorted(
+                row.content or ""
+                for row in ItemRepository(session).query(ItemFilter())
+                if row.name == "回档弹窗笔记"
+            )
+            _expect(problems, "弹窗里的原始内容" in contents, f"回档没写回内容：{contents}")
+            _expect(
+                problems,
+                toast.titles("success")[-1:] == ["回档完成"],
+                f"回档完成的提示不对：{toast.messages}",
+            )
+
+        # 3.5) 管理员整档回档：弹窗应能切换覆盖式并重新预演；条目回档不给切换
+        _StubDialog.choice = "cancel"
+        page._confirm_and_restore(archive)
+        _expect(problems, dialogs and dialogs[-1].allow_mirror, "整档回档应允许覆盖式")
+        preview = dialogs[-1].preview
+        mirror_view = preview("mirror") if preview else None
+        _expect(
+            problems,
+            mirror_view is not None and mirror_view.mode == "mirror",
+            "切换覆盖式时应能重新预演",
+        )
+        ItemService(session).update(item, content="条目回档前又改了一次")
+        session.commit()
+        page._confirm_and_restore(service.entries(archive)[:1])
+        _expect(problems, dialogs and not dialogs[-1].allow_mirror, "条目回档不该允许覆盖式")
+
+        # 4) 弹窗本体：标题、列、按钮与三个选择
+        report = service.preview_restore(archive)
+        _expect(problems, not report.is_empty, "这一步应有变更清单可用")
+        widget = original_dialog(report, window)
+        headers = [widget.tree.headerItem().text(index) for index in range(3)]
+        _expect(problems, headers == ["文件", "分类", "归属"], f"弹窗列标题不对：{headers}")
+        _expect(
+            problems,
+            widget.tree.topLevelItemCount() == len(report.grouped()),
+            "变更清单的分组行数不对",
+        )
+        _expect(problems, widget.yesButton.text() == "确认回档", "确认按钮文案不对")
+        _expect(problems, widget.cancelButton.text() == "取消", "取消按钮文案不对")
+        _expect(problems, widget.snapshotButton.text() == "先存档再回档", "先存档按钮文案不对")
+        _expect(problems, widget.choice == original_dialog.CANCEL, "默认选择应是取消")
+        widget.snapshotButton.click()
+        _expect(problems, widget.choice == original_dialog.SNAPSHOT, "点「先存档再回档」的选择不对")
+        _expect(problems, not hasattr(widget, "mirrorRadio"), "条目回档不该出现方式切换")
+
+        # 5) 整档回档：管理员可切换覆盖式，头部与摘要跟着刷新
+        admin_widget = original_dialog(
+            report,
+            window,
+            allow_mirror=True,
+            preview=lambda mode: service.preview_restore(archive, mode),
+        )
+        _expect(problems, hasattr(admin_widget, "mirrorRadio"), "整档回档应给出覆盖式切换")
+        _expect(
+            problems,
+            admin_widget.restoreRadio.isChecked() and not admin_widget.mirrorRadio.isChecked(),
+            "默认方式应是恢复式",
+        )
+        admin_widget.mirrorRadio.click()
+        _expect(problems, admin_widget.mode == "mirror", "切换后方式应为覆盖式")
+        _expect(
+            problems,
+            "覆盖式" in admin_widget.sourceLabel.text(),
+            f"切换后头部应显示覆盖式：{admin_widget.sourceLabel.text()}",
+        )
+        _expect(
+            problems,
+            admin_widget.summaryLabel.text() == admin_widget._summary_text(),
+            "切换后摘要应跟着刷新",
+        )
+        admin_widget.restoreRadio.click()
+        _expect(problems, admin_widget.mode == "restore", "切回恢复式的方式不对")
+    finally:
+        archive_module.RestoreDialog = original_dialog
+        _drop_widget(widget)
+        _drop_widget(admin_widget)
+
+    assert not problems, "；".join(problems)
+
+
+@check("archive_usage_ui", "pages")
+def archive_usage_ui(case: Case) -> None:
+    """存档占用口径：表格与统计报真实落盘占用，自动清理文案进提示框，详情标签与回档计划同源。"""
+    import app.ui.pages.archive_page as archive_module
+    from app.core.signals import signalBus
+    from app.services import ArchiveService, ImportService, ItemService
+    from app.ui.framework import format_size
+
+    session = case.session
+    item = ImportService(session).import_text("占用笔记", "占用口径里的内容" * 60)
+    assert item is not None, "导入文本失败"
+    session.commit()
+    service = ArchiveService(session)
+    archive = service.create(note="占用基线")
+    session.commit()
+    _seed_archives(case)
+
+    _fixture, window = build_window(case)
+    page = window.archive_page
+    problems: list[str] = []
+    original_dialog = archive_module.RestoreDialog
+    original_input = archive_module.TextInputDialog
+    dialogs: list[object] = []
+    emitted: list[int] = []
+
+    class _StubDialog:
+        choice = original_dialog.CANCEL
+
+        def __init__(self, report, parent=None, *, allow_mirror=False, preview=None) -> None:
+            self.report = report
+            dialogs.append(self)
+
+        def exec(self) -> bool:
+            return False
+
+    class _StubInput:
+        """替身输入框：直接确认，避免自检弹出真窗口。"""
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def exec(self) -> bool:
+            return True
+
+        def value(self) -> str:
+            return "自检新建存档"
+
+    archive_module.RestoreDialog = _StubDialog
+    archive_module.TextInputDialog = _StubInput
+    handler = signalBus.archivesChanged.connect(lambda *_: emitted.append(1))
+    try:
+        table = page.archive_list
+        headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+        _expect(problems, "大小" not in headers, f"「大小」列与「实际占用」重复，应该去掉：{headers}")
+        actual_column = headers.index("实际占用")
+        dedupe_column = headers.index("去重率")
+
+        row = _row_of_archive(page, int(archive.id))
+        _expect(problems, row >= 0, "存档表里找不到自检存档")
+        actual_text = table.item(row, actual_column).text() if row >= 0 else ""
+        _expect(problems, actual_text not in ("0 B", "", "—"), f"实际占用应是真实大小：{actual_text!r}")
+        usage = service.archive_usage()
+        _expect(
+            problems,
+            format_size(int(usage["stored_size"])) == actual_text,
+            f"实际占用应与服务层一致：{actual_text!r} / {usage}",
+        )
+        dedupe_text_value = table.item(row, dedupe_column).text() if row >= 0 else ""
+        _expect(problems, dedupe_text_value != "100%", f"有压缩收益时去重率不该是 100%：{dedupe_text_value!r}")
+
+        stats = page.archive_stats.text()
+        _expect(problems, "总占用" in stats, f"存档统计应带总占用：{stats!r}")
+        _expect(
+            problems,
+            format_size(int(usage["stored_size"])) in stats,
+            f"总占用应与服务层一致：{stats!r} / {usage}",
+        )
+
+        # ③ 自动清理文案并进「按策略清理」的提示框，标题下不再占一行
+        tip = page.prune_button.toolTip()
+        _expect(problems, not page.policy_label.isVisible(), "标题下的自动清理文案应隐藏")
+        _expect(
+            problems,
+            service.policy_summary() in tip and "创建存档时自动执行" in tip,
+            f"清理策略应进提示框：{tip!r}",
+        )
+
+        # 详情标签与回档提示同源：软删一条后应描述回档计划，而不是另一套口径
+        ItemService(session).delete([item])
+        session.commit()
+        _select_archive(page, int(archive.id))
+        label = page.diff_label.text()
+        _expect(problems, label.startswith("回档将"), f"有变更时详情标签应描述回档计划：{label!r}")
+        with _ToastRecorder(page) as toast:
+            page._confirm_and_restore(archive)
+        _expect(problems, bool(dialogs), "有变更时点回档应弹变更清单")
+        _expect(
+            problems,
+            toast.titles("success") != ["无需回档"],
+            f"有变更时不该提示无需回档：{toast.messages}",
+        )
+
+        # ②b 存档页自己改动集合时广播 archivesChanged，概览才能立刻更新
+        emitted.clear()
+        page._on_create()
+        _expect(problems, bool(emitted), "新建存档后应广播 archivesChanged")
+    finally:
+        archive_module.RestoreDialog = original_dialog
+        archive_module.TextInputDialog = original_input
+        signalBus.archivesChanged.disconnect(handler)
+        dispose_window(window)
+
+    assert not problems, "；".join(problems)
+
+
+@check("archive_missing_changes", "pages")
+def archive_missing_changes(case: Case) -> None:
+    """变更清单：内容缺失的条目也要有一行；只有内容缺失时不允许确认回档。"""
+    from sqlalchemy import text
+
+    import app.ui.pages.archive_page as archive_module
+    from app.db.models import DataItem as Item
+    from app.services import ArchiveService, ImportService, ItemService
+
+    session = case.session
+    importer = ImportService(session)
+    lost = importer.import_text("缺失清单甲", "甲的内容")
+    dropped = importer.import_text("缺失清单乙", "乙的内容")
+    assert lost is not None and dropped is not None, "导入文本失败"
+    session.commit()
+    service = ArchiveService(session)
+    archive = service.create(name="缺失清单存档", note="缺失")
+    assert archive is not None, "创建存档失败"
+    session.commit()
+
+    entries = {entry.name: entry for entry in service.entries(archive)}
+    assert "缺失清单甲" in entries, "存档里没有自检条目"
+    # 把仓库里取不到内容的状态造出来：校验和指向不存在的文件，条目就是「内容缺失」。
+    session.execute(
+        text("update archive_entries set checksum = :checksum where id = :entry_id"),
+        {"checksum": "0" * 64, "entry_id": int(entries["缺失清单甲"].id)},
+    )
+    ItemService(session).delete([session.get(Item, int(dropped.id))])
+    session.commit()
+    session.expire_all()
+
+    missing_entries = [entry for entry in service.entries(archive) if entry.name == "缺失清单甲"]
+    assert missing_entries, "找不到被改成内容缺失的条目"
+    missing_entry = missing_entries[0]
+
+    fixture, window = build_window(case)
+    page = window.archive_page
+    problems: list[str] = []
+    original_dialog = archive_module.RestoreDialog
+    stubbed: list[object] = []
+    widget = None
+    missing_widget = None
+    try:
+        report = service.preview_restore(archive)
+        kinds = [change.kind for change in report.changes]
+        _expect(problems, report.missing == 1, f"应有一项内容缺失：{report.summary()}")
+        _expect(problems, kinds.count("内容缺失") == 1, f"内容缺失应出现在变更清单里：{kinds}")
+        _expect(problems, "撤销删除" in kinds, f"被删掉的条目也应出现在清单里：{kinds}")
+        _expect(problems, report.actionable and not report.is_empty, "有可执行变更时应判为可回档")
+        _expect(problems, report.total == len(report.changes), "total 应与清单行数一致")
+
+        widget = original_dialog(report, window)
+        groups = [widget.tree.topLevelItem(index).text(0) for index in range(widget.tree.topLevelItemCount())]
+        _expect(problems, "内容缺失" in groups, f"弹窗清单应有「内容缺失」分组：{groups}")
+        _expect(problems, widget.yesButton.isEnabled(), "有可执行变更时应允许确认")
+        _expect(problems, "内容缺失" in widget.summaryLabel.text(), f"摘要应点出内容缺失：{widget.summaryLabel.text()!r}")
+        _expect(problems, widget.summaryLabel.text() == widget._summary_text(), "摘要应自洽")
+
+        # 只有内容缺失：清单照列，但没有任何可执行变更，不该允许确认。
+        only = service.preview_restore([missing_entry])
+        _expect(
+            problems,
+            only.missing == 1 and not only.actionable and only.is_empty,
+            f"只有内容缺失时应判为不可回档：{only.summary()}",
+        )
+        _expect(problems, [change.kind for change in only.changes] == ["内容缺失"], f"清单应列出内容缺失：{only.changes}")
+        missing_widget = original_dialog(only, window)
+        _expect(problems, not missing_widget.yesButton.isEnabled(), "只有内容缺失时不该允许确认回档")
+        _expect(problems, not missing_widget.snapshotButton.isEnabled(), "只有内容缺失时不该允许先存档再回档")
+        _expect(
+            problems,
+            missing_widget.tree.topLevelItemCount() == len(only.grouped()) == 1,
+            "只有内容缺失时清单也应有一行",
+        )
+
+        _select_archive(page, int(archive.id))
+        label = page.diff_label.text()
+        _expect(problems, label.startswith("回档将"), f"有可执行变更时详情应描述回档计划：{label!r}")
+        _expect(problems, "内容缺失" in label, f"详情应点出内容缺失：{label!r}")
+        page_archive = page._current_archive()
+        page_missing = [entry for entry in page.service.entries(page_archive) if entry.name == "缺失清单甲"]
+        _expect(problems, len(page_missing) == 1, "页面上应能看到内容缺失的条目")
+        if page_missing:
+
+            class _RecorderDialog:
+                def __init__(self, *args, **kwargs) -> None:
+                    stubbed.append(self)
+
+            archive_module.RestoreDialog = _RecorderDialog
+            with _ToastRecorder(page) as toast:
+                page._confirm_and_restore(page_missing)
+            archive_module.RestoreDialog = original_dialog
+            _expect(problems, not stubbed, "只有内容缺失时不该弹变更清单")
+            _expect(
+                problems,
+                toast.titles("warning") == ["无法回档"],
+                f"只有内容缺失时应提示无法回档：{toast.messages}",
+            )
+    finally:
+        archive_module.RestoreDialog = original_dialog
+        _drop_widget(widget)
+        _drop_widget(missing_widget)
+        dispose_window(window)
+    assert not problems, "；".join(problems)
+
+
+@check("archive_entry_selection", "pages")
+def archive_entry_selection(case: Case) -> None:
+    """条目勾选：打开存档自动勾选不一致项，全选 / 清空 / 只选不一致 / 跳到下一个不一致。"""
+    from PyQt6.QtCore import Qt
+
+    from app.core.signals import signalBus
+    from app.db.models import DataItem as Item
+    from app.services import ArchiveService, ImportService, ItemService
+    from app.ui.framework import accent_color
+    from app.ui.pages.archive_page import ENTRY_CHECK_COLUMN, ENTRY_HEADERS, ENTRY_STATE_LABELS
+
+    session = case.session
+    importer = ImportService(session)
+    kept = importer.import_text("勾选检查甲", "甲的内容")
+    gone = importer.import_text("勾选检查乙", "乙的内容")
+    assert kept is not None and gone is not None, "导入文本失败"
+    session.commit()
+    archive = ArchiveService(session).create(name="勾选存档", note="勾选")
+    assert archive is not None, "创建存档失败"
+    session.commit()
+    ItemService(session).delete([session.get(Item, int(gone.id))])
+    session.commit()
+
+    _fixture, window = build_window(case)
+    page = window.archive_page
+    problems: list[str] = []
+    restores: list[tuple] = []
+    jumped: list[int] = []
+    jump_handler = lambda item_id: jumped.append(int(item_id))  # noqa: E731 - 自检里的临时槽
+    try:
+        _select_archive(page, int(archive.id))
+        _expect(problems, ENTRY_HEADERS[ENTRY_CHECK_COLUMN] == "选择", "条目表首列应是「选择」")
+        headers = [page.table.horizontalHeaderItem(index).text() for index in range(page.table.columnCount())]
+        _expect(problems, headers == list(ENTRY_HEADERS), f"条目表表头应为 {list(ENTRY_HEADERS)}，实际 {headers}")
+
+        name_column = ENTRY_HEADERS.index("名称")
+        state_column = ENTRY_HEADERS.index("状态")
+
+        def row_of(name: str) -> int:
+            for index in range(page.table.rowCount()):
+                if page.table.item(index, name_column).text() == name:
+                    return index
+            return -1
+
+        same_row = row_of("勾选检查甲")
+        bad_row = row_of("勾选检查乙")
+        _expect(problems, same_row >= 0 and bad_row >= 0, "条目表里应能看到两条自检条目")
+        if same_row >= 0 and bad_row >= 0:
+            _expect(
+                problems,
+                page.table.item(bad_row, state_column).text() == ENTRY_STATE_LABELS["removed"],
+                f"被删掉的条目状态应为「已删除」，实际 {page.table.item(bad_row, state_column).text()!r}",
+            )
+            # 不一致条目要一眼看出来：状态列加粗 + 主题强调色
+            _expect(problems, page.table.item(bad_row, state_column).font().bold(), "不一致条目的状态列应加粗")
+            _expect(
+                problems,
+                page.table.item(bad_row, state_column).foreground().color() == accent_color(),
+                "不一致条目的状态列应用主题强调色",
+            )
+            _expect(problems, not page.table.item(same_row, state_column).font().bold(), "一致条目不该被加粗")
+            _expect(
+                problems,
+                bool(page.table.item(bad_row, ENTRY_CHECK_COLUMN).flags() & Qt.ItemFlag.ItemIsUserCheckable),
+                "条目表首列应是可勾选的复选框",
+            )
+            # 打开存档后自动勾选不一致条目
+            _expect(
+                problems,
+                [entry.name for entry in page.checked_entries()] == ["勾选检查乙"],
+                f"打开存档应只自动勾选不一致条目：{[entry.name for entry in page.checked_entries()]}",
+            )
+            _expect(problems, page.entry_selection_label.text() == "已选 1 项", "已选计数不对")
+            _expect(
+                problems,
+                page.entry_select_all_box.checkState() == Qt.CheckState.PartiallyChecked,
+                "部分选中时「全选本页」应是横杠",
+            )
+            _expect(
+                problems,
+                page.table.item(bad_row, ENTRY_CHECK_COLUMN).checkState() == Qt.CheckState.Checked
+                and page.table.item(same_row, ENTRY_CHECK_COLUMN).checkState() == Qt.CheckState.Unchecked,
+                "自动勾选应写回勾选框",
+            )
+
+            # 双击不一致行 → 请求数据管理页定位
+            signalBus.focusItem.connect(jump_handler)
+            page._on_entry_double_clicked(bad_row, ENTRY_CHECK_COLUMN)
+            signalBus.focusItem.disconnect(jump_handler)
+            _expect(problems, jumped == [int(gone.id)], f"双击不一致行应请求定位该数据项：{jumped}")
+
+            # 跳到下一个不一致（只有一项时循环回同一行）
+            page._jump_row = -1
+            page.entry_jump_button.click()
+            _expect(problems, page.table.currentRow() == bad_row, "「下一个不一致」应停在那一行")
+            _expect(problems, page._jump_row == bad_row, "「下一个不一致」应记住位置")
+            page.entry_jump_button.click()
+            _expect(problems, page.table.currentRow() == bad_row, "只有一项不一致时应循环回同一行")
+
+            page.entry_filter_bar.set_filter("state", ENTRY_STATE_LABELS["same"])
+            with _ToastRecorder(page) as toast:
+                page.jump_to_next_inconsistent()
+            _expect(problems, toast.titles("warning") == ["没有不一致的条目"], f"视图里没有不一致条目时应提示：{toast.messages}")
+            page.entry_filter_bar.reset()
+
+            # 全选 / 清空 / 只选不一致
+            page.select_all_entries()
+            _expect(problems, len(page.checked_entries()) == 2, "全选应勾上当前视图全部条目")
+            _expect(problems, page.entry_selection_label.text() == "已选 2 项", "全选后的计数不对")
+            _expect(
+                problems,
+                page.entry_select_all_box.checkState() == Qt.CheckState.Checked,
+                "全选后「全选本页」应是勾",
+            )
+            page.select_no_entries()
+            _expect(problems, page.checked_entries() == [], "清空选择应取消全部勾选")
+            _expect(problems, page.entry_selection_label.text() == "未选择条目", "清空后的计数不对")
+            _expect(
+                problems,
+                page.entry_select_all_box.checkState() == Qt.CheckState.Unchecked,
+                "清空后「全选本页」应是空",
+            )
+            page.entry_inconsistent_button.click()
+            _expect(
+                problems,
+                [entry.name for entry in page.checked_entries()] == ["勾选检查乙"],
+                "「只选不一致」应只勾上不一致条目",
+            )
+
+            # 手动点勾选框应记入选择集合
+            page.table.item(same_row, ENTRY_CHECK_COLUMN).setCheckState(Qt.CheckState.Checked)
+            _expect(problems, len(page.checked_entries()) == 2, "手动勾选应记入选择集合")
+            page.table.item(bad_row, ENTRY_CHECK_COLUMN).setCheckState(Qt.CheckState.Unchecked)
+            _expect(
+                problems,
+                [entry.name for entry in page.checked_entries()] == ["勾选检查甲"],
+                "手动取消勾选应生效",
+            )
+
+            # 筛选刷新不该丢勾选
+            page.entry_filter_bar.set_filter("name", "勾选检查甲")
+            _expect(problems, page.table.rowCount() == 1, "名称筛选应只显示一条")
+            page.entry_filter_bar.reset()
+            _expect(
+                problems,
+                [entry.name for entry in page.checked_entries()] == ["勾选检查甲"],
+                "筛选刷新后勾选状态不应丢",
+            )
+
+            # 「还原选中条目」优先用勾选的条目
+            page._confirm_and_restore = lambda *args, **kwargs: restores.append(args)  # type: ignore[method-assign]
+            page._on_restore()
+            _expect(problems, len(restores) == 1, f"勾选后点还原应发起一次回档：{restores}")
+            if restores:
+                _expect(
+                    problems,
+                    [entry.name for entry in restores[0][0]] == ["勾选检查甲"],
+                    f"应只还原勾选的条目：{[entry.name for entry in restores[0][0]]}",
+                )
+
+            restores.clear()
+            page.select_no_entries()
+            page.table.clearSelection()
+            with _ToastRecorder(page) as toast:
+                page._on_restore()
+            _expect(problems, not restores, "没勾选也没选行时不该回档")
+            _expect(problems, toast.titles("warning") == ["未选择条目"], f"没有选择时应提示：{toast.messages}")
+    finally:
+        dispose_window(window)
+    assert not problems, "；".join(problems)

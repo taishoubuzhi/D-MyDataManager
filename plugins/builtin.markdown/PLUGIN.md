@@ -13,11 +13,11 @@
 ## 依赖
 
 - builtin.lib.viewer（查看器基类）
-- builtin.lib.dialog（弹窗外壳）
+- builtin.lib.ui（弹窗外壳）
 
 ## 贡献
 
-- 打开方式（app.viewer）：kind = markdown，认领 md / markdown，能力：Markdown 渲染 / 大文件截断。
+- 查看器（app.viewer）：kind = markdown，认领 md / markdown，能力：Markdown 渲染 / 大文件截断。
 
 ## 数据文件
 
