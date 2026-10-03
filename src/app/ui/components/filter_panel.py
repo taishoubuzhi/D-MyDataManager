@@ -22,14 +22,21 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     FluentIcon,
-    PushButton,
     SearchLineEdit,
-    StrongBodyLabel,
     TransparentToolButton,
 )
 
+from ...core.config import config
 from ...db.models import DATA_TYPE_NAMES, DataType
-from ..framework import COMPACT_MARGINS, clear_scroll_background, release_widget
+from ..framework import (
+    align_check_box,
+    COMPACT_MARGINS,
+    IconTextButton,
+    IconTextLabel,
+    clear_scroll_background,
+    icon_label,
+    release_widget,
+)
 
 SORT_OPTIONS: list[tuple[str, str, bool]] = [
     ("最新导入", "created_at", True),
@@ -47,18 +54,19 @@ class FilterSection(CardWidget):
     """单个筛选分组卡片：可折叠、可滑动、可搜索，标题栏右侧是三态全选框。"""
 
     changed = pyqtSignal()
+    collapsedChanged = pyqtSignal()
 
-    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, parent: QWidget | None = None, collapsed: bool = False, icon=None) -> None:
         super().__init__(parent)
         self._boxes: dict = {}
         self._syncing = False
-        self._collapsed = False
+        self._collapsed = bool(collapsed)
 
         self.toggle_button = TransparentToolButton(FluentIcon.CHEVRON_DOWN_MED, self)
         self.toggle_button.setFixedSize(22, 22)
         self.toggle_button.setToolTip("展开 / 折叠")
         self.toggle_button.clicked.connect(self._toggle_body)
-        self.title_label = StrongBodyLabel(title, self)
+        self.title_label = IconTextLabel(icon, title, self, strong=True)
         self.count_label = CaptionLabel("", self)
         self.count_label.setToolTip("已选 / 全部")
 
@@ -105,6 +113,7 @@ class FilterSection(CardWidget):
         root.setSpacing(6)
         root.addLayout(header)
         root.addWidget(self.scroll)
+        self._apply_collapsed()
 
     # ------------------------------------------------------------------ 选项
     @property
@@ -200,25 +209,44 @@ class FilterSection(CardWidget):
         self._sync_all()
         self.changed.emit()
 
+    @property
+    def collapsed(self) -> bool:
+        """内容区是否处于折叠状态。"""
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """设置折叠状态：用户点击与配置回填共用同一条路径。"""
+        if self._collapsed == bool(collapsed):
+            return
+        self._collapsed = bool(collapsed)
+        self._apply_collapsed()
+        self.collapsedChanged.emit()
+
     def _toggle_body(self) -> None:
         """折叠 / 展开分组内容（状态独立于页面是否可见）。"""
-        self._collapsed = not self._collapsed
+        self.set_collapsed(not self._collapsed)
+
+    def _apply_collapsed(self) -> None:
         self.scroll.setVisible(not self._collapsed)
         self.toggle_button.setIcon(
             FluentIcon.CHEVRON_RIGHT_MED if self._collapsed else FluentIcon.CHEVRON_DOWN_MED
         )
+        self.toggle_button.setToolTip("展开筛选" if self._collapsed else "折叠筛选")
 
 
 class FilterPanel(QWidget):
     changed = pyqtSignal()
+    collapsedChanged = pyqtSignal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, expanded: Iterable[str] | None = None) -> None:
         super().__init__(parent)
-        self.type_section = FilterSection("类型", self)
-        self.tag_section = FilterSection("标签", self)
-        self.keyword_section = FilterSection("关键词", self)
+        opened = self._initial_expanded() if expanded is None else {str(key) for key in expanded}
+        self.type_section = FilterSection("类型", self, collapsed="type" not in opened, icon=FluentIcon.TILES)
+        self.tag_section = FilterSection("标签", self, collapsed="tag" not in opened, icon=FluentIcon.TAG)
+        self.keyword_section = FilterSection("关键词", self, collapsed="keyword" not in opened, icon=FluentIcon.FONT)
         for section in self.sections():
             section.changed.connect(self.changed.emit)
+            section.collapsedChanged.connect(self.collapsedChanged.emit)
 
         self._type_boxes = self.type_section.boxes
         self._tag_boxes = self.tag_section.boxes
@@ -240,8 +268,11 @@ class FilterPanel(QWidget):
         self.trash_box = CheckBox("只看回收站", self)
         self.hidden_box.stateChanged.connect(lambda _state: self.changed.emit())
         self.trash_box.stateChanged.connect(lambda _state: self.changed.emit())
+        # 指示器与同一张卡片里 IconTextLabel 的图标列对齐（否则两行文字差 5 px）
+        align_check_box(self.hidden_box)
+        align_check_box(self.trash_box)
 
-        self.reset_button = PushButton("重置筛选", self)
+        self.reset_button = IconTextButton(FluentIcon.SYNC, "重置筛选", self)
         self.reset_button.setToolTip("清空全部筛选条件")
         self.reset_button.clicked.connect(self.reset)
 
@@ -249,13 +280,13 @@ class FilterPanel(QWidget):
         options_layout = QVBoxLayout(options_card)
         options_layout.setContentsMargins(10, 8, 10, 10)
         options_layout.setSpacing(6)
-        options_layout.addWidget(StrongBodyLabel("范围与排序", options_card))
+        options_layout.addWidget(IconTextLabel(FluentIcon.LAYOUT, "范围与排序", options_card, strong=True))
 
         sort_row = QWidget(options_card)
         sort_layout = QHBoxLayout(sort_row)
         sort_layout.setContentsMargins(0, 0, 0, 0)
         sort_layout.setSpacing(6)
-        sort_layout.addWidget(CaptionLabel("排序", sort_row))
+        sort_layout.addWidget(icon_label(FluentIcon.MENU, "排序", sort_row))
         sort_layout.addStretch(1)
         sort_layout.addWidget(self.sort_box)
         options_layout.addWidget(sort_row)
@@ -281,6 +312,22 @@ class FilterPanel(QWidget):
             self.tag_section,
             self.keyword_section,
         )
+
+    def section_keys(self) -> dict[str, FilterSection]:
+        """分组键 → 分组卡片：配置里记的就是这些键。"""
+        return {"type": self.type_section, "tag": self.tag_section, "keyword": self.keyword_section}
+
+    def expanded_keys(self) -> list[str]:
+        """当前展开着的分组键（写回配置用）。"""
+        return [key for key, section in self.section_keys().items() if not section.collapsed]
+
+    @staticmethod
+    def _initial_expanded() -> set[str]:
+        """筛选分组默认全部折叠；只有配置里记着展开过，启动时才展开。"""
+        value = config.expandedFilters.value
+        if isinstance(value, (list, tuple, set)):
+            return {str(key) for key in value}
+        return set()
 
     def set_options(
         self,

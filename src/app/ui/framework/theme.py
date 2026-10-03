@@ -11,7 +11,7 @@ from __future__ import annotations
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QApplication
 from qfluentwidgets import isDarkTheme, qconfig, themeColor
-from qfluentwidgets.common.style_sheet import CustomStyleSheet, setStyleSheet
+from qfluentwidgets.common.style_sheet import CustomStyleSheet, setCustomStyleSheet, setStyleSheet
 
 # 滚动区底色的处理住在 app.sdk.ui（插件也要用），这里重新导出给程序侧。
 from ...sdk.ui import clear_scroll_background
@@ -42,6 +42,18 @@ BADGE_PLAIN_QSS = (
     "color: palette(text); background-color: rgba(128, 128, 128, 0.18);"
     "border-radius: 8px; padding: 1px 8px;"
 )
+#: 悬停提示的小问号标记：圆形浅底，尺寸由 HINT_BADGE_SIZE 固定，不随文字变宽。
+HINT_BADGE_QSS = (
+    "color: rgba(128, 128, 128, 1); background-color: rgba(128, 128, 128, 0.18);"
+    "border-radius: 7px; font-size: 10px;"
+)
+#: 「简化显示」下的方形图标按钮：QSS 的内边距（图标位 36 + 右 12）比按钮本身还宽，
+#: 会把图标裁掉，所以方形模式下把内边距清零，图标才能居中完整显示；
+#: 带上与 qfluentwidgets 同款的选择器，自定义样式拼在它后面才盖得住。
+SQUARE_BUTTON_QSS = "PushButton[hasIcon=true], PushButton[hasIcon=false] { padding: 0px; }"
+#: 复选框指示器与 `IconTextLabel` 的图标列对齐：18 px 指示器 + 6 px 间距（qfluentwidgets 默认
+#: 是 1 px 缩进 + 20 px 指示器框 + 8 px 间距，同一张卡片里跟图标行并排会错开 5 px）。
+CHECK_BOX_QSS = "CheckBox { margin-left: 0px; spacing: 4px; } CheckBox::indicator { width: 18px; height: 18px; }"
 
 
 def _tinted(color: QColor, alpha: int) -> QColor:
@@ -120,6 +132,11 @@ def apply_app_palette() -> None:
     app.setPalette(theme_palette())
 
 
+def align_check_box(box) -> None:
+    """让复选框的指示器与文字跟 `IconTextLabel` 的图标列对齐（同一张卡片里并排时不错位）。"""
+    setCustomStyleSheet(box, CHECK_BOX_QSS, CHECK_BOX_QSS)
+
+
 def install_app_theme() -> None:
     """启动时调用一次：装好调色板，并让它在主题切换后跟着变（幂等）。"""
     global _theme_hooked
@@ -132,10 +149,14 @@ def install_app_theme() -> None:
 __all__ = [
     "AVATAR_PLAIN_QSS",
     "BADGE_PLAIN_QSS",
+    "CHECK_BOX_QSS",
+    "HINT_BADGE_QSS",
     "PAGE_BG_DARK",
     "PAGE_BG_LIGHT",
+    "SQUARE_BUTTON_QSS",
     "accent_color",
     "accent_name",
+    "align_check_box",
     "apply_app_palette",
     "avatar_style",
     "badge_style",

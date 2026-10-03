@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QWidget
 from qfluentwidgets import Action, CheckableMenu, FluentIcon, PushButton
 
 from .keyword_input import KeywordInput
+from ..framework import IconTextButton
 
 
 class TagPicker(KeywordInput):
@@ -23,7 +24,7 @@ class TagPicker(KeywordInput):
         super().__init__(placeholder, parent)
         self._known: list[str] = []
         self._global: set[str] = set()
-        self._button = PushButton(FluentIcon.TAG, "选择已有标签", self)
+        self._button = IconTextButton(FluentIcon.TAG, "选择已有标签", self)
         self._button.clicked.connect(self._show_menu)
         self.add_trailing_widget(self._button)
         self.set_known_tags(known_tags or [], global_tags=global_tags)

@@ -10,7 +10,6 @@ from qfluentwidgets import (
     ComboBox,
     LineEdit,
     MessageBoxBase,
-    PushButton,
     SubtitleLabel,
     SwitchButton,
     TextEdit,
@@ -19,7 +18,7 @@ from qfluentwidgets import (
 
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
-from .framework import format_size
+from .framework import IconTextButton, format_size
 from .components.keyword_input import KeywordInput
 from .components.tag_picker import TagPicker
 
@@ -84,7 +83,7 @@ class CategoryConflictDialog(MessageBoxBase):
             layout.addWidget(edit, 1)
             self.viewLayout.addWidget(row)
             self._edits.append(edit)
-        self.auto_button = PushButton("自动编号（-1、-2）", self)
+        self.auto_button = IconTextButton(FluentIcon.LABEL, "自动编号（-1、-2）", self)
         self.auto_button.clicked.connect(self._on_auto)
         self.buttonLayout.insertWidget(0, self.auto_button)
         self.yesButton.setText("重命名并删除")
@@ -248,9 +247,9 @@ class DuplicateDialog(MessageBoxBase):
         self.viewLayout.addWidget(self.tree)
 
         actions = QHBoxLayout()
-        keep_latest = PushButton("每组只保留最新", self)
+        keep_latest = IconTextButton(FluentIcon.HISTORY, "每组只保留最新", self)
         keep_latest.clicked.connect(self._check_all_but_first)
-        clear_button = PushButton("全部取消勾选", self)
+        clear_button = IconTextButton(FluentIcon.CLEAR_SELECTION, "全部取消勾选", self)
         clear_button.clicked.connect(self._uncheck_all)
         actions.addWidget(keep_latest)
         actions.addWidget(clear_button)

@@ -224,6 +224,7 @@ def user_page_rows(case: Case) -> None:
     """用户页卡片行语义：当前用户标记、删除入口门槛、清空口令后任意口令可通过。"""
     from qfluentwidgets import PushButton
 
+    from app.core.config import config
     from app.ui.pages import user_page as user_module
     from app.ui.pages.user_page import AVATAR_SIZE, CARD_SPACING, CARD_WIDTH, grid_columns
 
@@ -233,6 +234,7 @@ def user_page_rows(case: Case) -> None:
     page = window.user_page
     original_text_input = user_module.TextInputDialog
     original_confirm = user_module.confirm
+    original_mode = config.simpleDisplay.value
     original_state = (page._is_admin, page._user_id)
     service_state = (page.service.current_id, page.service.is_admin)
     try:
@@ -291,15 +293,46 @@ def user_page_rows(case: Case) -> None:
             ]
             if len(avatars) != 1:
                 problems.append(f"用户卡片 {card.user_id} 的首字头像数量应为 1，实际 {len(avatars)}")
+            from PyQt6.QtCore import QPoint
+
+            from app.ui.components import FlowArea
+
             buttons = card.findChildren(PushButton)
             if not buttons:
                 problems.append(f"用户卡片 {card.user_id} 缺少操作按钮")
+            if not isinstance(getattr(card, "actions_area", None), FlowArea):
+                problems.append(f"用户卡片 {card.user_id} 的操作按钮没有放在流式容器里")
             for button in buttons:
+                # 按钮的父控件是流式容器，位置要先映射回卡片坐标再比
+                point = button.mapTo(card, QPoint(0, 0))
                 if (
-                    button.geometry().right() > card.width()
-                    or button.geometry().bottom() > card.height()
+                    point.x() + button.width() > card.width()
+                    or point.y() + button.height() > card.height()
                 ):
-                    problems.append(f"用户卡片 {card.user_id} 的按钮 {button.text()!r} 被裁出卡片范围")
+                    problems.append(f"用户卡片 {card.user_id} 的按钮被裁出卡片范围")
+
+        # 页面不可见时切挡位：操作区那时量不到宽度，重新进入用户页必须再等高一次，否则按钮被裁
+        window.switchTo(window.settings_page)
+        app.processEvents()
+        config.set(config.simpleDisplay, "full")
+        app.processEvents()
+        config.set(config.simpleDisplay, "none")
+        app.processEvents()
+        window.switchTo(page)
+        for _ in range(4):
+            app.processEvents()
+        from PyQt6.QtCore import QPoint
+
+        for card in page.cards():
+            bottom = 0
+            for button in card.findChildren(PushButton):
+                point = button.mapTo(card, QPoint(0, 0))
+                bottom = max(bottom, point.y() + button.height())
+            if bottom > card.height():
+                problems.append(
+                    f"用户卡片 {card.user_id} 从别的页面切回来没有重新等高，按钮被裁出卡片"
+                )
+
         if page.grid.columnStretch(page._columns) != 1:
             problems.append("用户卡片网格缺少占位伸缩列，卡片不会被左对齐")
         if page.grid.columnStretch(0) != 0:
@@ -382,6 +415,7 @@ def user_page_rows(case: Case) -> None:
     finally:
         user_module.TextInputDialog = original_text_input
         user_module.confirm = original_confirm
+        config.set(config.simpleDisplay, original_mode)
         page.service.current_id, page.service.is_admin = service_state
         page._is_admin, page._user_id = original_state
         dispose_window(window)

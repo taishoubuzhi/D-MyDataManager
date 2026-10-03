@@ -6,5 +6,6 @@
 from __future__ import annotations
 
 from .flow_area import FlowArea
+from .plugin_delegate import BADGES_ROLE, SUBTITLE_ROLE, TITLE_ROLE, PluginItemDelegate
 
-__all__ = ["FlowArea"]
+__all__ = ["BADGES_ROLE", "SUBTITLE_ROLE", "TITLE_ROLE", "FlowArea", "PluginItemDelegate"]

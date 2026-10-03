@@ -15,6 +15,8 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 - 扩展点名字都是**字符串常量**（`ExtensionPoint` 的类属性），事件名同理（`Events`）。
 - 贡献与订阅都记在插件名下；插件被禁用 / 卸载时程序**自动撤销**，插件自己不用清理（`Plugin.teardown()` 只用于自己的额外资源）。
 - 贡献的排序键是 `(order, plugin_id, key)`：`order` 小的在前（默认 `100`），同 `order` 时内置插件按 id 排。
+- 清单里的 `provides` 只是**声明与展示**：真正生效的是插件在 `setup()` 里调用的 `ctx.provide("接口名", 对象)`；
+  消费方用 `ctx.require("接口名")` 取实例，取不到时应当自己兜底。
 
 ## 1. 扩展点总览
 
@@ -26,7 +28,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 | `app.ui.manage.item_menu` | 条目菜单 | `{"text", "callback", "icon"}` | 数据行右键菜单 | 稳定 |
 | `app.ui.detail.panel` | 详情面板 | `{"title", "lines"}` | 详情弹窗底部 | 稳定 |
 | `app.ui.import.filter` | 导入筛选 | `{"name", "accept"}` | 导入页扫描文件时 | 稳定 |
-| `app.ui.home.kpi` | 概览卡片 | `{"title", "value", "sub", "icon"}` | 概览页统计卡 | 稳定 |
+| `app.ui.home.kpi` | 概览卡片 | `{"title", "value", "sub", "icon", "hint"}` | 概览页统计卡 | 稳定 |
 | `app.ui.settings.card` | 设置卡片 | `{"title", "factory"}` | 设置页「插件」分组 | 稳定 |
 | `app.data.import.hook` | 导入钩子 | 待定 | —— | **预留**（程序侧尚未接线） |
 | `app.item.open.resolver` | 打开解析器 | 待定 | —— | **预留**（程序侧尚未接线） |
@@ -47,7 +49,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 ```python
 ctx.contribute(
     ExtensionPoint.HOME_KPI,
-    {"title": "示例计数", "value": self._kpi_text, "sub": self._kpi_sub, "icon": "HEART"},
+    {"title": "示例计数", "value": self._kpi_text, "sub": self._kpi_sub, "icon": "HEART", "hint": "示例插件贡献的概览卡片"},
     key="example.kpi",
     description="示例插件贡献的概览卡片",
 )
@@ -59,6 +61,7 @@ ctx.contribute(
 | `value` | 字符串或 `-> str` 回调 | 卡片主数值，每次刷新时重新取值 |
 | `sub` | 字符串或 `-> str` 回调 | 卡片副标题（小字） |
 | `icon` | 字符串 | `FluentIcon` 成员名 |
+| `hint` | 字符串或 `-> str` 回调 | 可选，鼠标停在卡片上弹出的说明 |
 
 程序在概览页 `refresh()` 时重建这些卡片（`home_page._rebuild_plugin_cards()`），并在 `itemsChanged` / `pluginsChanged` 后自动刷新。
 

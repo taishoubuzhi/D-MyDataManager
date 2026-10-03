@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 
 from . import fixtures
 from .checks_pages import PAGE_ATTRS, dispose_window
-from .harness import Case, check, ensure_app
+from .harness import ROOT, Case, check, ensure_app
 
 
 @check("user_journey", "flows")
@@ -131,3 +132,15 @@ def pages_on_real_data(case: Case) -> None:
         assert not window.tag_page.checked_tags(), "标签页取消全选后仍有勾选项"
     finally:
         dispose_window(window)
+
+
+@check("startup_stage_logs", "flows")
+def startup_stage_logs(case: Case) -> None:
+    """程序启动的每个阶段都要有控制台提示：`启动 n/N` 从 1 连续到 `_STARTUP_STAGES`。"""
+    import main as entry
+
+    source = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    body = source.split("def main() -> int:", 1)[-1]
+    steps = sorted(int(value) for value in re.findall(r"_stage\((\d+),", body))
+    assert steps == list(range(1, entry._STARTUP_STAGES + 1)), f"启动阶段提示不连续：{steps}"
+    assert entry._STARTUP_STAGES >= 6, f"启动阶段太少，报错时定位不到位置：{entry._STARTUP_STAGES}"

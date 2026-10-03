@@ -19,6 +19,9 @@
     from dm_plugin.builtin.lib.viewer.plugin import MediaViewer, ViewerPlugin, ViewerWindow   # 推荐：静态导入（要先 depends）
     library("builtin.lib.viewer", "plugin")                                                    # 兜底：运行时取
 
+本插件只声明 `libraries`，不声明 `provides`：它给的是**类**（要继承 / 实例化），不是「运行期那一个实例」。
+需要后者时用扩展接口，分工见 `plugins/PLUGIN_PROTOCOL.md` 2.7。
+
 ViewerPlugin 提供：
 
 - setup(ctx)：读清单 data 段声明的 viewer.json（必须是对象，否则抛 SdkError），用 ctx.require(host) 确认宿主可用，

@@ -53,6 +53,9 @@ from ..sdk import (
 
 STATE_VERSION = 1
 
+#: 清单声明了扩展接口却没注册时写进备注的前缀（便于识别并清理自己写的那条）。
+PROVIDES_NOTE_PREFIX = "清单声明的扩展接口没有注册："
+
 STATE_FILTERS = (
     ("", "全部状态"),
     ("enabled", "已启用"),
@@ -624,7 +627,15 @@ class PluginService:
         self._report = []
         self._loaded = []
         count = 0
-        for info in self.discover():
+        infos = self.discover()
+        logger.info(
+            "插件扫描完成：发现 {} 个（启用 {}、未启用 {}、清单有误 {}）",
+            len(infos),
+            sum(1 for info in infos if info.enabled and not info.error),
+            sum(1 for info in infos if not info.enabled),
+            sum(1 for info in infos if info.error),
+        )
+        for info in infos:
             if info.error or not info.enabled:
                 continue
             if info.id in self._plugins:  # 同一轮里重复出现（清单 id 重复）由 core 拦下
@@ -633,7 +644,9 @@ class PluginService:
             if ok:
                 self._loaded.append(info)
                 count += len(self.viewers_of(info.id))
+                self._note_unregistered_provides(info)
         self._sync_bootstrap()
+        logger.info(self.loaded_summary())
         return count
 
     def load_viewers(self) -> int:
@@ -684,6 +697,7 @@ class PluginService:
         seconds = time.perf_counter() - start
         self._errors.pop(info.id, None)
         self._report.append((info.id, PHASES[4], True, "", seconds))
+        logger.info("插件 {} 已载入", info.id)
         return True
 
     def _fail(self, info: PluginInfo, phase: str, message: str, start: float) -> bool:
@@ -693,6 +707,25 @@ class PluginService:
         self._report.append((info.id, phase, False, message, seconds))
         logger.warning("插件载入失败：{}（{}）", info.id, message)
         return False
+
+    def _note_unregistered_provides(self, info: PluginInfo) -> None:
+        """清单 `provides` 与实际注册对不上时记一条备注：只提示，不算载入失败。"""
+        current = self._infos.get(info.id)
+        existing = (current.note if current is not None else "") or ""
+        missing = [name for name in info.provides if extension_registry.provider_plugin(name) != info.id]
+        if missing:
+            text = PROVIDES_NOTE_PREFIX + "、".join(missing)
+            if existing == text:
+                return
+            self._save_state_for(info.id, note=text)
+            if current is not None:
+                self._infos[info.id] = current.clone(note=text)
+            logger.info("插件 {} 声明了扩展接口 {}，但没有实际注册：已记入备注", info.id, "、".join(missing))
+            return
+        if existing.startswith(PROVIDES_NOTE_PREFIX):  # 提示过时了，只清掉自己写的那条
+            self._save_state_for(info.id, note="")
+            if current is not None:
+                self._infos[info.id] = current.clone(note="")
 
     def _drop_plugin_state(self, plugin_id: str) -> None:
         """撤销该插件的一切运行期痕迹（贡献、接口、页面、模块）。"""
@@ -756,30 +789,20 @@ class PluginService:
         """最近一次载入的分阶段报告：`(插件 id, 阶段, 是否成功, 说明, 用时秒)`。"""
         return list(self._report)
 
-    def loaded_summary(self, viewers: int = 0) -> str:
-        """把这次载入的插件汇总成一句启动日志：总数、来源、各扩展点的贡献数量。"""
-        plugins = self._loaded
-        if not plugins:
-            failures = sum(1 for info in self._infos.values() if info.error)
-            if failures:
-                return f"本次没有载入任何插件（{failures} 个插件载入失败，详见插件页）"
-            return "本次没有载入任何插件"
-        builtin = sum(1 for info in plugins if info.builtin)
-        counts: dict[str, int] = {}
-        for info in plugins:
-            for point in self._points_of(info.id):
-                label = ExtensionPoint.label(point)
-                counts[label] = counts.get(label, 0) + 1
-        text = f"共载入 {len(plugins)} 个插件（内置 {builtin} 个、外部 {len(plugins) - builtin} 个）"
-        if counts:
-            parts = "、".join(
-                f"{label} {amount} 个"
-                for label, amount in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-            )
-            text += f"：{parts}"
-        if viewers:
-            text += f"；共注册 {viewers} 个查看器"
-        failures = sum(1 for info in self._infos.values() if info.error)
+    def loaded_summary(self) -> str:
+        """这次载入的汇总：总数与启用情况，再按库插件 / 功能插件分别列出。"""
+        infos = list(self._infos.values())
+        if not infos:
+            return "本次没有发现任何插件"
+
+        def part(items: list[PluginInfo]) -> str:
+            enabled = sum(1 for info in items if info.enabled)
+            return f"{len(items)} 个（已启用 {enabled}、未启用 {len(items) - enabled}）"
+
+        libraries = [info for info in infos if info.libraries]
+        features = [info for info in infos if not info.libraries]
+        text = f"插件载入：共 {part(infos)}；库插件 {part(libraries)}、功能插件 {part(features)}"
+        failures = sum(1 for info in infos if info.error)
         if failures:
             text += f"；{failures} 个插件载入失败（见插件页）"
         return text

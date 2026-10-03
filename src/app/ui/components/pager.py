@@ -8,18 +8,28 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, FlowLayout, PushButton, SpinBox
+from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, FlowLayout, SpinBox
+from ..framework import IconTextButton
 
 PAGE_SIZES = (50, 100, 200, 500)
-DEFAULT_PAGE_SIZE = 100
+DEFAULT_PAGE_SIZE = 50
 
 
 def pages_of(total: int, page_size: int) -> int:
     """按每页条数计算总页数（至少 1 页）。"""
     size = max(1, int(page_size))
     return max(1, -(-max(0, int(total)) // size))
+
+
+def normalize_page_size(size: int | None) -> int:
+    """把每页条数收敛到可选档位：取相差最小的档位，越界与垃圾值都退回默认值。"""
+    try:
+        value = int(size)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return DEFAULT_PAGE_SIZE
+    return min(PAGE_SIZES, key=lambda option: (abs(option - value), option))
 
 
 def page_size_options(sizes: Iterable[int] = PAGE_SIZES) -> list[tuple[int, str]]:
@@ -50,15 +60,15 @@ class Pager(QWidget):
         super().__init__(parent)
         self._total = 0
         self._page = 0
-        self._page_size = page_size
+        self._page_size = normalize_page_size(page_size)
         self._selected = 0
         self._visible = 0
         self._updating = False
 
-        self.first_button = PushButton(FluentIcon.LEFT_ARROW, "首页", self)
-        self.prev_button = PushButton(FluentIcon.LEFT_ARROW, "上一页", self)
-        self.next_button = PushButton(FluentIcon.RIGHT_ARROW, "下一页", self)
-        self.last_button = PushButton(FluentIcon.RIGHT_ARROW, "末页", self)
+        self.first_button = IconTextButton(FluentIcon.LEFT_ARROW, "首页", self)
+        self.prev_button = IconTextButton(FluentIcon.LEFT_ARROW, "上一页", self)
+        self.next_button = IconTextButton(FluentIcon.RIGHT_ARROW, "下一页", self)
+        self.last_button = IconTextButton(FluentIcon.RIGHT_ARROW, "末页", self)
         for button, tip in (
             (self.first_button, "跳到第一页"),
             (self.prev_button, "上一页"),
@@ -67,17 +77,19 @@ class Pager(QWidget):
         ):
             button.setToolTip(tip)
 
+        # 页码框按自身需要的宽度给足：写死宽度会把页码数字挤掉，只剩两个箭头
         self.page_box = SpinBox(self)
         self.page_box.setRange(1, 1)
-        self.page_box.setFixedWidth(90)
+        self.page_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_box.setMinimumWidth(self.page_box.sizeHint().width())
         self.page_box.setToolTip("输入页码快速跳转")
-        self.page_label = CaptionLabel("共 1 页", self)
+        self.page_label = CaptionLabel("/ 共 1 页", self)
 
         self.size_box = ComboBox(self)
         self.size_box.setToolTip("每页显示条数")
         for size, label in page_size_options():
             self.size_box.addItem(label, userData=size)
-        index = self.size_box.findData(page_size)
+        index = self.size_box.findData(self._page_size)
         self.size_box.setCurrentIndex(index if index >= 0 else PAGE_SIZES.index(DEFAULT_PAGE_SIZE))
 
         self.summary_label = CaptionLabel("", self)
@@ -86,6 +98,12 @@ class Pager(QWidget):
         self.hint_label.hide()
 
         self.page_prefix = CaptionLabel("第", self)
+
+        # 首页 / 上一页 / 下一页 / 末页 等宽：换行时每一行看起来才整齐
+        nav_buttons = (self.first_button, self.prev_button, self.next_button, self.last_button)
+        nav_width = max(button.sizeHint().width() for button in nav_buttons)
+        for button in nav_buttons:
+            button.setMinimumWidth(nav_width)
 
         self.flow = FlowLayout(self, needAni=False, isTight=True)
         self.flow.setContentsMargins(0, 0, 0, 0)
@@ -111,7 +129,7 @@ class Pager(QWidget):
         self.last_button.clicked.connect(lambda: self._go(self.pages - 1))
         self.page_box.valueChanged.connect(self._on_page_box)
         self.size_box.currentIndexChanged.connect(self._on_size_changed)
-        self.set_state(0, 0, page_size)
+        self.set_state(0, 0, self._page_size)
 
     # ------------------------------------------------------------------ 状态
     @property
@@ -134,12 +152,19 @@ class Pager(QWidget):
         """同步显示状态（不触发信号）；page 会被裁剪到有效范围。"""
         self._total = max(0, int(total))
         if page_size is not None and page_size > 0:
-            self._page_size = int(page_size)
+            wanted = normalize_page_size(page_size)
+            if wanted != self._page_size:
+                self._page_size = wanted
+                index = self.size_box.findData(wanted)
+                if index >= 0:
+                    self.size_box.blockSignals(True)
+                    self.size_box.setCurrentIndex(index)
+                    self.size_box.blockSignals(False)
         self._page = max(0, min(int(page), self.pages - 1))
         self._updating = True
         self.page_box.setRange(1, self.pages)
         self.page_box.setValue(self._page + 1)
-        self.page_label.setText(f"共 {self.pages} 页")
+        self.page_label.setText(f"/ 共 {self.pages} 页")
         self._updating = False
         self._update_buttons()
         self._sync_summary()
@@ -208,6 +233,7 @@ __all__ = [
     "DEFAULT_PAGE_SIZE",
     "PAGE_SIZES",
     "Pager",
+    "normalize_page_size",
     "page_size_options",
     "pages_of",
     "selection_hint",

@@ -28,5 +28,9 @@
 ## 说明
 
 弹窗没有父控件，因此与主窗口相互独立；程序关闭时会调用 DialogApi.close_all() 收尾。
+
+本插件同时提供两种对外面：`libraries` 暴露 `DialogApi` / `PopupWindow` 两个**类**（别的插件可以 import、继承，
+或自己实例化一个弹窗），`provides: dialog` 暴露当前程序里那**一个宿主实例**（消费方 `ctx.require("dialog")`，
+本插件被禁用时它会随之消失，消费方应当提示而不是崩溃）。两者的分工见 `plugins/PLUGIN_PROTOCOL.md` 2.7。
 内置 7 个查看器插件的 data/viewer.json 里都写 host: "dialog"，基类据此 require 本插件：
 禁用本插件后，查看器会提示缺少弹窗工具库。

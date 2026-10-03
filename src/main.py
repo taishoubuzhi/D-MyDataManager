@@ -31,7 +31,7 @@ from app.services.layout_migration import migrate_layout, migrate_uncategorized 
 from app.services.open_with_service import OPEN_WITH_EXTENSION, open_with_api  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.services.privacy_service import privacy  # noqa: E402
-from app.ui.framework import install_app_theme  # noqa: E402
+from app.ui.framework import install_app_theme, install_tooltips  # noqa: E402
 from app.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -60,6 +60,15 @@ def _setup_translator(app: QApplication) -> None:
 
 def _apply_theme() -> None:
     setTheme({"light": Theme.LIGHT, "dark": Theme.DARK}.get(config.theme.value, Theme.AUTO))
+
+
+#: 启动阶段总数：控制台按 `启动 n/N` 报进度，出错时一眼看出卡在哪一步
+_STARTUP_STAGES = 8
+
+
+def _stage(step: int, text: str) -> None:
+    """启动阶段提示（配合 `_STARTUP_STAGES` 使用）。"""
+    logger.info("启动 {}/{}：{}", step, _STARTUP_STAGES, text)
 
 
 #: 退出流程只跑一次（aboutToQuit 与 atexit 都会调）
@@ -161,6 +170,7 @@ def _lock_on_exit() -> None:
     except Exception as exc:  # 退出流程不能再抛异常
         logger.warning("退出前锁定失败：{}", exc)
     _clear_session_marker()
+    logger.info("退出：数据库已收起、会话标记已清理")
 
 
 def _run_selfcheck() -> int | None:
@@ -187,11 +197,15 @@ def main() -> int:
     if "--self-check" in sys.argv and (code := _run_selfcheck()) is not None:
         return code
     setup_logging()
+    _stage(1, f"日志系统已就绪（级别 {config.logLevel.value}、控制台输出 {config.logToConsole.value}）")
     _apply_dpi_scale()
+    _stage(2, f"界面缩放已应用（{config.dpiScale.value}）")
     _report_previous_session()
     _write_session_marker()
+    _stage(3, "会话检查完成，已写下本次会话标记")
     # 启动自愈第一步：无论上次是正常退出还是崩溃，先放行资源文件夹；静态保护下运行期一直放行
     privacy.begin_session()
+    _stage(4, "隐私保护已放行受保护目录")
     try:
         _bootstrap_data()
     except Exception as exc:
@@ -205,12 +219,16 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
+    _stage(5, "数据库已就绪（建表、基础数据、布局迁移与未分类迁移完成）")
 
     app = QApplication(sys.argv)
     _setup_translator(app)
     _apply_theme()
     # 换肤只管 QSS：把调色板也换成当前主题，否则系统深色模式下浅色主题会露出发黑的底色
     install_app_theme()
+    # 悬停提示：等待时间读配置项，没写提示的按钮用它的文字兜底
+    install_tooltips()
+    _stage(6, f"界面框架已就绪（主题 {config.theme.value}、语言 {config.language.value.value}、悬停提示已安装）")
     # 退出时把资源文件夹与隐藏目录重新锁上（开启保护时）
     app.aboutToQuit.connect(_lock_on_exit)
     atexit.register(_lock_on_exit)  # 控制台 Ctrl+C 等非 Qt 退出路径也收尾
@@ -219,14 +237,18 @@ def main() -> int:
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     # 打开方式接口：插件可以用它查 / 改某个扩展名该由哪个查看器打开
     plugin_service.bootstrap(OPEN_WITH_EXTENSION, open_with_api)
+    # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     viewers = plugin_service.load_viewers()
-    logger.info(plugin_service.loaded_summary(viewers))
+    _stage(7, f"插件系统已就绪（扩展点 2 个、登记打开方式 {viewers} 个）")
 
     window = MainWindow()
     window.show()
+    _stage(8, "主窗口已显示，进入事件循环")
     if "--self-check" in sys.argv:  # 打包后的冒烟测试：能建好界面就退出
         QTimer.singleShot(1500, app.quit)
-    return app.exec()
+    code = app.exec()
+    logger.info("事件循环结束，退出码 {}", code)
+    return code
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from ...core.config import config
 from ...core.signals import signalBus
 from ...db import database
 from ...services import ArchiveService, UserService
@@ -44,6 +45,7 @@ from ..framework import (
 )
 from ..components.data_table import TableFilterBar, check_cell, fit_columns, prepare_table
 from ..components.pager import Pager
+from ..framework import IconTextButton, IconTextPrimaryButton
 
 ENTRY_STATE_LABELS = {
     "same": "一致（无需还原）",
@@ -67,7 +69,6 @@ ARCHIVE_PIN_OPTIONS = ("已标记", "未标记")
 ARCHIVE_CHECK_COLUMN = 0
 ARCHIVE_HEADERS = ("选择",) + tuple(label for _key, label, _kind in ARCHIVE_COLUMNS)
 
-ARCHIVE_PAGE_SIZE = 50
 ARCHIVE_FETCH_LIMIT = 1000
 
 # 两个 Tab：(路由键, 标题)；顺序与 QStackedWidget 页序一致。
@@ -165,13 +166,13 @@ class ArchivePage(Page):
         self._entries: list = []
         self._states: list = []
 
-        self.create_button = PrimaryPushButton(FluentIcon.SAVE, "创建存档", self)
+        self.create_button = IconTextPrimaryButton(FluentIcon.SAVE, "创建存档", self)
         self.create_button.clicked.connect(self._on_create)
         self.header.add_action(self.create_button)
-        self.clean_button = PushButton(FluentIcon.DELETE, "清理无用文件", self)
+        self.clean_button = IconTextButton(FluentIcon.DELETE, "清理无用文件", self)
         self.clean_button.clicked.connect(self._on_cleanup)
         self.header.add_action(self.clean_button)
-        self.prune_button = PushButton(FluentIcon.HISTORY, "按策略清理", self)
+        self.prune_button = IconTextButton(FluentIcon.HISTORY, "按策略清理", self)
         self.prune_button.clicked.connect(self._on_prune)
         self.header.add_action(self.prune_button)
 
@@ -226,15 +227,15 @@ class ArchivePage(Page):
         self.archive_list.itemChanged.connect(self._on_item_changed)
         archive_layout.addWidget(self.archive_list, 1)
 
-        self.pager = Pager(archive_card, page_size=ARCHIVE_PAGE_SIZE)
+        self.pager = Pager(archive_card, page_size=config.pageSize.value)
         self.pager.pageChanged.connect(self._on_page_changed)
         self.pager.pageSizeChanged.connect(self._on_page_size_changed)
         archive_layout.addWidget(self.pager)
 
         archive_actions = QHBoxLayout()
-        self.pin_button = PushButton(FluentIcon.PIN, "标记存档", archive_card)
+        self.pin_button = IconTextButton(FluentIcon.PIN, "标记存档", archive_card)
         self.pin_button.clicked.connect(self._on_toggle_pin)
-        self.delete_button = PushButton(FluentIcon.DELETE, "删除该存档", archive_card)
+        self.delete_button = IconTextButton(FluentIcon.DELETE, "删除该存档", archive_card)
         self.delete_button.clicked.connect(self._on_delete)
         archive_actions.addWidget(self.pin_button)
         archive_actions.addWidget(self.delete_button)
@@ -266,9 +267,9 @@ class ArchivePage(Page):
         detail_layout.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        restore_button = PushButton(FluentIcon.SYNC, "还原选中条目", detail_card)
+        restore_button = IconTextButton(FluentIcon.SYNC, "还原选中条目", detail_card)
         restore_button.clicked.connect(self._on_restore)
-        self.restore_all_button = PushButton(FluentIcon.SYNC, "还原整个存档", detail_card)
+        self.restore_all_button = IconTextButton(FluentIcon.SYNC, "还原整个存档", detail_card)
         self.restore_all_button.clicked.connect(self._on_restore_all)
         actions.addWidget(restore_button)
         actions.addWidget(self.restore_all_button)
@@ -300,6 +301,10 @@ class ArchivePage(Page):
             "存档记录每个数据项的内容指纹，可回溯历史；只有全新内容才会额外占用空间。"
             "「标记存档」可让快照不被自动清理删除，只有取消标记或手动删除才会消失。" + scope
         )
+        # 说明不铺在页面上：挂到标题的悬停提示里，跟着身份一起变
+        self.caption.setVisible(False)
+        if self.header is not None:
+            self.header.set_hint(self.caption.text())
 
     def _on_user_changed(self) -> None:
         self._load_identity()
@@ -428,7 +433,8 @@ class ArchivePage(Page):
     def _on_page_changed(self, _page: int) -> None:
         self._render_archive_rows()
 
-    def _on_page_size_changed(self, _size: int) -> None:
+    def _on_page_size_changed(self, size: int) -> None:
+        config.set(config.pageSize, size)
         self._render_archive_rows(reset_page=True)
 
     def _on_archive_row_changed(
@@ -520,13 +526,13 @@ class ArchivePage(Page):
         bar.addWidget(self.selection_label)
         bar.addStretch(1)
 
-        self.batch_pin_button = PushButton(FluentIcon.PIN, "批量标记", parent)
+        self.batch_pin_button = IconTextButton(FluentIcon.PIN, "批量标记", parent)
         self.batch_pin_button.setToolTip("标记所有勾选的存档，使其不被自动清理删除")
         self.batch_pin_button.clicked.connect(lambda: self._on_batch_pin(True))
-        self.batch_unpin_button = PushButton(FluentIcon.UNPIN, "批量取消标记", parent)
+        self.batch_unpin_button = IconTextButton(FluentIcon.UNPIN, "批量取消标记", parent)
         self.batch_unpin_button.setToolTip("取消所有勾选存档的标记，之后才能删除")
         self.batch_unpin_button.clicked.connect(lambda: self._on_batch_pin(False))
-        self.batch_delete_button = PushButton(FluentIcon.DELETE, "批量删除", parent)
+        self.batch_delete_button = IconTextButton(FluentIcon.DELETE, "批量删除", parent)
         self.batch_delete_button.setToolTip("删除所有勾选的存档；已标记的存档需先取消标记")
         self.batch_delete_button.clicked.connect(self._on_batch_delete)
         for button in (self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
@@ -798,7 +804,6 @@ __all__ = [
     "ARCHIVE_CHECK_COLUMN",
     "ARCHIVE_COLUMNS",
     "ARCHIVE_HEADERS",
-    "ARCHIVE_PAGE_SIZE",
     "ARCHIVE_TABS",
     "ArchivePage",
     "TAB_ARCHIVES",

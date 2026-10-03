@@ -144,6 +144,18 @@ class PluginInfo:
         return "已启用" if self.enabled else "已禁用"
 
     @property
+    def kind_label(self) -> str:
+        """插件类型：声明了 libraries 的是库插件，其余是功能插件。"""
+        return "库插件" if self.libraries else "功能插件"
+
+    @property
+    def state_tone(self) -> str:
+        """状态徽章的色调（ok / plain / error），颜色由界面层决定。"""
+        if self.error:
+            return "error"
+        return "ok" if self.enabled else "plain"
+
+    @property
     def depends_ids(self) -> tuple[str, ...]:
         return tuple(dep.id for dep in self.depends)
 
@@ -293,9 +305,9 @@ def _check_manager_version(spec: str) -> str:
     return spec
 
 
-def _check_api_version(spec: str, builtin: bool) -> str:
+def _check_api_version(spec: str) -> str:
     if not spec:
-        return "" if builtin else f">={SDK_VERSION}"
+        raise ManifestError('插件清单缺少 api_version（适配的 SDK 版本范围，例如 ">=1.0 <2.0"）')
     try:
         parse_range(spec)
     except Exception as exc:
@@ -430,7 +442,7 @@ def parse_manifest(data: dict, path: Path | None = None, builtin: bool = False) 
         id=plugin_id,
         name=name,
         version=_text(data.get("version")),
-        api_version=_check_api_version(_text(data.get("api_version")), is_builtin),
+        api_version=_check_api_version(_text(data.get("api_version"))),
         description=_text(data.get("description")),
         author=_text(data.get("author")),
         entry=entry,

@@ -33,6 +33,7 @@ from ..core.signals import signalBus
 from ..services.open_with_service import OPEN_WITH_EXTENSION, open_with_api
 from ..services.plugin_service import plugin_service
 from .framework import clear_scroll_background, toast_error, toast_success
+from .framework import IconTextButton
 
 
 class PluginOptionsDialog(MessageBoxBase):
@@ -69,7 +70,7 @@ class PluginOptionsDialog(MessageBoxBase):
         clear_scroll_background(area)
         self.viewLayout.addWidget(area)
 
-        self.reset_button = PushButton(FluentIcon.RETURN, "恢复默认", self)
+        self.reset_button = IconTextButton(FluentIcon.RETURN, "恢复默认", self)
         self.reset_button.clicked.connect(self._on_reset)
         self.reset_button.setEnabled(has_options or has_viewers)
         self.buttonLayout.insertWidget(0, self.reset_button)
@@ -137,10 +138,10 @@ class PluginOptionsDialog(MessageBoxBase):
                 self._checks[extension] = (box, viewer.id)
                 card_layout.addWidget(box)
         row = QHBoxLayout()
-        select_all = PushButton(FluentIcon.ACCEPT, "全选", card)
+        select_all = IconTextButton(FluentIcon.ACCEPT, "全选", card)
         select_all.clicked.connect(lambda: self._set_all(True))
         row.addWidget(select_all)
-        select_none = PushButton(FluentIcon.CANCEL, "全不选", card)
+        select_none = IconTextButton(FluentIcon.CANCEL, "全不选", card)
         select_none.clicked.connect(lambda: self._set_all(False))
         row.addWidget(select_none)
         row.addStretch(1)

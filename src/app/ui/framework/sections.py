@@ -11,10 +11,15 @@ from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, FluentIcon, StrongBodyLabel, TitleLabel
 
 from .tokens import CARD_SPACING, DETAIL_MARGINS, PANEL_MARGINS
+from .tooltips import hint_badge
 
 
 class PageHeader(QWidget):
-    """统一标题区：标题 + 说明，右侧 `actions` 行留给主操作按钮。"""
+    """统一标题区：标题 + 悬停说明，右侧 `actions` 行留给主操作按钮。
+
+    说明文字不常显、直接铺在标题下面：它挂在标题上做悬停提示，
+    鼠标停住才弹出来，页面看起来更干净。
+    """
 
     def __init__(self, title: str, subtitle: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -27,6 +32,9 @@ class PageHeader(QWidget):
         row.setSpacing(8)
         self._title = TitleLabel(title, self)
         row.addWidget(self._title)
+        # 小问号：告诉用户「这个标题上有说明，停一下就能看到」
+        self.hint_badge = hint_badge("", self)
+        row.addWidget(self.hint_badge)
         row.addStretch(1)
 
         #: 右侧操作区：挂 PushButton / 下拉框等主操作。
@@ -36,17 +44,44 @@ class PageHeader(QWidget):
         row.addLayout(self.actions)
         outer.addLayout(row)
 
-        self._subtitle = CaptionLabel(subtitle, self)
-        self._subtitle.setWordWrap(True)
-        self._subtitle.setVisible(bool(subtitle))
+        # 说明留在控件里（提示文案的唯一来源），但不显示在页面上
+        self._subtitle = caption(self, subtitle)
+        self._subtitle.setVisible(False)
         outer.addWidget(self._subtitle)
+        self._hints: list[str] = []
+        self._apply_subtitle()
 
     def set_title(self, title: str) -> None:
         self._title.setText(title)
 
     def set_subtitle(self, subtitle: str) -> None:
         self._subtitle.setText(subtitle)
-        self._subtitle.setVisible(bool(subtitle))
+        self._apply_subtitle()
+
+    def add_hint(self, text: str) -> None:
+        """追加一句说明，同样只在鼠标停在标题上时显示。
+
+        页面上原本铺开的整段说明（例如某一页的操作注意事项）改挂在这里。
+        """
+        text = str(text).strip()
+        if not text:
+            return
+        self._hints.append(text)
+        self._apply_subtitle()
+
+    def set_hint(self, text: str) -> None:
+        """整段替换说明（用于随状态变化的说明），同样只在悬停标题时显示。"""
+        text = str(text).strip()
+        self._hints = [text] if text else []
+        self._apply_subtitle()
+
+    def _apply_subtitle(self) -> None:
+        """说明文字不常显：挂到标题上，鼠标停住才弹出提示。"""
+        self._subtitle.setVisible(False)
+        lines = [self._subtitle.text().strip(), *self._hints]
+        text = "\n".join(line for line in lines if line)
+        self._title.setToolTip(text)
+        self.hint_badge.set_hint(text)
 
     def add_action(self, widget: QWidget) -> QWidget:
         self.actions.addWidget(widget)
@@ -80,12 +115,29 @@ def section_card(
     margins: tuple[int, int, int, int] = DETAIL_MARGINS,
     spacing: int = CARD_SPACING,
 ) -> tuple[CardWidget, QVBoxLayout]:
-    """统一样式的分区卡片：标题 + 可选说明 + 内容区。"""
+    """统一样式的分区卡片：标题 + 悬停说明 + 内容区。
+
+    说明文字与页面副标题一样不常显：鼠标停在分区标题上才弹提示。
+    """
     card, layout = panel_card(parent, margins=margins, spacing=spacing)
+    title_label: StrongBodyLabel | None = None
     if title:
-        layout.addWidget(StrongBodyLabel(title, card))
+        title_label = StrongBodyLabel(title, card)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+        title_row.addWidget(title_label)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
     if description:
-        layout.addWidget(caption(card, description))
+        # 说明文字只留在控件里供提示使用，不占版面
+        hint = caption(card, description)
+        hint.setVisible(False)
+        layout.addWidget(hint)
+        if title_label is not None:
+            title_label.setToolTip(description)
+        else:
+            card.setToolTip(description)
     return card, layout
 
 

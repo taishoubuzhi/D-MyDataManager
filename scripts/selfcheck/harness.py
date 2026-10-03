@@ -166,6 +166,9 @@ def ensure_app():
         from PyQt6.QtWidgets import QApplication
 
         _APP = QApplication.instance() or QApplication([])
+        from app.ui.framework import install_tooltips
+
+        install_tooltips(_APP)
     return _APP
 
 

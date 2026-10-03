@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PushButton, StrongBodyLabel
 
 from app.sdk import ui
+from app.sdk.ui import IconTextButton
 
 #: 默认的弹窗扩展接口名（弹窗工具库 builtin.lib.dialog 提供）
 DEFAULT_HOST = "dialog"
@@ -42,10 +43,10 @@ class ViewerWindow(QWidget):
         self.meta_label = CaptionLabel(self.viewer_name, bar)
         bar_layout.addWidget(self.meta_label)
         bar_layout.addStretch(1)
-        self.external_button = PushButton(FluentIcon.LINK, "用系统程序打开", bar)
+        self.external_button = IconTextButton(FluentIcon.LINK, "用系统程序打开", bar)
         self.external_button.clicked.connect(self._on_open_external)
         bar_layout.addWidget(self.external_button)
-        self.reveal_button = PushButton(FluentIcon.FOLDER, "定位文件", bar)
+        self.reveal_button = IconTextButton(FluentIcon.FOLDER, "定位文件", bar)
         self.reveal_button.clicked.connect(self._on_reveal)
         bar_layout.addWidget(self.reveal_button)
         root.addWidget(bar)

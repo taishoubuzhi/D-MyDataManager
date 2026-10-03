@@ -10,6 +10,8 @@ from pathlib import Path
 
 __all__ = [
     "CARD_SPACING",
+    "IconTextButton",
+    "IconTextPrimaryButton",
     "COMPACT_MARGINS",
     "DETAIL_MARGINS",
     "KPI_MARGINS",
@@ -21,7 +23,20 @@ __all__ = [
     "clear_scroll_background",
     "open_default",
     "reveal",
+    "simple_display",
+    "simple_mode",
 ]
+
+#: 按钮类按需导入：插件可以直接写 `ui.IconTextButton(...)`，导入本模块仍然不拉起 Qt。
+_LAZY_EXPORTS = ("IconTextButton", "IconTextPrimaryButton", "simple_display", "simple_mode")
+
+
+def __getattr__(name: str):
+    if name in _LAZY_EXPORTS:
+        from ..ui import framework
+
+        return getattr(framework, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 #: 间距是全站唯一的来源：程序页面与插件界面都从这里取，不各自写死数字。
 PAGE_MARGINS = (24, 20, 24, 20)

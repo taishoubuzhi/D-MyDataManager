@@ -18,7 +18,7 @@ plugins/demo.hello/
   PLUGIN.md       说明：这个插件有什么用
 ```
 
-程序启动时按依赖顺序把插件载入内存，插件通过 **SDK**（`app.sdk`）拿到程序给的能力：
+程序启动时按依赖顺序把插件载入内存，插件通过 **SDK**（`app.sdk`）拿到程序给的能力。控制台会播报进展：先按「启动 1/8 … 8/8」报告启动阶段，插件部分打印「插件扫描完成：发现 N 个（启用 X、未启用 Y、清单有误 Z）」，载入完成后打印汇总「插件载入：共 N 个（已启用 X、未启用 Y）；库插件 …、功能插件 …」；
 
 - 往**扩展点**放东西（概览卡片、工具栏按钮、右键菜单、详情行、设置卡片、页面、查看器……）；
 - 订阅程序的**事件**（导入、删除、用户切换、主题变化……）；
@@ -40,6 +40,7 @@ plugins/demo.hello/
   "id": "demo.hello",
   "name": "打招呼插件",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "description": "在概览页加一张卡片，数一数这次会话导入了几条数据。",
   "author": "你的名字",
   "entry": "plugin.py"
@@ -47,7 +48,7 @@ plugins/demo.hello/
 ```
 
 - `id` 要与目录名一致（`demo.hello` → `plugins/demo.hello/`）。
-- 只有 `id`、`name`、`entry` 是必须的；其余字段见协议文档。
+- `id`、`name` 与 `api_version` 是必须的（`api_version` 写清适配的 SDK 版本范围，例如 `">=1.0 <2.0"`，缺了会被拒绝载入）；外部插件还要 `entry`，其余字段见协议文档。
 
 ### 2.2 写插件类
 
@@ -160,9 +161,35 @@ from app.services.item_service import ItemService                    # ❌ 自�
 `.idea/D-MyDataManager.iml` 已经配好），导入就不再标红。改了清单或库的 `__all__` 之后重跑一次脚本即可，
 自检 `plugin_stubs_current` 会检查桩与清单一不一致。
 
+### 3.5 界面按钮的写法
+
+插件里的按钮和程序里一样按「有没有图标」分两种：**只有文字**的直接用 qfluentwidgets 的 `PushButton`；
+**图标 + 文字**的请用 SDK 暴露的 `ui.IconTextButton`（等同 `PushButton`，多记了一份完整文字）：
+
+```python
+from qfluentwidgets import FluentIcon     # 插件可以直接 import qfluentwidgets
+from app.sdk import ui
+
+button = ui.IconTextButton(FluentIcon.HEART, "示例动作", self)   # 图标 + 文字：用这个
+```
+
+用户在「设置 → 外观 → 简化显示」里选到「默认」或「完全简化」后，`ui.IconTextButton` 会自己变成只有图标、把文字挪进提示条，
+插件不用写任何适配代码；没有图标的按钮不受影响。往 `app.ui.manage.toolbar` 这类扩展点贡献的按钮由宿主生成，
+同样是 `IconTextButton`，插件只管给 `text` 与 `icon`。自检 `icon_text_buttons` 会扫 `plugins/`，
+发现「图标 + 文本」却用裸 `PushButton` 的写法会直接报错。
+
+另外，插件界面上不要把说明文字成排铺出来（`CaptionLabel` 一个个挂着）：某个控件的用途写成 `widget.setToolTip("…")`，
+鼠标停住（默认 2 秒，用户在「设置 → 外观 → 悬停提示延迟」里改）才会弹出；写在容器（页面分区卡片、列表行）上的提示还会被
+里面的子控件继承，所以一句话写在容器上就够，不必每个标签都设一遍。
+
 ## 4. 库插件怎么写
 
 「库插件」= 把可复用的类 / 函数做成模块，给别的插件继承或调用。内置的查看器库就是典型例子：
+
+库插件通常只声明 `libraries`（给的是类，消费方要继承 / 实例化）；如果还要给人「程序里当前那一个实例」，
+再声明 `provides` 把它登记成扩展接口 —— 内置弹窗工具库两者都用（类走 `libraries`，宿主实例走 `provides: dialog`），
+分工见 [协议文档 2.7](plugins/PLUGIN_PROTOCOL.md)。声明了 `provides` 却忘了在 `setup()` 里 `ctx.provide()` 时，程序只在该插件的
+备注里提醒一句（不算载入失败），补上注册后自动清掉。
 
 `plugins/builtin.lib.viewer/plugin.json`：
 
@@ -171,6 +198,7 @@ from app.services.item_service import ItemService                    # ❌ 自�
   "id": "builtin.lib.viewer",
   "name": "查看器库",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "entry": "plugin.py",
   "libraries": [
     {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、播放页 MediaViewer"}
@@ -316,6 +344,7 @@ plugins/<id>/
   "id": "demo.hello",
   "name": "打招呼插件",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "entry": "plugin.py"
 }
 ```

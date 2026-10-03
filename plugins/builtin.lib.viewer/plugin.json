@@ -2,6 +2,7 @@
   "id": "builtin.lib.viewer",
   "name": "查看器库",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "description": "查看器工具库：提供 ViewerPlugin 基类、ViewerWindow 窗口外壳与 MediaViewer 播放页，供查看器插件搭自己的查看器。",
   "author": "D-MyDataManager",
   "builtin": true,

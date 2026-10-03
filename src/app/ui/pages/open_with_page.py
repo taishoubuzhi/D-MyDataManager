@@ -37,8 +37,9 @@ from ...services.open_with_service import (
     open_with_service,
 )
 from ...services.user_service import UserService
-from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page
+from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page, icon_text_label
 from ..viewers.open_flow import open_path
+from ..framework import IconTextButton, IconTextPrimaryButton
 
 
 class OpenWithPage(Page):
@@ -58,20 +59,19 @@ class OpenWithPage(Page):
         self._counts: dict[str, int] = {}
         self._current = ""
 
-        plugin_button = PushButton(FluentIcon.APPLICATION, "管理插件", self)
+        plugin_button = IconTextButton(FluentIcon.APPLICATION, "管理插件", self)
         plugin_button.clicked.connect(self._on_manage_plugins)
         self.header.add_action(plugin_button)
-        refresh_button = PushButton(FluentIcon.SYNC, "刷新", self)
+        refresh_button = IconTextButton(FluentIcon.SYNC, "刷新", self)
         refresh_button.clicked.connect(self._reload)
         self.header.add_action(refresh_button)
 
-        self.add_widget(
-            CaptionLabel(
+        # 整段说明改挂在页面标题上：鼠标停住才弹出来，不再铺在页面上
+        if self.header is not None:
+            self.header.add_hint(
                 "「使用插件打开」时可以在右侧挑一个具体插件；格式没有任何插件支持时，只剩「继承系统默认」与「自定义程序」。"
-                "设为自定义但未指定程序时，打开文件会弹出系统的「打开方式」对话框。",
-                self,
+                "设为自定义但未指定程序时，打开文件会弹出系统的「打开方式」对话框。"
             )
-        )
 
         body = QHBoxLayout()
         body.setSpacing(12)
@@ -106,7 +106,7 @@ class OpenWithPage(Page):
         right_layout.addWidget(self.detail_viewers)
 
         mode_row = QHBoxLayout()
-        mode_row.addWidget(CaptionLabel("打开方式", right))
+        mode_row.addWidget(icon_text_label(FluentIcon.VIEW, "打开方式", right))
         self.mode_box = ComboBox(right)
         self.mode_box.setFixedWidth(200)
         self.mode_box.currentIndexChanged.connect(self._on_mode_changed)
@@ -115,7 +115,7 @@ class OpenWithPage(Page):
         right_layout.addLayout(mode_row)
 
         viewer_row = QHBoxLayout()
-        viewer_row.addWidget(CaptionLabel("使用插件", right))
+        viewer_row.addWidget(icon_text_label(FluentIcon.TILES, "使用插件", right))
         self.viewer_box = ComboBox(right)
         self.viewer_box.setMinimumWidth(240)
         self.viewer_box.currentIndexChanged.connect(self._on_mode_changed)
@@ -124,17 +124,17 @@ class OpenWithPage(Page):
         right_layout.addLayout(viewer_row)
 
         program_row = QHBoxLayout()
-        program_row.addWidget(CaptionLabel("程序", right))
+        program_row.addWidget(icon_text_label(FluentIcon.APPLICATION, "程序", right))
         self.program_edit = LineEdit(right)
         self.program_edit.setPlaceholderText("例如 C:\\Program Files\\App\\app.exe")
         program_row.addWidget(self.program_edit, 1)
-        self.browse_button = PushButton(FluentIcon.FOLDER, "浏览", right)
+        self.browse_button = IconTextButton(FluentIcon.FOLDER, "浏览", right)
         self.browse_button.clicked.connect(self._on_browse)
         program_row.addWidget(self.browse_button)
         right_layout.addLayout(program_row)
 
         args_row = QHBoxLayout()
-        args_row.addWidget(CaptionLabel("参数", right))
+        args_row.addWidget(icon_text_label(FluentIcon.CODE, "参数", right))
         self.args_edit = LineEdit(right)
         self.args_edit.setPlaceholderText("可留空；用 {path} 表示文件位置，留空则把文件路径追加在最后")
         args_row.addWidget(self.args_edit, 1)
@@ -146,13 +146,13 @@ class OpenWithPage(Page):
         right_layout.addStretch(1)
 
         actions = QHBoxLayout()
-        self.save_button = PrimaryPushButton(FluentIcon.SAVE, "保存", right)
+        self.save_button = IconTextPrimaryButton(FluentIcon.SAVE, "保存", right)
         self.save_button.clicked.connect(self._on_save)
         actions.addWidget(self.save_button)
-        self.reset_button = PushButton(FluentIcon.SYNC, "恢复默认", right)
+        self.reset_button = IconTextButton(FluentIcon.SYNC, "恢复默认", right)
         self.reset_button.clicked.connect(self._on_reset)
         actions.addWidget(self.reset_button)
-        self.test_button = PushButton(FluentIcon.VIEW, "测试打开", right)
+        self.test_button = IconTextButton(FluentIcon.VIEW, "测试打开", right)
         self.test_button.clicked.connect(self._on_test)
         actions.addWidget(self.test_button)
         actions.addStretch(1)

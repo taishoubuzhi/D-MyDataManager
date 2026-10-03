@@ -20,6 +20,7 @@ from qfluentwidgets import (
 from app.sdk import ui
 from app.sdk.data import ArchiveMember, archive_members, archive_read, decode_text, human_size, looks_binary
 from app.sdk.ui import COMPACT_MARGINS
+from app.sdk.ui import IconTextButton
 
 PREVIEW_LIMIT = 64 * 1024
 
@@ -84,10 +85,10 @@ class ArchiveViewer(QWidget):
         bar.addStretch(1)
         self.status_label = CaptionLabel(self.caption, self)
         bar.addWidget(self.status_label)
-        self._extract_button = PushButton(FluentIcon.ZIP_FOLDER, "解压并打开", self)
+        self._extract_button = IconTextButton(FluentIcon.ZIP_FOLDER, "解压并打开", self)
         self._extract_button.clicked.connect(self._on_extract)
         bar.addWidget(self._extract_button)
-        external_button = PushButton(FluentIcon.LINK, "用系统程序打开", self)
+        external_button = IconTextButton(FluentIcon.LINK, "用系统程序打开", self)
         external_button.clicked.connect(lambda: ui.open_default(self._path))
         bar.addWidget(external_button)
         root.addLayout(bar)

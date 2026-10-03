@@ -153,10 +153,10 @@ SettingCard（设置页）或说明文字（插件页）标注原因；处理器
 水平 `QSizePolicy.Fixed`），`grid_columns(available_width, card_width=CARD_WIDTH)` 按窗口宽度决定列数，`_layout_cards()` 在每个
 卡片列后追加占位伸缩列（`setColumnStretch(columns, 1)`），所以窗口变宽只增加列数、卡片本身不会被拉宽；
 滚动区内部控件跟随视口宽度重排（`setWidgetResizable(True)` + `viewport()` 事件过滤器），窗口变窄时网格仍保证卡片完整可见。
-`refresh()` 重建 `UserCard` 并高亮当前用户（`set_highlighted()` / `current_card()`），同时用 `_equalize_card_heights()` 统一各卡片高度；
+`refresh()` 重建 `UserCard` 并高亮当前用户（`set_highlighted()` / `current_card()`），同时用 `_schedule_card_fit()` → `_equalize_card_heights()` 统一各卡片高度（操作区是 `FlowArea`，高度取决于自身宽度，所以延后一轮、按同步后的宽度再量一次）；
 `_layout_cards()` 把每行的行伸缩设为 0、只让末行下方的占位行伸缩（`setRowStretch(rows, 1)`），多余高度全部落在网格底部，卡片始终从左上角开始逐个排列。
 每张卡片都是自洽的对象单元（`UserPage._user_card()`）：三段式布局 = ①首字头像（`_avatar()`，当前用户蓝底 / 其他灰底）+ 用户名 + 徽标（`card_badges()`：当前用户 / 默认用户 / 已设口令）；
-②摘要（`card_summary()`：数据项数、分类数、创建时间）；③两列按钮网格（`CARD_BUTTON_COLUMNS = 2`，按 `card_permissions()` 显隐）——
+②三行信息（`card_info_lines()`：数据项数 / 分类数 / 创建时间，各带一个图标；完整摘要另挂 `card_summary()` 的悬停提示，不再拿一行超长文本硬裁）；③流式操作区（`FlowArea`，按钮按自身宽度排列、窄卡片自动换行；按 `card_permissions()` 显隐）——
 切换为当前用户（当前用户卡片上是禁用态的「当前用户」）、重命名、口令、清除口令、删除，因此所有针对该用户的操作都在卡片内完成，按钮不会被裁出卡片。
 `UserService.delete()` 保留默认用户（`if user.is_default: return False`）并拒绝删除当前用户（`allow_current` 默认 False）；其余用户删除时先看有没有数据（是否有未软删除的数据项）：
 **有数据**时先算要保留的分类：`_retained_categories()` 只收「有数据项的分类 + 它们的全部祖先分类」，`_mirror_categories(user, target, retained)` 再以「用户名」为一级分类把它们镜像到默认用户下（返回旧→新 id 映射与镜像根；保留集合为空时不建一级分类，`DataItem.category_id` 回落到目标用户的「未分类」，
@@ -201,7 +201,12 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
 三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
 勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）；勾上「全部数据」时整棵树都处于勾选状态（此时按钮一并禁用：顶层没有可移动的去处、顶层分类也不能整体删除，提示会改成「已全选「全部数据」…」，处理器同样会拒绝这次操作）；批量移动时若所选分类本来就都在目标分类下，会提示「无需移动」而不再走一次无意义的提交。
-中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏。
+中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏，
+显隐状态分别记进 `Layout/Show-Category-Panel` / `Layout/Show-Filter-Panel`，重启后按上次的样子复原。
+左侧分类栏默认**全部收起**（配置项 `Layout/Expand-Categories` 打开后启动即展开），用户手动展开 / 收起某个分类后刷新列表仍按用户的
+状态显示；右侧筛选区的类型 / 标签 / 关键词三个分组默认**全部折叠**，展开哪几个就记进 `Layout/Expanded-Filters`，下次启动照着恢复。
+每页条数、两栏显隐、分类栏与筛选栏的折叠状态都存在 `config/config.json` 的 `Layout` 组里，也可以在「设置 → 外观」里改
+（「每页条数」下拉、「分类栏默认展开」开关）。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、**打开方式**（系统默认程序 /
 点名某个内置查看器 / 交给系统选择…）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
@@ -220,7 +225,7 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 存档页的「标记存档 / 取消标记」按钮跟随选中存档（未选中时禁用），列表项与详情都会标出【已标记】。
 存档页（`src/app/ui/pages/archive_page.py`）用 `SegmentedWidget` + `QStackedWidget` 分成两个页签（`TAB_ARCHIVES` = `archives` /
 `TAB_ENTRIES` = `entries`，`TAB_INDEX` / `tab_index(route_key)` 做键位映射）：**存档列表**页签是上方那排存档表格
-（逐列筛选 + `Pager` 分页，`ARCHIVE_PAGE_SIZE` = 50），**存档内条目**页签是明细表，含「所属用户」列，供管理员核对跨用户快照。
+（逐列筛选 + `Pager` 分页，每页条数读配置项 `Layout/Page-Size`，与数据管理页共用），**存档内条目**页签是明细表，含「所属用户」列，供管理员核对跨用户快照。
 用户点选一条存档会自动切到「存档内条目」页签，也可以随时手动切回去；程序化刷新（恢复选中行、重载列表）时用 `blockSignals`
 屏蔽信号，不会强行抢走页签。`tab_keys()` / `current_tab()` / `switch_tab(route_key)` 是给外部（如跳转逻辑）用的接口。
 
@@ -292,8 +297,33 @@ PyQt6 + Windows 下只调 `setParent(None)` 并不会隐藏控件，每个被摘
   用户卡片的头像 `avatar_style(accent)`、徽标 `badge_style(accent)`、卡片高亮 `highlight_fill()` / `highlight_hover()` 也已下沉到 `src/app/ui/framework/theme.py`，页面里不再有样式字符串；
 - 空态统一用 `empty_state(parent, 文案, icon=...)`（图标 + 居中说明），不要再用裸 `CaptionLabel` 当占位。
 
-按钮一律用 qfluentwidgets 的 `PrimaryPushButton`（主操作）与 `PushButton`（次操作），不要用原生 `QPushButton`：
+按钮一律用 qfluentwidgets 的 `PrimaryPushButton`（主操作）与 `PushButton`（次操作），不要用原生 `QPushButton`；
+**同时带图标和文字**的按钮用 `src/app/ui/framework/buttons.py` 的 `IconTextButton` / `IconTextPrimaryButton`（插件里写 `ui.IconTextButton`）：
+配置项 `Layout/Simple-Display`（「设置 → 外观 → 简化显示」）是三挡下拉：`none` 不简化、`default` 默认、`full` 完全简化（旧配置里的布尔值自动换算：`true` → `full`、`false` → `none`）；`full` 下它们只显示图标、变成居中的方形按钮（方形模式把 QSS 内边距清零，图标不会被左右裁掉），完整文字挪进提示条，所有页面与弹窗一起生效；`default` 只收「同一个容器里图标不重复」的按钮 —— 插件页的「重命名 / 编辑说明 / 编辑备注」都是 `FluentIcon.EDIT`，只留图标就分不清，这类共用图标的保持「图标 + 文字」；
+自检 `icon_text_buttons` 会静态断言 `src` 与 `plugins` 里不再有「图标 + 文本」却用裸 `PushButton` 的地方，并在运行时把简化显示验一遍（还按 `SE_PushButtonContents` 量按钮内容区，方形按钮必须装得下图标，退出简化显示后按钮必须按 `sizeHint` 恢复文字尺寸——包括没显示过的页面，不会留下 32×32 的方按钮把图标与文字挤在一起）；主色按钮的强调色底与反转图标色来自 qfluentwidgets 的 `PrimaryPushButton` QSS 规则，所以 `IconTextPrimaryButton` 必须把 `PrimaryPushButton` 放在第一个基类（PyQt 的多继承只保留第一个基类的 QMetaObject 链，QSS 类型选择器按链匹配）；切换简化显示时用 `setCustomStyleSheet(widget, qss, qss)` 重装样式，**不要写空字符串**——那会把 `PushButton` 自带的整份按钮 QSS 冲掉（底色、给图标让位的内边距、禁用态一起丢）；
+没有图标的按钮（如「重置筛选」）不受影响，仍然显示文字。自检 `simple_modes` 专门盯这件事：不简化时按钮都有文字、完全简化时都没有文字、默认挡位下共用 `FluentIcon.EDIT` 的三个插件按钮保留文字而图标唯一的按钮收成方形。
 设置页的 `PushSettingCard` 自带原生按钮，已用 `SettingsPage` 里的 `ActionCard`（继承它并换成 `PushButton`）替换。
+纯文本标签也能图标化：`framework/labels.py` 的 `IconTextLabel`（工厂 `icon_text_label(图标, 文字, parent)`，只画图标的用 `icon_label(...)`）
+平时画「图标 + 文字」，`Layout/Simple-Display` 不是 `none` 时只留图标、文字挪进悬停提示（`default` 挡位下同一个容器里共用同一枚图标的标签仍保留文字）；筛选栏的分组标题与「范围与排序」、导入页的字段标签、
+打开方式页的字段名、插件页的两栏标题、数据管理页的「用户」与概览页的「当前用户」都改用它，纯文本按钮（自动编号、每组只保留最新、
+全部取消勾选、清空选择、重置筛选）也都补上了图标。标签内部图标固定 18 px 且贴左、文字紧随其后（`addWidget(..., AlignVCenter)` + `addStretch(1)`），放在很宽的容器里也不会被推到中间；信息行可以传 `keep_text=True`：即使打开简化显示也保留文字（用户卡片的三行信息就是这么写的）；
+自检 `icon_text_labels` 逐项验「平时有文字、简化显示只留图标且有同一段提示」与「图标 18 px、贴左、文字紧跟图标」。
+「设置 → 外观」另有「每页条数」（`Layout/Page-Size`，50 / 100 / 200 / 500）、「分类栏默认展开」（`Layout/Expand-Categories`）与「悬停提示延迟（毫秒）」（`Layout/Tooltip-Delay`，默认 2000，0 表示立刻弹出）三张卡。
+所有数字配置卡都换成 `framework/settings_cards.py` 的 `NumberSettingCard`：滑块左边多一个输入框（宽 `SPIN_WIDTH` = 96 px），
+滑块与输入框双向同步、取值范围直接取配置项的 `range`，要精确填一个数时不必拖滑块；自检 `number_setting_cards` 逐张验范围与双向同步。
+设置页的每张配置卡（开关 / 下拉 / 数字）改动后都会在右上角弹一条提示：`SettingsPage._connect_setting_toasts()` 汇总三类信号，
+`TOAST_DELAY_MS` = 400 毫秒内的多次改动合并成一条（拖滑块不会刷屏），两个隐私保护开关保留自己的详细提示、不再重复；
+自检 `setting_change_toasts` 逐张切换开关与下拉框，并检查连拖滑块 6 次只弹一条。
+页面 / 分区的说明文字不再常显：`PageHeader` 的副标题默认隐藏、整段挂到标题的悬停提示上，`section_card()` 的说明也挂到分区标题
+（分区没有标题时挂到卡片本身）上；要补充说明用 `header.add_hint()`，随状态变化的文案用 `header.set_hint()`，别再拿
+`CaptionLabel` 把说明铺在页面上。`framework/tooltips.py` 的 `install_tooltips()`（`src/main.py` 与自检基座都会调用）
+把 `QProxyStyle` 的 `SH_ToolTip_WakeUpDelay` 接到配置项 `Layout/Tooltip-Delay`、`SH_ToolTip_FallAsleepDelay` 归零，
+`describe()` 还会往上借最近的父级提示（最多 `MAX_PARENT_HOPS` = 4 层），所以写在卡片 / 列表行上的说明会被里面的标题与数值继承。
+自检 `hover_hints`（延迟可配 + 提示继承 + 简化显示下的方形按钮）与 `prose_moved_to_hints`（说明确实搬进了提示）逐项校验。
+问号标识（`hint_badge()` / `HintBadge`，14 px）只在**页面标题旁边**保留一个（`PageHeader`）：卡片、表单行与列表里的说明改成纯悬停提示，
+不再到处挂问号，鼠标停在问号或标题文字上弹出的是同一段提示。提示文本按 `HINT_COLUMNS` = 44 个半角宽自动折行（`wrap_hint()`，中文按两个宽度算），
+长说明不会拉成一条横穿屏幕的长条：`TooltipFilter` 拦截 `ToolTip` 事件，用 `QToolTip.showText()` 画折行后的文本；
+自检 `hint_badges_on_titles` 断言整窗问号数量与页面标题数一致、且没有挂在卡片上。
 `scripts/selfcheck.py` 的 `style_uniformity` 检查（沿用旧界面门禁同名判据）会逐页断言边距 / 间距、面板卡片边距、没有原生 `QPushButton`、QSS 里没有写死的强调色。
 数据管理页的左（分类）/ 中（列表与卡片）/ 右（筛选）三个面板现在都是 `CardWidget` + `PANEL_MARGINS`，标题用 `StrongBodyLabel`，
 面板内的滚动区用 `clear_scroll_background()` 透明化。
@@ -325,7 +355,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 - `clear_background(widget)`：卡片内部的容器保持透明；`clear_scroll_background(area, inner=True)`：滚动区域连视口一起透明化
   （`qt_scrollarea_viewport` 默认 `autoFillBackground=True`，不清就会漏出一整块深色）；
 - `setCustomStyleSheet(widget, light, dark)` 只设属性，没注册过的控件等于没做；必须走
-  `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`clear_background` 内部就是这么写的）。
+  `setStyleSheet(widget, CustomStyleSheet(widget).setCustomStyleSheet(light, dark))`（`clear_background` 内部就是这么写的）。数据管理页筛选栏最下面两个复选框用 `align_check_box()`（`theme.py` 的 `CHECK_BOX_QSS`：`margin-left: 0`、`spacing: 4px`、指示器 18 px），让指示器与文字的左缘跟同卡片里 `IconTextLabel` 的图标 / 文字对齐。
   页面底色不走 QSS：由 `install_app_theme()` 装的调色板（`theme_palette()`，浅色 `window` = `#f0f4f9`、深色 = `#202020`）提供，页面与滚动视口保持透明。
 `scripts/selfcheck.py` 的 `theme_background` 会切到浅色逐页断言「没有任何可见控件仍按旧调色板实绘深色」，`settings_privacy_group` 会断言设置页的
 「资源文件夹 / 隐藏文件」两个开关、资源加密时隐藏开关置灰并自动收起，以及分组里不再出现多余的「立即锁定 / 立即放行」按钮。
@@ -367,7 +397,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
   "description": "说明文字",
   "author": "作者",
   "manager_version": ">=0.1.0",
-  "api_version": ">=1.0",
+  "api_version": ">=1.0 <2.0",
   "entry": "sample_plugin.py",
   "class": "SampleViewerPlugin",
   "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.dialog"}],
@@ -376,13 +406,16 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 }
 ```
 
-- 必需字段只有 `id`（匹配 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`）与 `name`；`entry` 对**外部插件**必填且文件必须存在，
+- 必需字段是 `id`（匹配 `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`）、`name` 与 `api_version`（适配的 SDK 版本范围，例如 `>=1.0 <2.0`，缺了会被拒绝载入）；`entry` 对**外部插件**必填且文件必须存在，
   内置插件可以省略（因此纯库插件、纯数据插件不必写入口脚本）；`class` 用来点名入口脚本里的插件类。
 - **协议不再区分插件类型**：清单里没有 `kind` / `kinds`（写了会报「插件清单已取消类型字段」）；`extensions` / `capabilities`
   这类数据字段也不再放清单（写了会提示放进 `data/`），扩展名、显示名、能力说明这些数据由提供相应能力的库插件读取。
 - `libraries` 声明插件对外提供的库模块，例如 `builtin.lib.viewer` 提供 `viewer` → `plugin.py`；别的插件 `depends` 它之后
   可以用 `from dm_plugin.<插件 id>.plugin import ...` 静态导入（`app.sdk.library("<id>", "plugin")` 是兜底写法），
   `libraries` 里声明的模块必须存在且非空，并且**约定固定写成入口 `plugin.py`**：一个插件对其他插件的公开面只有它。
+- `provides` 与 `libraries` 的分工：`provides` 声明的扩展接口是**运行期对象**，别人用 `ctx.require("名字")` 取，插件禁用时随之消失、
+  消费方要自己兜底；`libraries` 声明的库模块是**可 import 的代码**，别人用 `from dm_plugin.<id>.plugin import ...` 拿到类 / 函数
+  （可继承、可实例化、有 IDE 补全）。清单里的 `provides` 只用于声明与展示，不参与校验。
 - `depends` 支持简写（`"builtin.lib.dialog"`）与对象（`{"id": ..., "version": ">=1.0", "optional": true}`）两种写法；
   `optional` 的依赖缺失只跳过、不算失败；`incompatible` 声明互斥插件，`load_after` 只调整载入顺序、不建立依赖关系。
   缺依赖、版本不满足、互斥、重复声明、循环依赖都会让插件载入失败（个别失败不影响其它插件与程序启动）。
@@ -424,10 +457,13 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 查看器由 `src/app/core/viewers.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者）。`PluginService.load_viewers()`
 （`src/main.py` 启动时调用；历史命名，实际就是 `load()`）先清空 `ViewerRegistry` 与 `ExtensionRegistry`，再按上面的顺序载入所有
-已启用插件，单个插件出错只把错误记在该插件上。禁用「打开方式」插件后，对应格式会退回系统默认程序。启动日志由
-`PluginService.loaded_summary()` 汇总（`src/main.py` 的 `logger.info(plugin_service.loaded_summary(viewers))`），形如
-「共载入 10 个插件（内置 10 个、外部 0 个）：打开方式 7 个、页面 1 个；共注册 7 个查看器；1 个插件载入失败（见插件页）」——
-总数、内置 / 外部来源与各扩展点的贡献数量一眼可见。查看器共用的纯函数在 SDK 里（`app.sdk.data`，插件可直接 import）：
+已启用插件，单个插件出错只把错误记在该插件上。禁用「打开方式」插件后，对应格式会退回系统默认程序。
+启动时的控制台输出分三层，程序侧不需要再打印任何东西：`app.sdk` 第一次被导入时播报一次
+「SDK 已载入：版本 1.0」（`app.sdk.sdk_banner()`），随后每载入成功一个插件各来一行「插件 `<id>` 已载入」，
+最后由 `PluginService.loaded_summary()` 给一句汇总，形如
+「插件载入：库插件 2 个（已启用 2、未启用 0）、功能插件 8 个（已启用 7、未启用 1）」——
+不再按扩展点统计「几个打开方式、几个查看器」，只看库插件 / 功能插件的数量与启停情况；
+有插件载入失败时句尾补「N 个插件载入失败（见插件页）」。查看器共用的纯函数在 SDK 里（`app.sdk.data`，插件可直接 import）：
 文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
 
 ### 插件选项与「插件」页
@@ -439,12 +475,19 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 `coerce_option()` 规范化，无法识别时回退默认值），选项改动后插件会整体重新载入，因此读到的值立即生效。若插件注册了查看器，
 该对话框还会列出其扩展名的勾选框，勾选即调用 `app.open_with` 的 `set_viewer()`，用户不必去「打开方式」页逐个设置。
 「插件」页按贡献（按扩展点分组）/ 来源（内置 / 外部）/ 创建者 / 状态与关键词筛选，支持按默认顺序 / 名称 / 来源 / 创建者 / 状态 / 版本 / 贡献
-排序并切换正序、逆序（`PluginService.all(query, state, source, author, contribution, order, reverse)` 与 `PLUGIN_ORDERS`）。
-列表项显示启用标记与「贡献 · 来源」徽标，「全部贡献」下**所有插件都会出现**（包括纯库插件）；详情区显示版本 / 创建者 / 状态、
-贡献（按扩展点分组）、清单数据、协议信息（贡献 / 依赖插件 / 扩展接口 / 提供库 / 适用管理器版本 / 入口文件）、插件选项摘要与清单路径。
+排序并切换正序、逆序（`PluginService.all(query, state, source, author, contribution, order, reverse)` 与 `PLUGIN_ORDERS`）。计数文案直接说明状态：没有筛选时是「共 N 个插件」，被筛过时是「已筛选：X / 共 N 个插件」并在旁边出现「清除筛选」按钮（从「打开方式」页跳过来会按该扩展点自动筛选，列表因此只列出一部分插件）。
+列表项右侧由 `components/plugin_delegate.py` 的 `PluginItemDelegate` 自绘一枚状态徽章（已启用 / 已禁用 / 载入失败，色调取自
+`PluginInfo.state_tone`），列表行按两行画：第一行插件名（`TITLE_ROLE`），第二行「类型 · 来源 · 贡献」（`SUBTITLE_ROLE`，小一号、淡一些），
+两行都按可用宽度省略、并裁剪在右侧徽章左边（`PluginItemDelegate` 覆写 `initStyleOption()` 清掉基类要画的文本，`paint()` 里自己按 `SE_ItemViewItemText` 画两行）；
+徽章数据放在自定义的 `BADGES_ROLE` 角色里，列表项宽度跟视口、关掉横向滚动条，徽章不会被挤出可视区；「全部贡献」下**所有插件都会出现**（包括纯库插件）。
+详情区标题下并排三枚徽章（类型 / 来源 / 状态），随后是版本 / 创建者 / 状态 / 贡献（按扩展点分组）与清单数据摘要，
+再分两栏列出「协议与接口」（贡献 / 依赖插件 / 扩展接口 / 提供库 / 适用管理器版本 / 入口文件）与「清单与选项」（清单数据 / 插件选项摘要 / 清单路径），
+不再是一条把八件事用 `·` 串起来的长句；自检 `plugin_display` 校验代理类型、每行的徽章数据与详情徽章的内容，并断言每行有标题 / 副标题、行高够两行、文字不会压到右侧徽章上。
 操作包括导入插件目录或 `.zip` 包（解压时拒绝 `..` 与绝对路径）、启用 / 禁用、改显示名 / 说明 / 备注、打开插件目录（内置插件同样可以打开）、
 「插件选项」配置、删除外部插件；启用状态 / 备注 / 插件选项都存 `config/plugins.json`（`{"version": 1, "plugins": {...}}`）。内置插件不能删除；
-载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。
+清单里声明了 `provides` 却没有实际注册（或反过来）时，程序只在该插件的备注里写一条「清单声明的扩展接口没有注册：`<名字>`」提示，
+不算载入失败，补上注册重新载入后会自动清掉；
+载入失败的插件在列表里标为「异常」并强制禁用，不影响程序启动。启动时控制台按「启动 1/8 … 8/8」报告阶段（日志系统 / 缩放 / 会话 / 隐私 / 数据库 / 界面框架 / 插件系统 / 主窗口），插件部分先打印「插件扫描完成：发现 N 个（启用 X、未启用 Y、清单有误 Z）」，载入完成后打印汇总「插件载入：共 N 个（已启用 X、未启用 Y）；库插件 …、功能插件 …」，每个载入成功的插件各一条「已载入」、失败的逐条 `warning`；自检 `plugin_load_summary` 与 `startup_stage_logs` 会校验这套输出。
 列表项可以勾选，选择条上是一个三态全选框（空 = 全不选、横杠 = 部分选中、勾 = 全选当前列出的插件，点一下在全选 / 全不选之间切换），
 勾选后可以「批量启用 / 批量禁用 / 批量删除」
 （已处于目标状态的插件会被跳过，内置插件不可删除，删除前有确认框）；右侧的功能按钮改用

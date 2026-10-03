@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+from loguru import logger
+
 from . import data, ui
 from .context import ContextServices, PluginContext
 from .errors import DependencyError, ManifestError, PluginError, SdkError, VersionError
@@ -50,5 +52,15 @@ __all__ = [
     "register_library_resolver",
     "requires",
     "satisfies",
+    "sdk_banner",
     "ui",
 ]
+
+
+def sdk_banner() -> str:
+    """启动横幅：SDK 载入时播报当前 SDK 版本。"""
+    return f"SDK 已载入：版本 {SDK_VERSION}"
+
+
+#: SDK 第一次被导入时播报一次：程序与插件启动时都能在控制台看到 SDK 版本。
+logger.info(sdk_banner())

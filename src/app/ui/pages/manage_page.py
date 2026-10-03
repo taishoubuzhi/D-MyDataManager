@@ -44,6 +44,7 @@ from ...sdk import ExtensionPoint
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
 from ...services.open_with_service import MODE_ASK, open_with_service
 from ..framework import (
+    icon_label,
     PAGE_SPACING,
     PANEL_MARGINS,
     Page,
@@ -64,10 +65,12 @@ from ..dialogs import (
     ItemEditDialog,
     TextInputDialog,
 )
+from ...core.config import config
 from ..components.category_tree import CategoryTree
 from ..components.filter_panel import FilterPanel
 from ..components.item_card import ItemCard, ItemListRow
-from ..components.pager import DEFAULT_PAGE_SIZE, Pager, selection_summary
+from ..components.pager import Pager, normalize_page_size, selection_summary
+from ..framework import IconTextButton
 
 TOOLBAR_BUTTON_HEIGHT = 32
 TOOLBAR_MAX_ROWS = 2
@@ -175,7 +178,7 @@ class ManagePage(Page):
         self._mode = "list"
         self._unlocked = False
         self._page = 0
-        self._page_size = DEFAULT_PAGE_SIZE
+        self._page_size = normalize_page_size(config.pageSize.value)
         self._total = 0
         self.restore_button: PushButton | None = None
         self._buttons: dict[str, PushButton] = {}
@@ -207,22 +210,30 @@ class ManagePage(Page):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(8)
-        layout.addWidget(StrongBodyLabel("分类", card))
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
+        title_row.addWidget(StrongBodyLabel("分类", card))
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
 
         self.tree = CategoryTree(card)
+        # 分类树的说明改挂在树上：说明文字不显示，鼠标停住才弹出
+        self.tree.setToolTip("勾选分类可批量移动或删除")
         self.tree.categorySelected.connect(self._on_category_selected)
         self.tree.checkedChanged.connect(self._on_category_checked)
         self.tree.actionRequested.connect(self._on_tree_action)
         layout.addWidget(self.tree, 1)
         self.category_hint = CaptionLabel("勾选分类可批量移动或删除", card)
+        self.category_hint.setVisible(False)
         layout.addWidget(self.category_hint)
-        self.category_move_button = PushButton(FluentIcon.MOVE, "批量移动", card)
+        self.category_move_button = IconTextButton(FluentIcon.MOVE, "批量移动", card)
         self.category_move_button.setToolTip(
             "把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）；根分类不能移动"
         )
         self.category_move_button.setEnabled(False)
         self.category_move_button.clicked.connect(self._on_category_batch_move)
-        self.category_delete_button = PushButton(FluentIcon.DELETE, "批量删除", card)
+        self.category_delete_button = IconTextButton(FluentIcon.DELETE, "批量删除", card)
         self.category_delete_button.setToolTip("删除勾选的分类，其中的数据会变成未分类；根分类与「未分类」不能删除")
         self.category_delete_button.setEnabled(False)
         self.category_delete_button.clicked.connect(self._on_category_batch_delete)
@@ -233,7 +244,7 @@ class ManagePage(Page):
         batch_row.addStretch(1)
         layout.addLayout(batch_row)
 
-        add_button = PushButton(FluentIcon.ADD, "新建分类", card)
+        add_button = IconTextButton(FluentIcon.ADD, "新建分类", card)
         add_button.clicked.connect(lambda: self._on_tree_action("add", None))
         layout.addWidget(add_button)
         return card
@@ -254,20 +265,25 @@ class ManagePage(Page):
         self.view_switch.setCurrentItem("list")
         header.addWidget(self.view_switch)
         header.addSpacing(12)
-        self.tree_toggle_button = PushButton(FluentIcon.MENU, "分类栏", host)
+        self.tree_toggle_button = IconTextButton(FluentIcon.MENU, "分类栏", host)
         self.tree_toggle_button.setCheckable(True)
-        self.tree_toggle_button.setChecked(True)
         self.tree_toggle_button.setToolTip("显示/隐藏左侧分类栏")
         self.tree_toggle_button.toggled.connect(self.tree_card.setVisible)
-        self.filter_toggle_button = PushButton(FluentIcon.FILTER, "筛选栏", host)
+        self.tree_toggle_button.toggled.connect(self._save_panel_visibility)
+        self.filter_toggle_button = IconTextButton(FluentIcon.FILTER, "筛选栏", host)
         self.filter_toggle_button.setCheckable(True)
-        self.filter_toggle_button.setChecked(True)
         self.filter_toggle_button.setToolTip("显示/隐藏右侧筛选栏")
         self.filter_toggle_button.toggled.connect(self.filter_card.setVisible)
+        self.filter_toggle_button.toggled.connect(self._save_panel_visibility)
+        # 两栏显隐跟着配置走：上次关掉的，这次打开还是关着的
+        self.tree_toggle_button.setChecked(bool(config.showCategoryPanel.value))
+        self.filter_toggle_button.setChecked(bool(config.showFilterPanel.value))
+        self.tree_card.setVisible(self.tree_toggle_button.isChecked())
+        self.filter_card.setVisible(self.filter_toggle_button.isChecked())
         header.addWidget(self.tree_toggle_button)
         header.addWidget(self.filter_toggle_button)
         header.addStretch(1)
-        header.addWidget(CaptionLabel("用户", host))
+        header.addWidget(icon_label(FluentIcon.PEOPLE, "用户", host))
         self.user_box = ComboBox(host)
         self.user_box.setMinimumWidth(140)
         self.user_box.currentIndexChanged.connect(self._on_user_changed)
@@ -317,7 +333,7 @@ class ManagePage(Page):
             ("refresh", FluentIcon.SYNC, "刷新", self.refresh),
         ]
         for key, icon, text, slot in buttons:
-            button = PushButton(icon, text, host)
+            button = IconTextButton(icon, text, host)
             button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
             button.clicked.connect(slot)
             flow.addWidget(button)
@@ -337,7 +353,7 @@ class ManagePage(Page):
         buttons: list[PushButton] = []
         for item in items(ExtensionPoint.MANAGE_TOOLBAR):
             data = value_of(item)
-            button = PushButton(icon_of(data.get("icon")), str(data.get("text") or item.name), host)
+            button = IconTextButton(icon_of(data.get("icon")), str(data.get("text") or item.name), host)
             button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
             tip = str(data.get("tip") or item.description or "")
             if tip:
@@ -374,12 +390,12 @@ class ManagePage(Page):
         layout.addWidget(self.selection_label)
         layout.addStretch(1)
 
-        self.move_button = PushButton(FluentIcon.MOVE, "移动到分类…", bar)
+        self.move_button = IconTextButton(FluentIcon.MOVE, "移动到分类…", bar)
         self.move_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
         self.move_button.clicked.connect(self._on_move)
         layout.addWidget(self.move_button)
 
-        self.clear_selection_button = PushButton(FluentIcon.RETURN, "清空选择", bar)
+        self.clear_selection_button = IconTextButton(FluentIcon.RETURN, "清空选择", bar)
         self.clear_selection_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
         self.clear_selection_button.clicked.connect(self.clear_selection)
         layout.addWidget(self.clear_selection_button)
@@ -393,8 +409,13 @@ class ManagePage(Page):
         layout = QVBoxLayout(card)
         layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(8)
-        layout.addWidget(StrongBodyLabel("筛选", card))
-        layout.addWidget(CaptionLabel("按类型、标签、关键词与分类组合过滤", card))
+        filter_title_row = QHBoxLayout()
+        filter_title_row.setContentsMargins(0, 0, 0, 0)
+        filter_title_row.setSpacing(6)
+        filter_title_row.addWidget(StrongBodyLabel("筛选", card))
+        filter_title_row.addStretch(1)
+        layout.addLayout(filter_title_row)
+        card.setToolTip("按类型、标签、关键词与分类组合过滤")
 
         scroll = QScrollArea(card)
         scroll.setWidgetResizable(True)
@@ -405,6 +426,7 @@ class ManagePage(Page):
         inner.setSpacing(10)
         self.filter_panel = FilterPanel(host)
         self.filter_panel.changed.connect(self._on_filter_changed)
+        self.filter_panel.collapsedChanged.connect(self._on_filter_collapsed)
         inner.addWidget(self.filter_panel)
         inner.addStretch(1)
         scroll.setWidget(host)
@@ -543,7 +565,17 @@ class ManagePage(Page):
     def _on_page_size_changed(self, page_size: int) -> None:
         self._page_size = page_size
         self._page = 0
+        config.set(config.pageSize, page_size)
         self._load_items()
+
+    def _save_panel_visibility(self) -> None:
+        """把左右两栏的显隐记进配置，下次打开界面保持一致。"""
+        config.set(config.showCategoryPanel, self.tree_toggle_button.isChecked())
+        config.set(config.showFilterPanel, self.filter_toggle_button.isChecked())
+
+    def _on_filter_collapsed(self) -> None:
+        """记下展开着的筛选分组，下次打开界面保持一致。"""
+        config.set(config.expandedFilters, self.filter_panel.expanded_keys())
 
     def _render(self) -> None:
         layout = self.list_layout if self._mode == "list" else self.card_layout
@@ -1087,6 +1119,7 @@ class ManagePage(Page):
             if all_checked
             else "勾选分类可批量移动或删除"
         )
+        self.tree.setToolTip(self.category_hint.text())
 
     def _descendant_category_ids(self, category_ids: set[int]) -> set[int]:
         """勾选分类的全部子孙分类 id，用于拒绝非法的移动目标。"""

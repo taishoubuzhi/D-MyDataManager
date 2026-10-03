@@ -10,6 +10,7 @@ from qfluentwidgets import CaptionLabel, CheckBox, ComboBox, FluentIcon, PlainTe
 
 from app.sdk.data import ENCODINGS, read_text
 from app.sdk.ui import COMPACT_MARGINS
+from app.sdk.ui import IconTextButton
 
 AUTO_ENCODING = "自动检测"
 
@@ -41,7 +42,7 @@ class TextViewer(QWidget):
         self._wrap.setChecked(True)
         self._wrap.stateChanged.connect(self._on_wrap)
         bar.addWidget(self._wrap)
-        copy_button = PushButton(FluentIcon.COPY, "复制全文", self)
+        copy_button = IconTextButton(FluentIcon.COPY, "复制全文", self)
         copy_button.clicked.connect(self._on_copy)
         bar.addWidget(copy_button)
         bar.addStretch(1)

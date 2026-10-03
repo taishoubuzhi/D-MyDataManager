@@ -1,6 +1,6 @@
 # 项目重写方案（TODO.md 任务 1）
 
-> 状态：Phase 0–6 全部完成。`src/app/ui/{framework,components,pages}` 就位，旧 `common.py`、`widgets/` 与旧门禁脚本 `scripts/dev_check*.py` 已删除；`scripts/selfcheck.py` 四层（`data` 4 / `services` 27 / `pages` 26 / `flows` 3）共 60 项检查全绿（末行 `RESULT failures=0`；18 / 22 → 26 / 26 与新增的插件检查来自后续的任务 2，见第 10 节；v5 又加 `plugin_stubs_current`，见第 11 节），`src\main.py --self-check` 在源码仓库里等价于全量自检，`compileall`（本机 3.14 与打包目标 3.13 都通过）、`unittest` 50 项、旧套件在删除前也保持可用。移植期与收尾期修掉四个产品缺陷并各配回归检查：①`CategoryRepository` 同级重名在归属不同时误判「无重名」，触发 `UNIQUE constraint failed: categories.parent_id, categories.name` 使整档还原崩溃（`category_shared_conflicts`）；②导入页切换目标用户后分类下拉回落到第一个根分类而不是「未分类」（`import_page_scope` 新增断言）；③插件列表为空时非管理员仍能点到「启用 / 停用插件」「插件更多选项」「删除插件」（`superuser_permissions` 新增断言）；④滚动区只清视口时自身仍按调色板实绘底色，浅色主题下三个滚动页与用户页卡片列表会露出上一个主题的深色底，改按 qfluentwidgets `ScrollArea.enableTransparentBackground()`的写法把滚动区自身与内层容器设为透明（`scroll_backgrounds`）；另按目录树导入时跳过库元数据目录 `.datamanager`（`import_tree_skips_meta`）。旧 34 项门禁的逐项去向见第 7.1 节，打包（PyAppify）验证结论见第 7.2 节，旧实现只读快照见第 9 节。第 4、6 节细节见 `logs/_rewrite/spec/{A_core_db_repo,B_services,C_ui_plugins_checks}.md`（只读参考）。
+> 状态：Phase 0–6 全部完成。`src/app/ui/{framework,components,pages}` 就位，旧 `common.py`、`widgets/` 与旧门禁脚本 `scripts/dev_check*.py` 已删除；`scripts/selfcheck.py` 四层（`data` 4 / `services` 29 / `pages` 39 / `flows` 4）共 76 项检查全绿（末行 `RESULT failures=0`；18 / 22 → 26 / 26 与新增的插件检查来自后续的任务 2，见第 10 节；v5 又加 `plugin_stubs_current`、`provides_note_recorded`、`workbench_lists_builtin_pages`、`plugin_action_buttons_visible`，见第 11 节；分页可读性 / 布局偏好 /「简化显示」再加 `icon_text_buttons`、`layout_preferences`，见第 12 节；悬停提示与「说明不常显」再加 `hover_hints`、`prose_moved_to_hints`，见第 13 节；问号标识 / 数字配置输入框 / 方形图标按钮补内容区断言与插件页展示再加 `number_setting_cards`、`plugin_display`（并扩充 `icon_text_buttons`、`hover_hints`），见第 14 节；问号收敛到页面标题、标签图标化与配置切换提示再加 `hint_badges_on_titles`、`icon_text_labels`、`setting_change_toasts`，见第 15 节；按钮尺寸还原 / 标签内部对齐 / 插件行两行绘制 / 用户卡信息行扩充了 `icon_text_buttons`、`icon_text_labels`、`plugin_display` 并新增 `user_card_info`，见第 16 节；「简化显示」三挡化与用户卡流式操作区再加 `simple_modes`，见第 18 节），`src\main.py --self-check` 在源码仓库里等价于全量自检，`compileall`（本机 3.14 与打包目标 3.13 都通过）、`unittest` 50 项、旧套件在删除前也保持可用。移植期与收尾期修掉四个产品缺陷并各配回归检查：①`CategoryRepository` 同级重名在归属不同时误判「无重名」，触发 `UNIQUE constraint failed: categories.parent_id, categories.name` 使整档还原崩溃（`category_shared_conflicts`）；②导入页切换目标用户后分类下拉回落到第一个根分类而不是「未分类」（`import_page_scope` 新增断言）；③插件列表为空时非管理员仍能点到「启用 / 停用插件」「插件更多选项」「删除插件」（`superuser_permissions` 新增断言）；④滚动区只清视口时自身仍按调色板实绘底色，浅色主题下三个滚动页与用户页卡片列表会露出上一个主题的深色底，改按 qfluentwidgets `ScrollArea.enableTransparentBackground()`的写法把滚动区自身与内层容器设为透明（`scroll_backgrounds`）；另按目录树导入时跳过库元数据目录 `.datamanager`（`import_tree_skips_meta`）。旧 34 项门禁的逐项去向见第 7.1 节，打包（PyAppify）验证结论见第 7.2 节，旧实现只读快照见第 9 节。第 4、6 节细节见 `logs/_rewrite/spec/{A_core_db_repo,B_services,C_ui_plugins_checks}.md`（只读参考）。
 > 参考仓库：`PyQt-Fluent-Widgets/`（库源码 1.11.3，与 `requirements.txt` 里 `PyQt6-Fluent-Widgets==1.11.3` 同版本），参考其 `docs/source/*` 与 `examples/gallery` 的工程组织。
 
 ## 1. 目标与范围
@@ -236,5 +236,151 @@ Phase 0–6 收尾之后，用户要求实施 TODO.md 任务 2，插件协议改
 - **界面**：撤销「侧栏可改」——删掉 `config/navigation.json`、`src/app/core/navigation.py`、`navigationChanged` 与
   页面的固定 / 排序接口；侧栏顺序固定（内置页按内置顺序、设置恒在最下面），插件页面按载入顺序追加，
   追加不下的只出现在只读的「页面管理」页里（原来每次应用后设置图标消失的问题随之一并消失）。
+- **协议细化（任务 2 收尾之后）**：`api_version` 从「可选、默认 `>=1.0`」变成**必填**（缺字段、范围非法、当前 SDK 不满足
+  都拒绝载入，`src/app/core/plugin_core.py:_check_api_version()`），10 个内置 / 示例插件清单统一写 `">=1.0 <2.0"`；
+  插件页明细新增「适配 SDK」一行；`plugins/PLUGIN_PROTOCOL.md` 新增 2.7 节写清 `provides`（运行期对象实例）与
+  `libraries`（可 import 的代码模块）的分工，自检 `plugin_manifest_whitelist` 增加「缺 `api_version` / 超出 SDK 范围」两条断言。
+- **弹窗插件改名**：`plugins/builtin.dialog` → `plugins/builtin.lib.dialog`（定位为工具库，与 `builtin.lib.viewer` 对齐），
+  仍以 `provides: dialog` + `ctx.require("dialog")` 供查看器使用。
 - **自检**：新增 `plugin_stubs_current`（桩与清单一致），`plugin_imports` / `plugin_viewer_extensions` 按 v5 调整；
   总数 59 → 60。
+- **控制台输出（任务 2 收尾之后）**：`src/main.py` 不再自己 `logger.info(loaded_summary(viewers))`；`app.sdk` 首次被导入时播报
+  「SDK 已载入：版本 1.0」（`src/app/sdk/__init__.py` 的 `sdk_banner()`），`PluginService._load_one()` 每载入一个插件来一行
+  「插件 `<id>` 已载入」，`load()` 末尾用重写后的 `loaded_summary()` 汇总成
+  「插件载入：库插件 N 个（已启用 a、未启用 b）、功能插件 M 个（已启用 c、未启用 d）」——不再按扩展点统计打开方式 / 查看器数量。
+- **`provides` 一致性提醒**：清单声明了 `provides` 但 `setup()` 没 `ctx.provide()` 时，`PluginService._note_unregistered_provides()`
+  只往插件备注写 `清单声明的扩展接口没有注册：<名字>`（前缀常量 `PROVIDES_NOTE_PREFIX`），不算载入失败，补上注册后自动清掉；
+  自检新增 `provides_note_recorded`（含「修好后清掉」分支）。
+- **插件页按钮栏**：详情区下方的功能按钮栏去掉 `FlowArea(adaptive=True, minimum_width=96)`，改回按各按钮自己的
+  `sizeHint()` 换行（`AdaptiveFlowLayout` 会把一行均分，窄窗口下「打开插件目录」等按钮被压到装不下文字）；
+  自检新增 `plugin_action_buttons_visible`（量真实几何，旧写法下必失败）。
+- **页面管理**：`MainWindow._init_navigation()` 末尾补一次 `self.workbench_page.refresh()`——`PageBase.auto_refresh()` 只连信号、
+  不会立刻刷新，而插件在主窗口之前载入，导致没有插件页面时「页面管理」永远是空页；内置页面本来就都列在里面，
+  自检新增 `workbench_lists_builtin_pages`。
+- **自检总数**：63 → 65（`data` 4 / `services` 28 / `pages` 28 → 30 / `flows` 3），新增的两项见第 12 节。
+
+## 12. 后续变化：分页可读性、布局偏好与「简化显示」
+
+- **分页条能看出第几页**：`src/app/ui/components/pager.py` 的 `page_box` 原来被 `setFixedWidth(90)` 压到装不下页码，改成
+  `setAlignment(AlignCenter)` + `setMinimumWidth(sizeHint().width())`；文案统一成 `page_prefix`「第」+ `/ 共 M 页`（`set_state()` 里更新），
+  四个翻页按钮按 `max(sizeHint().width())` 等宽；`DEFAULT_PAGE_SIZE` 与新增的 `normalize_page_size()` 把每页条数收敛到 50 / 100 / 200 / 500。
+- **布局偏好落盘**：新增配置组 `Layout`（`src/app/core/config.py`）——`Page-Size`、`Show-Category-Panel`、`Show-Filter-Panel`、
+  `Expand-Categories`、`Expanded-Filters`、`Simple-Display`；数据管理页与存档页的每页条数都读 `Layout/Page-Size`（删掉写死的
+  `ARCHIVE_PAGE_SIZE`），两栏显隐（`_save_panel_visibility()`）与筛选分组折叠（`_on_filter_collapsed()`）实时写回，
+  「设置 → 外观」新增「每页条数」「分类栏默认展开」两张卡，`tests/harness.py reset_config()` 一并重置这些项。
+- **分类栏与筛选栏默认收起**：`components/category_tree.py` 的 `set_nodes()` 不再无条件 `setExpanded(True)`，改由 `_wants_expanded()` 决定
+  （`Layout/Expand-Categories` 默认关；用户手动展开后 `_user_expanded` 优先，刷新列表不回弹）；`components/filter_panel.py` 的
+  `FilterSection` 支持初始 `collapsed` 与 `set_collapsed()`（信号 `collapsedChanged`），三个分组默认全部折叠，
+  `expanded_keys()` 与 `Layout/Expanded-Filters` 对齐。
+- **「简化显示」统管所有按钮**：新增 `src/app/ui/framework/buttons.py` 的 `IconTextButton` / `IconTextPrimaryButton`
+  （不重写 `__init__`——qfluentwidgets 的 `PushButton.__init__` 是 `singledispatchmethod` 且内部递归转调；简化显示下只留图标、
+  完整文字进提示条，没有图标的按钮不受影响），SDK 经 `src/app/sdk/ui.py` 的 `__getattr__` 惰性导出给插件（导入 SDK 仍不拉起 Qt）；
+  `src` 与 `plugins` 共 19 个文件 79 处「图标 + 文本」按钮由一次性 AST 脚本改名，页面与弹窗一并覆盖。
+- **自检**：新增 `icon_text_buttons`（静态扫 `src` + `plugins` 不许再有裸 `PushButton` 承载图标，运行时验简化显示开关与还原）
+  与 `layout_preferences`（每页条数 / 页码可见 / 两栏显隐 / 分组折叠 / 分类树默认收起都写进配置）；总数 63 → 65。
+
+## 13. 后续变化：悬停提示与「说明不常显」
+
+- **提示延迟可配**：新增 `src/app/ui/framework/tooltips.py` —— `HoverStyle(QProxyStyle)` 把 `SH_ToolTip_WakeUpDelay` 接到配置项
+  `Layout/Tooltip-Delay`（默认 2000 毫秒）、`SH_ToolTip_FallAsleepDelay` 归零，`TooltipFilter` 在鼠标进入时给没有提示的控件补上
+  `own_hint()`（显式提示 > `hoverHint` 属性 > 按钮文字），`describe()` 还会往上借最近 4 层父控件的提示；
+  `install_tooltips()` 在 `src/main.py` 与 `scripts/selfcheck/harness.py ensure_app()` 里各装一次（幂等）。
+- **说明不常显**：`framework/sections.py` 的 `PageHeader` 副标题默认隐藏、整段挂到标题提示上，新增 `add_hint()` / `set_hint()`
+  （后者用于随状态变化的文案）；`section_card()` 的说明挂到分区标题（无标题时挂卡片）；`home_page.py` 的 `StatCard` 用新增的
+  `KPI_HINTS` 与插件贡献的 `hint` 字段（已在 `plugins/EXTENSION_POINTS.md` 记录）；导入 / 管理 / 打开方式 / 插件页把
+  `CaptionLabel` 说明改成标题提示或控件提示（`import_page` 与 `manage_page` 的文案随选择变化，各自的更新点同步刷新提示），
+  存档页与用户页的身份说明改用 `header.set_hint()`。
+- **按钮随简化显示变形**：`framework/buttons.py` 的 `IconTextButton` 在简化显示下 `setFixedSize(side, side)`（图标居中），
+  `setMinimumWidth/Height/Size` 被覆写以便关掉简化显示后按原值还原；常量 `SQUARE_PADDING = 8`。
+- **流式容器不再压窄按钮**：`home_page.py` 的「快捷操作」与 `import_page.py` 的文件按钮区从 `adaptive=True` 改回普通 `FlowArea`
+  （自适应布局按 `minimum_width` 等分一行，会把按钮压到文字显示不全）。
+- **自检**：新增 `hover_hints`（延迟可配、提示继承、方形按钮与还原）与 `prose_moved_to_hints`（说明确实进了提示）；总数 65 → 67。
+## 14. 后续变化：问号标识、数字配置输入框与插件页展示
+
+- **小问号标识与折行提示**：`framework/tooltips.py` 新增 `HintBadge` 与工厂 `hint_badge()`（14 px、「?」、`WhatsThisCursor`，
+  样式 `HINT_BADGE_QSS` 放在 `theme.py`），以及 `HINT_COLUMNS` = 44、`display_width()`、`wrap_hint()`；`TooltipFilter.eventFilter`
+  在 `ToolTip` 事件上改用 `QToolTip.showText(event.globalPos(), wrap_hint(describe(obj)), obj)` 画折行文本（提示框不再被拉成一条横条）。
+  `PageHeader`（标题后）与 `section_card()`（分区标题后）各挂一枚问号，鼠标停在问号或标题上看到的是同一段提示；`home_page.StatCard`、
+  导入页与数据管理页的字段说明同样加了问号（文案随状态变化时同步 `set_hint()`）。
+- **方形按钮不再裁图标**：`framework/theme.py` 新增 `SQUARE_BUTTON_QSS`（`padding: 0px;`），`IconTextButton._apply_size()` 在简化显示下
+  套用它（退出简化显示时清掉）；根因是 qfluentwidgets 的按钮 QSS 左右各 12 px 内边距，比 32 px 的方形按钮还宽，`SE_PushButtonContents`
+  实测为负宽，图标被裁掉。
+- **数字配置可直接输入**：新增 `framework/settings_cards.py` 的 `NumberSettingCard(RangeSettingCard)`——在滑块左边插入 `SpinBox`
+  （宽 `SPIN_WIDTH` = 96 px）、隐藏只读的 `valueLabel`，滑块 / 输入框 / 配置项三者双向同步，范围取配置项的 `range`；设置页 8 张
+  数字卡（悬停提示延迟、存档保留数量 / 容量 / 天数、日志保留文件数 / 单文件大小 / 保留天数 / 总量上限）全部换用它。
+- **插件页展示**：`core/plugin_core.py` 的 `PluginInfo` 新增 `kind_label`（有 `libraries` 即「库插件」，否则「功能插件」）与
+  `state_tone`（`error` / `ok` / `plain`）；新增 `framework/badges.py`（`StatusBadge` / `badge_row` / `paint_badges` / `BADGE_TONES`，
+  圆角色调胶囊）与 `components/plugin_delegate.py` 的 `PluginItemDelegate`（继承 qfluentwidgets 的 `ListItemDelegate`，
+  文本省略交给基类、右侧按自定义角色 `BADGES_ROLE` 画状态徽章，并把徽章夹在视口右缘内——列表关掉横向滚动条，项宽跟随视口）；
+  插件页详情区改成徽章行 + 「协议与接口」/「清单与选项」两栏，不再是一条用 `·` 串起八件事的长句。
+- **自检**：新增 `number_setting_cards`（输入框范围 / 双向同步 / 初值）与 `plugin_display`（代理类型、滚动条策略、每行徽章数据、
+  详情徽章与清单摘要），`icon_text_buttons` 追加「内容区必须装得下图标」、`hover_hints` 追加「标题问号可见且提示与标题一致」与
+  「`wrap_hint()` 每行不超 `HINT_COLUMNS`」；总数 67 → 69（`data` 4 / `services` 28 / `pages` 32 → 34 / `flows` 3）。
+- **取证教训**：自检 / 探针的 harness 不装主题，`qfluentwidgets.isDarkTheme()` 会返回 `True` 而调色板仍是浅色，
+  于是列表项文字被 `TableItemDelegate.initStyleOption` 画成白字、浅底上看不见——像素取证前必须先 `setTheme(Theme.LIGHT, save=False)` 固定主题。
+## 15. 后续变化：问号收敛、标签图标化与配置切换提示
+
+- **问号标识只留在页面标题**：`HintBadge` / `hint_badge()` 仍然只在 `PageHeader` 上用（每个页面标题一枚）；`section_card()` 的标题行、
+  概览页 KPI 卡片（`StatCard`）、导入页的用户 / 分类、数据管理页的分类卡片与筛选卡片都不再挂问号，说明仍是纯悬停提示，
+  停留时间照旧跟 `Layout/Tooltip-Delay` 走；自检 `hint_badges_on_titles` 断言整窗问号数与 `PageHeader` 数一致、且没有挂在卡片上
+  （顺带补上 `framework/__init__.py` 里 `__all__` 声明了却没导入的 `HintBadge`）。
+- **文本标签图标化**：新增 `src/app/ui/framework/labels.py` 的 `IconTextLabel`（`ICON_LABEL_SIZE` = 18、可选 `strong` 字重、
+  `icon_only` 只画图标）与工厂 `icon_text_label()` / `icon_label()`：平时「图标 + 文字」，`Layout/Simple-Display` 打开后只留图标、
+  文字进悬停提示，与 `IconTextButton` 同一套语义。落点：概览页「当前用户」、数据管理页「用户」、导入页七个字段名、
+  打开方式页四个字段名、插件页「排序」与「协议与接口 / 清单与选项」、筛选栏三个分组标题与「范围与排序 / 排序」；
+  仅剩的纯文本按钮（`dialogs.py` 的自动编号 / 每组只保留最新 / 全部取消勾选、导入页「清空选择」、筛选栏「重置筛选」）换成 `IconTextButton`。
+- **配置切换一定有提示**：`SettingsPage` 新增 `TOAST_DELAY_MS` = 400 与 `_queue_setting_toast()` / `_flush_setting_toast()`，
+  `ComboSettingCard` 新增 `changed` 信号（原先只有内部 callback），把开关 / 下拉 / 数字卡的改动统一汇总成右上角一条提示；
+  400 毫秒内的连续改动合并成一条（拖滑块只弹一次），两个隐私保护开关自带更详细的提示、从统一接线里排除；
+  原先主题与日志文件模式手写的两条提示删除，避免重复。
+- **自检**：新增 `hint_badges_on_titles`、`icon_text_labels`、`setting_change_toasts`；总数 69 → 72（`pages` 34 → 37）。
+## 16. 后续变化：对齐、按钮尺寸还原与列表 / 卡片可读性
+
+- **退出简化显示要还原按钮尺寸**：`IconTextButton._apply_size()` 的方形分支用 `setFixedSize()`，会把 min/max 一起钉成 32×32；返回文字模式时原来只清 QSS 与最大尺寸，
+  **没显示过的页面（布局没激活）不会重排**，于是插件页那种没 `switchTo` 过的页面留下的按钮只有 32×32，图标与文字挤在一起。
+  现在非方形分支补 `self.resize(self._plain_size())`（新增 `_plain_size()`：`max(super().sizeHint(), self._plain_minimum)`）；
+  `icon_text_buttons` 新增断言「带图标 + 文字的按钮宽度不得小于 `iconSize().width() + 2 * SQUARE_PADDING`」。
+- **`IconTextLabel` 内部对齐**：图标 `setFixedSize(ICON_LABEL_SIZE, ICON_LABEL_SIZE)` + 居中，布局改成 `addWidget(icon, 0, AlignVCenter)` + `addWidget(text, 0, AlignVCenter)` + `addStretch(1)`——
+  **不传对齐参数时两个子控件按比例拉伸**，宽容器（筛选栏「范围与排序」卡片）里文字会被推到中间，这正是「图标、文字、设置完全没对齐」的原因；`_apply_display()` 末尾补 `updateGeometry()`。
+  导入页 `标签` / `关键词` 两个字段名原来用 `AlignTop`、比输入框中心高 11 px，改成 `AlignVCenter`。
+- **插件列表两行绘制**：`PluginItemDelegate` 覆写 `initStyleOption()`（`super()` 之后 `option.text = ""`）——基类 `ListItemDelegate.paint()` 会在 `super().paint()` 里重新 `initStyleOption()` 从模型取文本，
+  **只在 `paint()` 里改 `opt.text` 拦不住它**（这是「文字没被省略、压到状态胶囊上」的真正原因）；`sizeHint()` 保证宽度跟视口、高度 ≥ `MIN_ROW_HEIGHT` = 46；
+  `paint()` 之后按 `SE_ItemViewItemText` 求出文字区、右缘收到徽章左边，标题（`TITLE_ROLE`，DemiBold）与副标题（`SUBTITLE_ROLE`，小 1 磅、alpha 150）各一行并省略，`painter.setClipRect(area)` 兜底；
+  `plugin_page._fill_list()` 补 `TITLE_ROLE` / `SUBTITLE_ROLE`，`item.text()` 原样保留（既有断言与检索不受影响）。
+- **用户卡片信息行**：新增 `card_info_lines(info)`（`LIBRARY` 项数据 / `TILES` 分类 / `DATE_TIME` 创建时间），`_user_card()` 把原来那行超长 `BodyLabel(card_summary(...))`（固定 `CARD_WIDTH` = 320、被硬裁且没有省略号）
+  换成头像行下面的三行 `icon_text_label`，完整摘要挂 `card.setToolTip()`；新增自检 `user_card_info`（三行都能在卡片里找到、不被裁、提示等于 `card_summary()`）。
+- **自检**：`icon_text_buttons`、`icon_text_labels`、`plugin_display` 扩充，新增 `user_card_info`；总数 72 → 73（`pages` 37 → 38）。
+## 17. 后续变化：主色按钮样式、复选框对齐、启动与载入播报
+
+- **主色按钮的 QSS 必须匹配得上**：`IconTextPrimaryButton` 原来写成 `(IconTextButton, PrimaryPushButton)`，PyQt 的多继承**只保留第一个基类的 QMetaObject 链**，
+  qfluentwidgets 的 `PrimaryPushButton { background-color: --ThemeColorPrimary; … }` 靠类型选择器匹配 metaObject 链，于是主色按钮一直退回普通按钮底色 ——
+  深色主题下 `PrimaryPushButton._drawIcon` 用反转色画深色图标，落在普通按钮的深底上就是「图标没适配深色主题」；给图标让位的内边距也一起丢，
+  宽按钮（如「重置筛选」）上文字与图标贴在一起。现在基类顺序改成 `(PrimaryPushButton, IconTextButton)`（`PrimaryPushButton` 没有自定义 `__init__`，构造签名不变），
+  自检 `icon_text_buttons` 改成分别查找 `IconTextButton` 与 `IconTextPrimaryButton`。
+- **样式表不能被清空**：`_apply_size()` 原来用 `setStyleSheet(self, "")` 退出方形模式，会把 `PushButton.__init__` 装的整份按钮 QSS 冲掉；改用
+  `setCustomStyleSheet(self, SQUARE_BUTTON_QSS, SQUARE_BUTTON_QSS)`（方形）与 `setCustomStyleSheet(self, "", "")`（还原）。
+- **复选框对齐**：`theme.py` 新增 `CHECK_BOX_QSS`（`margin-left: 0px; spacing: 4px;` + 指示器 18 px）与 `align_check_box(box)`，筛选栏「显示隐藏项 / 只看回收站」用它，
+  指示器与文字的左缘跟同卡片里 `IconTextLabel` 的图标 / 文字对齐。
+- **信息行不受简化显示影响**：`IconTextLabel` / `icon_text_label()` 新增 `keep_text=True`，用户卡片的三行信息（项数据 / 分类 / 创建时间）始终保留文字。
+- **插件载入播报**：`PluginService.load()` 先 `logger.info("插件扫描完成：发现 {} 个（启用 {}、未启用 {}、清单有误 {}）", …)`；`loaded_summary()` 改成
+  `插件载入：共 N 个（已启用 X、未启用 Y）；库插件 …、功能插件 …`。
+- **启动阶段播报**：`src/main.py` 新增 `_STARTUP_STAGES` = 8 与 `_stage(step, text)`，`main()` 每完成一阶段打印 `启动 n/8：…`，
+  退出时补 `事件循环结束，退出码 N` 与 `退出：数据库已收起、会话标记已清理`。
+- **自检**：新增 `plugin_load_summary`（services）与 `startup_stage_logs`（flows）；总数 73 → 75（`services` 28 → 29、`flows` 3 → 4）。
+
+## 18. 后续变化：「简化显示」三挡位与用户卡流式操作区
+
+- **挡位化**：`Layout/Simple-Display` 从布尔值改成 `OptionsConfigItem` 三挡（`none` / `default` / `full`），
+  `SimpleDisplayValidator.correct()` 把旧配置里的布尔值换算成挡位（`true` → `full`、`false` → `none`、非法值 → `default`），
+  设置页那张卡从 `SwitchSettingCard` 换成 `ComboSettingCard`；`simple_display()` 仍然表示「处于某种简化挡位」。
+- **逐控件判定**：新增 `src/app/ui/framework/simple_mode.py`（`simple_mode()` / `simple_display()` / `icon_key()` /
+  `shares_icon_with_peers()` / `should_simplify()` / `refresh_peers()`）。`default` 挡位只收「同一个容器里没有别的控件用同一枚图标」的按钮与标签 ——
+  插件页的「重命名 / 编辑说明 / 编辑备注」都是 `FluentIcon.EDIT`，保留文字才分得清。`IconTextButton` / `IconTextLabel` 记住 `_icon_key`，
+  构造完与 `setIcon()` 之后调 `refresh_peers()` 让同容器的兄弟重算。
+- **用户卡操作区改流式**：`user_page.py` 的 `_user_card()` 用 `FlowArea`（间距 6）替掉两列 `QGridLayout`（`CARD_BUTTON_COLUMNS` 删除）：
+  简化显示下按钮缩成方形后不再各占一格、显得空。`FlowArea` 的高度取决于自身宽度，卡片等高改成 `_schedule_card_fit()` →
+  `QTimer.singleShot(0, self._equalize_card_heights)`：先 `grid.activate()` + `area.sync_height()` 再量 `sizeHint().height()`，
+  切换挡位（按钮尺寸随之变化）时也重新等高，否则卡片会按「没有操作区」的高度定死、按钮被卡片下边缘裁掉。
+- **自检**：新增 `simple_modes`（pages）——三挡位读回值、旧布尔值换算、插件页三个 `EDIT` 按钮在 `default` 下保留文字而图标唯一的按钮收成方形、
+  用户页 `keep_text` 信息行在 `full` 下仍显示文字；`checks_tags_ui.py` 的「按钮被裁出卡片」断言改成 `button.mapTo(card, QPoint(0, 0))` 再比
+  （按钮的父控件现在是 `FlowArea`）；总数 75 → 76（`pages` 38 → 39）。

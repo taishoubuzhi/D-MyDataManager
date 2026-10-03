@@ -46,6 +46,7 @@ from ..components.data_table import fit_columns, prepare_table
 from ..components.drop_area import DropArea
 from ..components.keyword_input import KeywordInput
 from ..components.tag_picker import TagPicker
+from ..framework import IconTextButton, IconTextPrimaryButton, icon_text_label
 
 _STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败"}
 _MAX_DETAIL_ROWS = 500
@@ -113,14 +114,12 @@ class ImportPage(ScrollPage):
         layout.addWidget(self.drop_area)
 
         # 来源按钮用流式布局：窄窗口下换行，不再被裁掉，也不会在隐藏时塌成 0 高。
-        self._file_buttons = FlowArea(
-            card, adaptive=True, minimum_width=96, horizontal_spacing=8, vertical_spacing=8
-        )
-        pick_files = PushButton(FluentIcon.FOLDER_ADD, "选择多个文件", self._file_buttons)
+        self._file_buttons = FlowArea(card, horizontal_spacing=8, vertical_spacing=8)
+        pick_files = IconTextButton(FluentIcon.FOLDER_ADD, "选择多个文件", self._file_buttons)
         pick_files.clicked.connect(self.drop_area.browse)
-        pick_folder = PushButton(FluentIcon.FOLDER, "选择文件夹", self._file_buttons)
+        pick_folder = IconTextButton(FluentIcon.FOLDER, "选择文件夹", self._file_buttons)
         pick_folder.clicked.connect(self.drop_area.browse_directory)
-        clear = PushButton("清空选择", self._file_buttons)
+        clear = IconTextButton(FluentIcon.CLEAR_SELECTION, "清空选择", self._file_buttons)
         clear.clicked.connect(self._clear_sources)
         self._file_buttons.add_widgets((pick_files, pick_folder, clear))
         self._file_buttons.hide()
@@ -142,12 +141,16 @@ class ImportPage(ScrollPage):
         self.user_box = ComboBox(card)
         self.user_box.setMinimumWidth(180)
         self.user_box.currentIndexChanged.connect(self._on_user_changed)
+        # 说明改挂在对应的输入控件上：鼠标停住才弹出来
         self.user_hint = CaptionLabel("数据会复制到该用户的用户名文件夹下", card)
-
+        self.user_hint.setVisible(False)
+        self.user_box.setToolTip(self.user_hint.text())
         self.name_edit = LineEdit(card)
         self.name_edit.setPlaceholderText("留空则使用文件名或当前时间")
         self.category_box = ComboBox(card)
         self.category_hint = CaptionLabel("文件导入到所选分类下", card)
+        self.category_hint.setVisible(False)
+        self.category_box.setToolTip(self.category_hint.text())
         self.tag_input = TagPicker([], "输入标签后回车，或点右侧按钮选择已有标签", card)
         self.keyword_input = KeywordInput("输入关键词后回车", card)
 
@@ -156,28 +159,34 @@ class ImportPage(ScrollPage):
         self.name_by_time_switch.setChecked(bool(config.nameByTime.value))
         self.name_by_time_switch.checkedChanged.connect(self._on_name_by_time_changed)
 
-        grid.addWidget(BodyLabel("导入用户", card), 0, 0)
+        grid.addWidget(icon_text_label(FluentIcon.PEOPLE, "导入用户", card), 0, 0)
         grid.addWidget(self.user_box, 0, 1, 1, 3)
         grid.addWidget(self.user_hint, 1, 1, 1, 3)
-        grid.addWidget(BodyLabel("名称", card), 2, 0)
+        grid.addWidget(icon_text_label(FluentIcon.EDIT, "名称", card), 2, 0)
         grid.addWidget(self.name_edit, 2, 1, 1, 3)
-        grid.addWidget(BodyLabel("分类", card), 3, 0)
+        grid.addWidget(icon_text_label(FluentIcon.TILES, "分类", card), 3, 0)
         grid.addWidget(self.category_box, 3, 1, 1, 3)
         grid.addWidget(self.category_hint, 4, 1, 1, 3)
-        grid.addWidget(BodyLabel("标签", card), 5, 0, Qt.AlignmentFlag.AlignTop)
+        # 输入框是单行时居中对齐，标签与后面的控件在同一条基线上：
+        # 用 AlignTop 会把标签顶到行首，看起来比输入框高 11px。
+        grid.addWidget(
+            icon_text_label(FluentIcon.TAG, "标签", card), 5, 0, Qt.AlignmentFlag.AlignVCenter
+        )
         grid.addWidget(self.tag_input, 5, 1, 1, 3)
-        grid.addWidget(BodyLabel("关键词", card), 6, 0, Qt.AlignmentFlag.AlignTop)
+        grid.addWidget(
+            icon_text_label(FluentIcon.FONT, "关键词", card), 6, 0, Qt.AlignmentFlag.AlignVCenter
+        )
         grid.addWidget(self.keyword_input, 6, 1, 1, 3)
-        grid.addWidget(BodyLabel("隐藏项", card), 7, 0)
+        grid.addWidget(icon_text_label(FluentIcon.VIEW, "隐藏项", card), 7, 0)
         grid.addWidget(self.hidden_switch, 7, 1)
-        grid.addWidget(BodyLabel("按时间命名", card), 7, 2)
+        grid.addWidget(icon_text_label(FluentIcon.DATE_TIME, "按时间命名", card), 7, 2)
         grid.addWidget(self.name_by_time_switch, 7, 3)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         outer.addLayout(grid)
 
         actions = QHBoxLayout()
-        import_button = PrimaryPushButton(FluentIcon.CLOUD, "开始导入", card)
+        import_button = IconTextPrimaryButton(FluentIcon.CLOUD, "开始导入", card)
         import_button.clicked.connect(self.import_now)
         actions.addWidget(import_button)
         actions.addStretch(1)
@@ -278,6 +287,7 @@ class ImportPage(ScrollPage):
             if is_folder
             else "文件导入到所选分类下（多个文件共用此分类）",
         )
+        self.category_box.setToolTip(self.category_hint.text())
         self._refresh_details()
 
     def _on_name_by_time_changed(self, checked: bool) -> None:
@@ -318,6 +328,7 @@ class ImportPage(ScrollPage):
             if admin
             else "只有默认用户可以替其他用户导入数据，其他用户只能导入到自己的文件夹"
         )
+        self.user_box.setToolTip(self.user_hint.text())
         self._reload_categories()
 
     def target_user_id(self) -> int | None:

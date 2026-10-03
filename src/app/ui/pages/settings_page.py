@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     CaptionLabel,
@@ -13,7 +13,6 @@ from qfluentwidgets import (
     FluentIcon,
     PushButton,
     PushSettingCard,
-    RangeSettingCard,
     SettingCard,
     SettingCardGroup,
     StrongBodyLabel,
@@ -32,7 +31,9 @@ from ...services import LibraryService, UserService
 from ...services.maintenance import reset_to_defaults
 from ...services.plugin_service import plugin_service
 from ...services.privacy_service import privacy
+from ..components.pager import PAGE_SIZES, normalize_page_size
 from ..framework import (
+    NumberSettingCard,
     ScrollPage,
     confirm,
     open_path,
@@ -40,13 +41,19 @@ from ..framework import (
     restart_application,
 )
 from ..framework.contributions import items, resolve, value_of
+from ..framework import IconTextButton
+
+TOAST_DELAY_MS = 400
 
 
 class ComboSettingCard(SettingCard):
     """下拉选择设置卡（不依赖 OptionsConfigItem）。"""
 
+    changed = pyqtSignal(object)
+
     def __init__(self, icon, title: str, content: str, options, current, callback, parent=None) -> None:
         super().__init__(icon, title, content, parent)
+        self._callback = callback
         self.combo = ComboBox(self)
         for label, value in options:
             self.combo.addItem(label, userData=value)
@@ -54,9 +61,14 @@ class ComboSettingCard(SettingCard):
             if self.combo.itemData(index) == current:
                 self.combo.setCurrentIndex(index)
                 break
-        self.combo.currentIndexChanged.connect(lambda _index: callback(self.combo.currentData()))
+        self.combo.currentIndexChanged.connect(self._on_index_changed)
         self.hBoxLayout.addWidget(self.combo, 0, Qt.AlignmentFlag.AlignRight)
         self.hBoxLayout.addSpacing(16)
+
+    def _on_index_changed(self, _index: int) -> None:
+        """选项变化：先落配置，再让页面据此弹提示。"""
+        self._callback(self.combo.currentData())
+        self.changed.emit(self.combo.currentText())
 
 
 class ActionCard(PushSettingCard):
@@ -100,8 +112,47 @@ class SettingsPage(ScrollPage):
             self.add_widget(group)
         self.add_stretch()
 
+        self._pending_toast: tuple | None = None
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.setInterval(TOAST_DELAY_MS)
+        self._toast_timer.timeout.connect(self._flush_setting_toast)
+        self._connect_setting_toasts()
+
         signalBus.userChanged.connect(self._sync_admin)
         self._apply_permissions()
+
+    def _connect_setting_toasts(self) -> None:
+        """每张配置卡改动后都在右上角提示一次：切换配置一定有反馈。"""
+        # 两个保护开关有自己的详细提示（是否支持、放行了几个目录），不再重复接一遍
+        own = (config.resourceProtected, config.hiddenProtected)
+        for card in self.findChildren(SwitchSettingCard):
+            if getattr(card, "configItem", None) in own:
+                continue
+            card.checkedChanged.connect(
+                lambda checked, item=card: self._queue_setting_toast(item, "已开启" if checked else "已关闭")
+            )
+        for card in self.findChildren(NumberSettingCard):
+            card.valueChanged.connect(
+                lambda value, item=card: self._queue_setting_toast(item, f"已设为 {value}")
+            )
+        for card in self.findChildren(ComboSettingCard):
+            card.changed.connect(
+                lambda text, item=card: self._queue_setting_toast(item, f"已切换为 {text}")
+            )
+
+    def _queue_setting_toast(self, card, detail: str) -> None:
+        """滑块拖动会连发信号，等用户停下来再弹，避免刷屏。"""
+        self._pending_toast = (card, detail)
+        self._toast_timer.start()
+
+    def _flush_setting_toast(self) -> None:
+        pending = self._pending_toast
+        if pending is None:
+            return
+        self._pending_toast = None
+        card, detail = pending
+        self.toast_success(card.titleLabel.text(), detail)
 
     def _plugin_group(self) -> SettingCardGroup | None:
         """插件贡献的设置卡片（扩展点 app.ui.settings.card）；没有贡献时整组不出现。"""
@@ -150,6 +201,46 @@ class SettingsPage(ScrollPage):
                 config.dpiScale.value,
                 lambda value: config.set(config.dpiScale, value),
                 group,
+            )
+        )
+        group.addSettingCard(
+            ComboSettingCard(
+                FluentIcon.FONT,
+                "简化显示",
+                "不简化 / 默认（只简化不会混淆的图标）/ 完全简化，所有页面与弹窗都生效",
+                [("不简化", "none"), ("默认", "default"), ("完全简化", "full")],
+                config.simpleDisplay.value,
+                lambda value: config.set(config.simpleDisplay, value),
+                group,
+            )
+        )
+        group.addSettingCard(
+            ComboSettingCard(
+                FluentIcon.SCROLL,
+                "每页条数",
+                "数据管理页与存档页每页显示多少条",
+                [(f"{size} 条", size) for size in PAGE_SIZES],
+                normalize_page_size(config.pageSize.value),
+                lambda value: config.set(config.pageSize, value),
+                group,
+            )
+        )
+        group.addSettingCard(
+            NumberSettingCard(
+                config.tooltipDelay,
+                FluentIcon.INFO,
+                "悬停提示延迟（毫秒）",
+                "鼠标停在按钮或标题上多久后弹出说明，0 表示立刻弹出",
+                group,
+            )
+        )
+        group.addSettingCard(
+            SwitchSettingCard(
+                FluentIcon.MENU,
+                "分类栏默认展开",
+                "数据管理页左侧分类栏启动时展开全部分类（默认全部收起）",
+                configItem=config.expandCategories,
+                parent=group,
             )
         )
         return group
@@ -211,21 +302,21 @@ class SettingsPage(ScrollPage):
                 group,
             )
         )
-        self._keep_versions_card = RangeSettingCard(
+        self._keep_versions_card = NumberSettingCard(
             config.keepVersions,
             FluentIcon.HISTORY,
             "存档保留数量",
             "超过该数量时自动删除最早的存档",
             group,
         )
-        self._keep_size_card = RangeSettingCard(
+        self._keep_size_card = NumberSettingCard(
             config.keepSize,
             FluentIcon.SAVE,
             "仓库容量上限（MB）",
             "超出后从最早的存档开始删除；数据项自身的内容不会被删除",
             group,
         )
-        self._keep_days_card = RangeSettingCard(
+        self._keep_days_card = NumberSettingCard(
             config.keepDays,
             FluentIcon.DATE_TIME,
             "存档保留天数",
@@ -267,28 +358,28 @@ class SettingsPage(ScrollPage):
                 group,
             )
         )
-        self._log_keep_files_card = RangeSettingCard(
+        self._log_keep_files_card = NumberSettingCard(
             config.logKeepFiles,
             FluentIcon.DOCUMENT,
             "最多保留日志文件数",
             "超出后从最早的日志文件开始删除",
             group,
         )
-        self._log_max_file_card = RangeSettingCard(
+        self._log_max_file_card = NumberSettingCard(
             config.logMaxFileSizeMB,
             FluentIcon.ZIP_FOLDER,
             "单个日志文件大小上限（MB）",
             "达到上限时切分出新文件",
             group,
         )
-        self._log_keep_days_card = RangeSettingCard(
+        self._log_keep_days_card = NumberSettingCard(
             config.logKeepDays,
             FluentIcon.DATE_TIME,
             "日志保留天数",
             "超过该天数的日志文件会被删除",
             group,
         )
-        self._log_total_card = RangeSettingCard(
+        self._log_total_card = NumberSettingCard(
             config.logMaxTotalSizeMB,
             FluentIcon.SAVE,
             "日志总大小上限（MB）",
@@ -369,7 +460,6 @@ class SettingsPage(ScrollPage):
         setTheme(mapping.get(value, Theme.AUTO))
         config.set(config.theme, value)
         plugin_service.publish(Events.THEME_CHANGED, theme=value)
-        self.toast_success("主题已切换", {"light": "浅色", "dark": "深色"}.get(value, "跟随系统"))
 
     def _open_path(self, path) -> None:
         if not open_path(path):
@@ -457,8 +547,6 @@ class SettingsPage(ScrollPage):
     def _on_log_mode_changed(self, value: str) -> None:
         config.set(config.logMode, value)
         self._sync_log_cards()
-        label = logging_setup.MODE_LABELS.get(value, value)
-        self.toast_success("已切换日志文件模式", f"{label} · 重启应用后生效")
 
     def _sync_log_cards(self) -> None:
         """按日志模式启用对应的细节设置卡。"""
@@ -630,7 +718,7 @@ class SettingsPage(ScrollPage):
         info.addWidget(CaptionLabel(str(folder), row))
         layout.addLayout(info, 1)
 
-        open_button = PushButton(FluentIcon.FOLDER, "打开", row)
+        open_button = IconTextButton(FluentIcon.FOLDER, "打开", row)
         open_button.clicked.connect(lambda _=False, path=folder: self._open_path(path))
         layout.addWidget(open_button)
         return row

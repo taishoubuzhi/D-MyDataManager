@@ -2,6 +2,7 @@
   "id": "builtin.video",
   "name": "内置视频播放器",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "description": "播放 mp4 / mkv / avi 等视频，支持播放暂停、进度与音量。",
   "author": "D-MyDataManager",
   "builtin": true,

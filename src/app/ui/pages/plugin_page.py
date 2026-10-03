@@ -35,10 +35,21 @@ from ...services.plugin_service import (
     PluginError,
     plugin_service,
 )
-from ..components import FlowArea
+from ..components import BADGES_ROLE, SUBTITLE_ROLE, TITLE_ROLE, FlowArea, PluginItemDelegate
 from ..dialogs import TextInputDialog
-from ..framework import DETAIL_MARGINS, PANEL_MARGINS, Page, confirm, tri_state
+from ..framework import (
+    icon_label,
+    icon_text_label,
+    DETAIL_MARGINS,
+    PANEL_MARGINS,
+    Page,
+    StatusBadge,
+    badge_row,
+    confirm,
+    tri_state,
+)
 from ..plugin_options_dialog import PluginOptionsDialog
+from ..framework import IconTextButton, IconTextPrimaryButton
 
 
 class PluginPage(Page):
@@ -62,19 +73,21 @@ class PluginPage(Page):
         self._checked: set[str] = set()
         self._current = ""
 
-        self._zip_button = PrimaryPushButton(FluentIcon.ADD, "导入插件包", self)
+        self._zip_button = IconTextPrimaryButton(FluentIcon.ADD, "导入插件包", self)
         self._zip_button.clicked.connect(self._on_import_zip)
         self.header.add_action(self._zip_button)
-        self._folder_button = PushButton(FluentIcon.FOLDER, "导入插件目录", self)
+        self._folder_button = IconTextButton(FluentIcon.FOLDER, "导入插件目录", self)
         self._folder_button.clicked.connect(self._on_import_dir)
         self.header.add_action(self._folder_button)
-        refresh_button = PushButton(FluentIcon.SYNC, "刷新", self)
+        refresh_button = IconTextButton(FluentIcon.SYNC, "刷新", self)
         refresh_button.clicked.connect(self._reload)
         self.header.add_action(refresh_button)
 
-        self.add_widget(
-            CaptionLabel("启用 / 禁用会立即重建查看器注册表：禁用「打开方式」插件后，对应格式会退回系统默认程序。", self)
-        )
+        # 整段说明改挂在页面标题上：鼠标停住才弹出来，不再铺在页面上
+        if self.header is not None:
+            self.header.add_hint(
+                "启用 / 禁用会立即重建查看器注册表：禁用「打开方式」插件后，对应格式会退回系统默认程序。"
+            )
         self.permission_hint = CaptionLabel(
             "只有默认用户可以导入、启用、编辑或删除插件；其他用户可以查看、筛选与打开插件目录。", self
         )
@@ -112,18 +125,25 @@ class PluginPage(Page):
 
         sort_row = QHBoxLayout()
         sort_row.setSpacing(8)
-        sort_row.addWidget(CaptionLabel("排序", self))
+        sort_row.addWidget(icon_label(FluentIcon.MENU, "排序", self))
         self.order_box = ComboBox(self)
         self.order_box.setMinimumWidth(130)
         for value, label in PLUGIN_ORDERS:
             self.order_box.addItem(label, userData=value)
         self.order_box.currentIndexChanged.connect(self._fill_list)
         sort_row.addWidget(self.order_box)
-        self.reverse_button = PushButton(FluentIcon.UP, "正序", self)
+        self.reverse_button = IconTextButton(FluentIcon.UP, "正序", self)
         self.reverse_button.setCheckable(True)
         self.reverse_button.toggled.connect(self._on_reverse)
         sort_row.addWidget(self.reverse_button)
         sort_row.addStretch(1)
+        # 从「打开方式」页跳过来会带上贡献筛选，列表可能只列出一部分插件：
+        # 计数文案写清「已筛选」，并给一个一键回到全部插件的按钮。
+        self.reset_button = IconTextButton(FluentIcon.SYNC, "清除筛选", self)
+        self.reset_button.setToolTip("清空关键词与四个筛选下拉，回到「全部插件」")
+        self.reset_button.clicked.connect(self._clear_filters)
+        self.reset_button.setVisible(False)
+        sort_row.addWidget(self.reset_button)
         self.count_label = CaptionLabel("", self)
         sort_row.addWidget(self.count_label)
         self.add_row(sort_row)
@@ -134,12 +154,17 @@ class PluginPage(Page):
         body.setSpacing(12)
 
         left = CardWidget(self)
-        left.setFixedWidth(360)
+        left.setFixedWidth(400)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(*PANEL_MARGINS)
         left_layout.setSpacing(8)
         left_layout.addWidget(SubtitleLabel("插件列表", left))
         self.plugin_list = ListWidget(left)
+        # 右侧的状态徽章由自绘代理画，勾选框与文字仍走基类，勾选语义不受影响；
+        # qfluentwidgets 的 ListWidget 会把横向滚动条钉成 AlwaysOff，列表项宽度就跟着视口走：
+        # 长插件名由代理用省略号收尾（完整文字在悬停提示与右侧详情里），徽章不会被挤出可视区。
+        self.plugin_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.plugin_list.setItemDelegate(PluginItemDelegate(self.plugin_list))
         self.plugin_list.currentRowChanged.connect(self._on_select)
         self.plugin_list.itemChanged.connect(self._on_item_changed)
         left_layout.addWidget(self.plugin_list, 1)
@@ -150,47 +175,68 @@ class PluginPage(Page):
         right_layout.setContentsMargins(*DETAIL_MARGINS)
         right_layout.setSpacing(8)
         self.detail_title = SubtitleLabel("未选择插件", right)
+        # 类型 / 来源 / 状态三个徽章：短标签一眼扫过去，不必读整段文字
+        self.kind_badge = StatusBadge("", "plain", right)
+        self.source_badge = StatusBadge("", "plain", right)
+        self.state_badge = StatusBadge("", "plain", right)
+        self.detail_badges = badge_row(self.kind_badge, self.source_badge, self.state_badge)
         self.detail_meta = CaptionLabel("", right)
         self.detail_state = CaptionLabel("", right)
+        self.detail_state.setWordWrap(True)
+        self.detail_desc = CaptionLabel("", right)
+        self.detail_desc.setWordWrap(True)
         self.detail_ext = CaptionLabel("", right)
+        self.detail_ext.setWordWrap(True)
         self.detail_protocol = CaptionLabel("", right)
         self.detail_protocol.setWordWrap(True)
         self.detail_options = CaptionLabel("", right)
         self.detail_options.setWordWrap(True)
         self.detail_path = CaptionLabel("", right)
         self.detail_path.setWordWrap(True)
-        self.detail_desc = CaptionLabel("", right)
-        self.detail_desc.setWordWrap(True)
-        for label in (
-            self.detail_title,
-            self.detail_meta,
-            self.detail_state,
-            self.detail_ext,
-            self.detail_protocol,
-            self.detail_options,
-            self.detail_path,
-            self.detail_desc,
-        ):
-            right_layout.addWidget(label)
+
+        right_layout.addWidget(self.detail_title)
+        right_layout.addLayout(self.detail_badges)
+        right_layout.addWidget(self.detail_meta)
+        right_layout.addWidget(self.detail_desc)
+        right_layout.addWidget(self.detail_state)
+
+        # 协议信息分两栏，长句不再从窗口左边一直铺到右边
+        protocol_column = QVBoxLayout()
+        protocol_column.setSpacing(6)
+        protocol_column.addWidget(icon_text_label(FluentIcon.CODE, "协议与接口", right))
+        protocol_column.addWidget(self.detail_protocol)
+        protocol_column.addStretch(1)
+        content_column = QVBoxLayout()
+        content_column.setSpacing(6)
+        content_column.addWidget(icon_text_label(FluentIcon.DOCUMENT, "清单与选项", right))
+        content_column.addWidget(self.detail_ext)
+        content_column.addWidget(self.detail_options)
+        content_column.addWidget(self.detail_path)
+        content_column.addStretch(1)
+        columns = QHBoxLayout()
+        columns.setSpacing(16)
+        columns.addLayout(protocol_column, 1)
+        columns.addLayout(content_column, 1)
+        right_layout.addLayout(columns)
         right_layout.addStretch(1)
 
-        # 功能按钮数量多，窄窗口下用流式布局换行，避免显示不全。
-        self.actions_host = FlowArea(right, adaptive=True, minimum_width=96, horizontal_spacing=8, vertical_spacing=8)
-        self.toggle_button = PrimaryPushButton(FluentIcon.ACCEPT, "启用", self.actions_host)
+        # 功能按钮数量多：按各按钮自己的文字宽度换行，标签才不会被压窄截断。
+        self.actions_host = FlowArea(right, horizontal_spacing=8, vertical_spacing=8)
+        self.toggle_button = IconTextPrimaryButton(FluentIcon.ACCEPT, "启用", self.actions_host)
         self.toggle_button.clicked.connect(self._on_toggle)
         self.actions_host.add_widget(self.toggle_button)
-        self.options_button = PushButton(FluentIcon.SETTING, "插件选项", self.actions_host)
+        self.options_button = IconTextButton(FluentIcon.SETTING, "插件选项", self.actions_host)
         self.options_button.clicked.connect(self._on_options)
         self.actions_host.add_widget(self.options_button)
         for field, label in (("name", "重命名"), ("description", "编辑说明"), ("note", "编辑备注")):
-            button = PushButton(FluentIcon.EDIT, label, self.actions_host)
+            button = IconTextButton(FluentIcon.EDIT, label, self.actions_host)
             button.clicked.connect(lambda _checked=False, key=field: self._on_edit(key))
             self.actions_host.add_widget(button)
             setattr(self, f"_{field}_button", button)
-        self.reveal_button = PushButton(FluentIcon.FOLDER, "打开插件目录", self.actions_host)
+        self.reveal_button = IconTextButton(FluentIcon.FOLDER, "打开插件目录", self.actions_host)
         self.reveal_button.clicked.connect(self._on_reveal)
         self.actions_host.add_widget(self.reveal_button)
-        self.delete_button = PushButton(FluentIcon.DELETE, "删除", self.actions_host)
+        self.delete_button = IconTextButton(FluentIcon.DELETE, "删除", self.actions_host)
         self.delete_button.clicked.connect(self._on_remove)
         self.actions_host.add_widget(self.delete_button)
         right_layout.addWidget(self.actions_host)
@@ -250,6 +296,17 @@ class PluginPage(Page):
         self._reload_filters()
         self._fill_list()
 
+    def _clear_filters(self) -> None:
+        """一键回到「全部插件」：清空关键词与四个筛选下拉。"""
+        for box in (self.point_box, self.state_box, self.source_box, self.author_box):
+            box.blockSignals(True)
+            box.setCurrentIndex(0)
+            box.blockSignals(False)
+        self.search.blockSignals(True)
+        self.search.clear()
+        self.search.blockSignals(False)
+        self._reload()
+
     def refresh(self) -> None:
         self._reload()
 
@@ -288,24 +345,50 @@ class PluginPage(Page):
 
     # ------------------------------------------------------------------ 列表
     def _fill_list(self) -> None:
-        self._plugins = self.service.all(**self._filters())
+        filters = self._filters()
+        self._plugins = self.service.all(**filters)
         total = len(self.service.all())
         # 勾选跟随插件 id 保留，被筛选隐藏或已删除的插件自动丢弃。
         self._checked &= {info.id for info in self.service.all()}
         self.plugin_list.blockSignals(True)
         self.plugin_list.clear()
         for info in self._plugins:
-            mark = "✔" if info.enabled and not info.error else "✖"
-            item = QListWidgetItem(f"{mark} {info.name} · {info.contributions_text} · {info.source_label}")
+            item = QListWidgetItem(
+                f"{info.name} · {info.kind_label} · {info.contributions_text} · {info.source_label}"
+            )
             item.setData(Qt.ItemDataRole.UserRole, info.id)
-            item.setToolTip(f"{info.id}\n状态：{info.state_label}\n创建者：{info.author_text}")
+            item.setData(BADGES_ROLE, [(info.state_label, info.state_tone)])
+            # 两行显示：第一行插件名，第二行类型 · 来源 · 贡献；列表项文本仍保留全部信息供检索与断言
+            item.setData(TITLE_ROLE, info.name)
+            item.setData(
+                SUBTITLE_ROLE,
+                f"{info.kind_label} · {info.source_label} · {info.contributions_text}",
+            )
+            item.setToolTip(
+                f"{info.id}\n类型：{info.kind_label}\n状态：{info.state_label}\n创建者：{info.author_text}"
+            )
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(
                 Qt.CheckState.Checked if info.id in self._checked else Qt.CheckState.Unchecked
             )
             self.plugin_list.addItem(item)
         self.plugin_list.blockSignals(False)
-        self.count_label.setText(f"{len(self._plugins)} / {total} 个插件")
+        active = [
+            self.point_box.currentText() if filters["contribution"] else "",
+            self.state_box.currentText() if filters["state"] else "",
+            self.source_box.currentText() if filters["source"] else "",
+            self.author_box.currentText() if filters["author"] else "",
+        ]
+        active = [label for label in active if label]
+        if filters["query"]:
+            active.append(f"关键词「{filters['query']}」")
+        if active:
+            self.count_label.setText(f"已筛选：{len(self._plugins)} / 共 {total} 个插件")
+            self.count_label.setToolTip("当前筛选：" + "、".join(active) + "\n点右侧「清除筛选」回到全部插件")
+        else:
+            self.count_label.setText(f"共 {total} 个插件")
+            self.count_label.setToolTip("")
+        self.reset_button.setVisible(bool(active))
         if self._plugins:
             self.plugin_list.setCurrentRow(0)
         else:
@@ -321,8 +404,19 @@ class PluginPage(Page):
                 self.detail_desc,
             ):
                 label.setText("")
+            self._set_detail_badges(None)
             self.detail_title.setText("没有匹配的插件")
         self._sync_selection()
+
+    def _set_detail_badges(self, info) -> None:
+        """详情标题下的三个徽章；传 None 表示清空（列表为空时）。"""
+        if info is None:
+            for badge in (self.kind_badge, self.source_badge, self.state_badge):
+                badge.set_badge("")
+            return
+        self.kind_badge.set_badge(info.kind_label, "plain")
+        self.source_badge.set_badge(info.source_label, "plain")
+        self.state_badge.set_badge(info.state_label, info.state_tone)
 
     def _selected_info(self):
         return self.service.get(self._current)
@@ -337,6 +431,7 @@ class PluginPage(Page):
             return
         self._current = info.id
         self.detail_title.setText(info.name)
+        self._set_detail_badges(info)
         self.detail_meta.setText(
             f"{info.id} · {info.contributions_text} · {info.source_label} · 版本 {info.version_text} · 创建者 {info.author_text}"
         )
@@ -354,6 +449,7 @@ class PluginPage(Page):
                     f"依赖插件：{info.depends_text}",
                     f"扩展接口：{info.provides_text}",
                     f"提供库：{info.libraries_text}",
+                    f"适配 SDK：{info.api_text}",
                     f"适用管理器版本：{info.manager_text}",
                     f"入口文件：{info.entry or '—'}",
                 ]
@@ -389,13 +485,13 @@ class PluginPage(Page):
         bar.addWidget(self.selection_label)
         bar.addStretch(1)
 
-        self.batch_enable_button = PushButton(FluentIcon.ACCEPT, "批量启用", parent)
+        self.batch_enable_button = IconTextButton(FluentIcon.ACCEPT, "批量启用", parent)
         self.batch_enable_button.setToolTip("启用所有勾选的插件，之后立即重建查看器注册表")
         self.batch_enable_button.clicked.connect(lambda: self._on_batch_toggle(True))
-        self.batch_disable_button = PushButton(FluentIcon.CLOSE, "批量禁用", parent)
+        self.batch_disable_button = IconTextButton(FluentIcon.CLOSE, "批量禁用", parent)
         self.batch_disable_button.setToolTip("禁用所有勾选的插件，之后立即重建查看器注册表")
         self.batch_disable_button.clicked.connect(lambda: self._on_batch_toggle(False))
-        self.batch_remove_button = PushButton(FluentIcon.DELETE, "批量删除", parent)
+        self.batch_remove_button = IconTextButton(FluentIcon.DELETE, "批量删除", parent)
         self.batch_remove_button.setToolTip("删除勾选的外部插件；内置插件需改为批量禁用")
         self.batch_remove_button.clicked.connect(self._on_batch_remove)
         for button in (

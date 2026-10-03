@@ -2,6 +2,7 @@
   "id": "builtin.image",
   "name": "内置图片查看器",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "description": "查看 png / jpg / gif 等图片，支持缩放、旋转与适应窗口。",
   "author": "D-MyDataManager",
   "builtin": true,

@@ -84,6 +84,7 @@ def _library_plugin(plugin_id: str, name: str, module: str, body: str) -> tuple[
         "id": plugin_id,
         "name": name,
         "version": "1.0",
+        "api_version": ">=1.0 <2.0",
         "description": f"{name}（自检夹具）",
         "author": "selfcheck",
         "entry": "plugin.py",
@@ -109,6 +110,7 @@ def plugin_manifest_whitelist(case: Case) -> None:
         info = load_manifest(folder, builtin=True)
         assert info.name, f"插件 {folder.name} 缺少名称"
         assert info.version, f"插件 {folder.name} 缺少版本"
+        assert info.api_version, f"{folder.name} 清单缺少 api_version（适配的 SDK 版本）"
         assert PLUGIN_ID_PATTERN.match(info.id), f"插件 id 不合法：{info.id!r}"
         unknown = sorted(set(info.manifest) - set(PROTOCOL_FIELDS))
         assert not unknown, f"{info.id} 清单出现协议外的字段：{unknown}"
@@ -116,7 +118,7 @@ def plugin_manifest_whitelist(case: Case) -> None:
     assert len(ids) == len(set(ids)), f"插件 id 重复：{sorted(ids)}"
     assert "builtin.lib.viewer" in ids and "builtin.lib.dialog" in ids, f"缺少库插件：{sorted(ids)}"
 
-    base = {"id": "demo.probe", "name": "探针", "version": "1.0", "entry": "plugin.py"}
+    base = {"id": "demo.probe", "name": "探针", "version": "1.0", "api_version": ">=1.0 <2.0", "entry": "plugin.py"}
     removed_type = _manifest_error({**base, "kind": "viewer"})
     assert removed_type and "类型" in removed_type, f"声明 kind 的清单应被拒绝：{removed_type!r}"
     removed_data = _manifest_error({**base, "capabilities": ["x"]})
@@ -125,6 +127,10 @@ def plugin_manifest_whitelist(case: Case) -> None:
     assert unknown_field and "未知字段" in unknown_field, f"未知字段应被拒绝：{unknown_field!r}"
     bad_id = _manifest_error({**base, "id": "Demo.Probe"})
     assert bad_id and "id" in bad_id, f"非法 id 应被拒绝：{bad_id!r}"
+    missing_api = _manifest_error({key: value for key, value in base.items() if key != "api_version"})
+    assert missing_api and "api_version" in missing_api, f"缺少 api_version 应被拒绝：{missing_api!r}"
+    bad_api = _manifest_error({**base, "api_version": ">=9.0"})
+    assert bad_api and "SDK 版本" in bad_api, f"超出当前 SDK 的 api_version 应被拒绝：{bad_api!r}"
 
 
 @check("plugin_data_refs", "services")
@@ -253,6 +259,7 @@ def plugin_multi_library(case: Case) -> None:
             "id": "demo.app",
             "name": "双库插件",
             "version": "1.0",
+            "api_version": ">=1.0 <2.0",
             "entry": "plugin.py",
             "depends": [{"id": "demo.lib.alpha"}, {"id": "demo.lib.beta"}],
         },
@@ -299,7 +306,7 @@ def plugin_load_report(case: Case) -> None:
     _write_plugin(
         root,
         "demo.good",
-        {"id": "demo.good", "name": "好插件", "version": "1.0", "entry": "plugin.py"},
+        {"id": "demo.good", "name": "好插件", "version": "1.0", "api_version": ">=1.0 <2.0", "entry": "plugin.py"},
         {
             "plugin.py": (
                 "from app.sdk import Plugin, PluginContext\n\n\n"
@@ -313,19 +320,19 @@ def plugin_load_report(case: Case) -> None:
     _write_plugin(
         root,
         "demo.bad.manifest",
-        {"id": "demo.bad.manifest", "name": "坏清单", "version": "1.0", "kind": "viewer", "entry": "plugin.py"},
+        {"id": "demo.bad.manifest", "name": "坏清单", "version": "1.0", "api_version": ">=1.0 <2.0", "kind": "viewer", "entry": "plugin.py"},
         {"plugin.py": "raise RuntimeError('不该被导入')\n"},
     )
     _write_plugin(
         root,
         "demo.bad.import",
-        {"id": "demo.bad.import", "name": "坏入口", "version": "1.0", "entry": "plugin.py"},
+        {"id": "demo.bad.import", "name": "坏入口", "version": "1.0", "api_version": ">=1.0 <2.0", "entry": "plugin.py"},
         {"plugin.py": "import selfcheck_missing_module_9f8a\n"},
     )
     _write_plugin(
         root,
         "demo.bad.setup",
-        {"id": "demo.bad.setup", "name": "坏初始化", "version": "1.0", "entry": "plugin.py"},
+        {"id": "demo.bad.setup", "name": "坏初始化", "version": "1.0", "api_version": ">=1.0 <2.0", "entry": "plugin.py"},
         {
             "plugin.py": (
                 "from app.sdk import Plugin, PluginContext\n\n\n"
@@ -355,6 +362,65 @@ def plugin_load_report(case: Case) -> None:
     assert healthy is not None and healthy[2] and healthy[1] == "setup", f"好插件应载入成功：{healthy}"
     assert "demo.good" in extension_registry.names(), "好插件被坏插件带崩了"
     assert "demo.bad.import" not in extension_registry.names(), "失败的插件不应留下接口"
+
+
+@check("provides_note_recorded", "services")
+def provides_note_recorded(case: Case) -> None:
+    """清单声明了扩展接口却没注册：只记一条备注，不算载入失败；补上注册后自动清掉。"""
+    from app.core import paths
+    from app.services.plugin_service import PROVIDES_NOTE_PREFIX, plugin_service
+
+    root = Path(paths.PLUGIN_DIR)
+    manifest = {
+        "id": "demo.declares.nothing",
+        "name": "声明了没注册",
+        "version": "1.0",
+        "api_version": ">=1.0 <2.0",
+        "entry": "plugin.py",
+        "provides": ["demo.missing"],
+    }
+    silent = (
+        "from app.sdk import Plugin\n\n\n"
+        "class DeclaresNothingPlugin(Plugin):\n"
+        '    """清单里声明了一个扩展接口，但 setup 里没有注册它。"""\n'
+    )
+    speaking = (
+        "from app.sdk import Plugin, PluginContext\n\n\n"
+        "class DeclaresNothingPlugin(Plugin):\n"
+        '    """补上注册后的同一个插件。"""\n\n'
+        "    def setup(self, ctx: PluginContext) -> None:\n"
+        '        ctx.provide("demo.missing", self)\n'
+    )
+    _write_plugin(root, "demo.declares.nothing", manifest, {"plugin.py": silent})
+    _write_plugin(
+        root,
+        "demo.declares.ok",
+        {**manifest, "id": "demo.declares.ok", "name": "声明了就注册", "provides": ["demo.present"]},
+        {
+            "plugin.py": (
+                "from app.sdk import Plugin, PluginContext\n\n\n"
+                "class DeclaresOkPlugin(Plugin):\n"
+                '    """声明并注册了扩展接口的插件。"""\n\n'
+                "    def setup(self, ctx: PluginContext) -> None:\n"
+                '        ctx.provide("demo.present", self)\n'
+            )
+        },
+    )
+
+    plugin_service.load()
+    info = plugin_service.get("demo.declares.nothing")
+    assert info is not None, "夹具插件没有被发现"
+    assert not info.error, f"声明与注册不一致不该算载入失败：{info.error}"
+    assert info.note.startswith(PROVIDES_NOTE_PREFIX), f"应记一条备注，实际 {info.note!r}"
+    assert "demo.missing" in info.note, f"备注要写清是哪个接口：{info.note!r}"
+    ok_info = plugin_service.get("demo.declares.ok")
+    assert ok_info is not None and not ok_info.note, f"注册了的插件不该有备注：{getattr(ok_info, 'note', '')!r}"
+
+    _write_plugin(root, "demo.declares.nothing", manifest, {"plugin.py": speaking})
+    plugin_service.load()
+    fixed = plugin_service.get("demo.declares.nothing")
+    assert fixed is not None and fixed.note == "", f"补上注册后备注应清掉，实际 {fixed.note!r}"
+    assert not fixed.error, f"补上注册后不该有错误：{fixed.error}"
 
 
 #: 旧版写死在 app.core.viewer_data 里的扩展名表：重构后必须消失（否则与插件 data/ 重复声明）。
@@ -456,3 +522,33 @@ def plugin_event_broadcast(case: Case) -> None:
     assert Path(seen[Events.LIBRARY_CHANGED][-1].get("path", "")) == target.resolve(), "库目录事件应带新路径"
     assert seen[Events.PLUGIN_ENABLED][-1].get("plugin_id") == SAMPLE_ID, "启用事件应带插件 id"
     assert seen[Events.PLUGIN_DISABLED][-1].get("plugin_id") == SAMPLE_ID, "禁用事件应带插件 id"
+
+
+@check("plugin_load_summary", "services")
+def plugin_load_summary(case: Case) -> None:
+    """载入汇总要报总数与启用情况，并且真的播报到控制台。"""
+    from loguru import logger
+
+    from app.services.plugin_service import plugin_service
+
+    install_builtin_plugins()
+    records: list[str] = []
+    sink = logger.add(lambda message: records.append(str(message)), level="INFO", format="{message}")
+    try:
+        plugin_service.load()
+    finally:
+        logger.remove(sink)
+
+    infos = plugin_service.discover()
+    enabled = sum(1 for info in infos if info.enabled)
+    summary = plugin_service.loaded_summary()
+    assert f"共 {len(infos)} 个（已启用 {enabled}、未启用 {len(infos) - enabled}）" in summary, (
+        f"汇总没有报总数与启用情况：{summary}"
+    )
+    libraries = [info for info in infos if info.libraries]
+    features = [info for info in infos if not info.libraries]
+    assert f"库插件 {len(libraries)} 个" in summary, f"汇总没有报库插件数量：{summary}"
+    assert f"功能插件 {len(features)} 个" in summary, f"汇总没有报功能插件数量：{summary}"
+    assert any("插件扫描完成：发现 " in text for text in records), "插件扫描结果没有写到控制台"
+    assert any("插件载入：共 " in text for text in records), "插件载入汇总没有写到控制台"
+

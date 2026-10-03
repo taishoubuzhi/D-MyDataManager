@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QTreeWidgetItem, QWidget
 from qfluentwidgets import Action, FluentIcon, RoundMenu, TreeWidget
 
+from ...core.config import config
 from ...services import CategoryNode, is_uncategorized
 
 ALL_ID = None
@@ -46,7 +47,11 @@ class CategoryTree(TreeWidget):
         self.customContextMenuRequested.connect(self._show_menu)
         self.itemSelectionChanged.connect(self._on_selection)
         self.itemChanged.connect(self._on_item_changed)
+        self.itemExpanded.connect(self._on_expansion_changed)
+        self.itemCollapsed.connect(self._on_expansion_changed)
         self._updating = False
+        # 用户手动展开 / 收起过的分类 id；None = 还没动过，按配置的默认值来
+        self._user_expanded: set | None = None
 
     # ------------------------------------------------------------------ 数据
     def set_nodes(
@@ -55,6 +60,7 @@ class CategoryTree(TreeWidget):
         total: int = 0,
         selected: int | None = None,
         checked: set[int] | None = None,
+        expand: bool | None = None,
     ) -> None:
         self.blockSignals(True)
         checked_ids = set(checked or ())
@@ -80,12 +86,35 @@ class CategoryTree(TreeWidget):
             else:
                 parent.addChild(item)
             items[node.category.id] = item
-            item.setExpanded(True)
+            item.setExpanded(self._wants_expanded(node.category.id, expand))
 
-        root.setExpanded(True)
+        root.setExpanded(self._wants_expanded(ALL_ID, expand))
         self._set_states(checked_ids)
         self.blockSignals(False)
         self.select_category(selected)
+
+    def _wants_expanded(self, key, expand: bool | None = None) -> bool:
+        """分类栏默认全部收起；用户动过展开状态之后，刷新时保持用户的选择。"""
+        if self._user_expanded is not None:
+            return key in self._user_expanded
+        if expand is None:
+            return bool(config.expandCategories.value)
+        return bool(expand)
+
+    def _on_expansion_changed(self, item: QTreeWidgetItem) -> None:
+        if self._updating:
+            return
+        if self._user_expanded is None:
+            self._user_expanded = {
+                current.data(0, Qt.ItemDataRole.UserRole)
+                for current in self._iter_items()
+                if current.isExpanded()
+            }
+        key = item.data(0, Qt.ItemDataRole.UserRole)
+        if item.isExpanded():
+            self._user_expanded.add(key)
+        else:
+            self._user_expanded.discard(key)
 
     def checked_categories(self) -> set[int]:
         """当前勾选的分类 id 集合（不含「全部数据」根节点）。"""

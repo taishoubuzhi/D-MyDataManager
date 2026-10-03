@@ -43,6 +43,25 @@ class LanguageSerializer(ConfigSerializer):
             return Language.CHINESE_SIMPLIFIED
 
 
+#: 「简化显示」的三个挡位：不简化 / 默认（只简化不会混淆的图标）/ 完全简化
+SIMPLE_NONE = "none"
+SIMPLE_DEFAULT = "default"
+SIMPLE_FULL = "full"
+SIMPLE_MODES = (SIMPLE_NONE, SIMPLE_DEFAULT, SIMPLE_FULL)
+
+
+class SimpleDisplayValidator(OptionsValidator):
+    """简化显示挡位：把旧版的布尔值换算成挡位（`true` → 完全简化、`false` → 不简化）。"""
+
+    def __init__(self) -> None:
+        super().__init__(list(SIMPLE_MODES))
+
+    def correct(self, value) -> str:
+        if isinstance(value, bool):
+            return SIMPLE_FULL if value else SIMPLE_NONE
+        return value if self.validate(value) else SIMPLE_DEFAULT
+
+
 class Config(QConfig):
     """全局配置对象。"""
 
@@ -58,6 +77,18 @@ class Config(QConfig):
     micaEnabled = ConfigItem("MainWindow", "MicaEnabled", True, BoolValidator())
     theme = OptionsConfigItem("MainWindow", "Theme", "auto", OptionsValidator(["light", "dark", "auto"]))
     currentUserId = RangeConfigItem("User", "Current-Id", 0, RangeValidator(0, 1_000_000_000))
+
+    # 布局：页面共用的显示偏好，页面打开时按这里的值恢复上一次的样子
+    pageSize = RangeConfigItem("Layout", "Page-Size", 50, RangeValidator(10, 1000))
+    showCategoryPanel = ConfigItem("Layout", "Show-Category-Panel", True, BoolValidator())
+    showFilterPanel = ConfigItem("Layout", "Show-Filter-Panel", True, BoolValidator())
+    expandCategories = ConfigItem("Layout", "Expand-Categories", False, BoolValidator())
+    expandedFilters = ConfigItem("Layout", "Expanded-Filters", [])
+    simpleDisplay = OptionsConfigItem(
+        "Layout", "Simple-Display", SIMPLE_DEFAULT, SimpleDisplayValidator()
+    )
+    # 悬停提示：鼠标停在按钮或标题上多久才弹出说明（毫秒，0 表示立刻弹出）
+    tooltipDelay = RangeConfigItem("Layout", "Tooltip-Delay", 2000, RangeValidator(0, 10_000))
 
     # 日志
     logLevel = OptionsConfigItem(

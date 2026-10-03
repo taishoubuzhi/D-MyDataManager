@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, QTimer, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QGridLayout,
@@ -28,9 +28,11 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
+from ...core.config import config
 from ...core.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
+from ..components import FlowArea
 from ..dialogs import TextInputDialog
 from ..framework import (
     DETAIL_MARGINS,
@@ -45,6 +47,7 @@ from ..framework import (
     highlight_hover,
     release_widget,
 )
+from ..framework import IconTextButton, IconTextPrimaryButton, icon_text_label
 
 # 卡片网格参数：卡片固定宽度，窄窗口 1 列，宽窗口最多 4 列。
 CARD_WIDTH = 320
@@ -52,8 +55,7 @@ CARD_MIN_WIDTH = 300
 CARD_MAX_COLUMNS = 4
 CARD_SPACING = 12
 
-# 卡片内部结构：首字头像 + 两列操作按钮网格。
-CARD_BUTTON_COLUMNS = 2
+# 卡片内部结构：首字头像 + 流式操作按钮区。
 AVATAR_SIZE = 40
 # ---------------------------------------------------------------------- 纯逻辑
 def grid_columns(
@@ -103,6 +105,21 @@ def card_summary(*, item_count: int, category_count: int, created_at: dt.datetim
     if created:
         parts.append(f"创建于 {created}")
     return " · ".join(parts)
+
+
+def card_info_lines(info) -> list[tuple[FluentIcon, str]]:
+    """卡片信息行：数据项、分类与创建时间各占一行。
+
+    卡片宽度固定（CARD_WIDTH），挤在一行里会被硬裁、也看不出重点，拆成一行一条更清楚。
+    """
+    lines = [
+        (FluentIcon.LIBRARY, f"{int(info.item_count)} 项数据"),
+        (FluentIcon.TILES, f"{int(info.category_count)} 个分类"),
+    ]
+    created = format_datetime(info.user.created_at, "%Y-%m-%d %H:%M")
+    if created:
+        lines.append((FluentIcon.DATE_TIME, f"创建于 {created}"))
+    return lines
 
 
 def card_permissions(
@@ -185,7 +202,7 @@ class UserPage(Page):
         self._cards: list[UserCard] = []
         self._columns = 0
 
-        self.create_button = PrimaryPushButton(FluentIcon.ADD, "新建用户", self)
+        self.create_button = IconTextPrimaryButton(FluentIcon.ADD, "新建用户", self)
         self.create_button.setToolTip("新建一个独立用户，数据与其他用户互不影响")
         self.create_button.clicked.connect(self._create_user)
         self.header.add_action(self.create_button)
@@ -215,6 +232,12 @@ class UserPage(Page):
         self.add_widget(card, 1)
 
         self.auto_refresh(signalBus.userChanged)
+        # 简化挡位切换会改变按钮尺寸，进而改变操作区占几行：等按钮重排完再重新等高
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._equalize_card_heights)
+        self._fit_rounds = 0
+        config.simpleDisplay.valueChanged.connect(self._schedule_card_fit)
         self.refresh()
 
     # ------------------------------------------------------------------ 卡片网格
@@ -240,6 +263,10 @@ class UserPage(Page):
             else "当前用户可以修改自己的用户名与口令（口令用于解锁隐藏数据），"
             "也可以清除自己的口令或删除自己——数据与标签会并入默认用户。"
         )
+        # 说明不铺在页面上：挂到标题的悬停提示里，跟着身份一起变
+        self.caption.setVisible(False)
+        if self.header is not None:
+            self.header.set_hint(self.caption.text())
         for card in self._cards:
             self.grid.removeWidget(card)
             release_widget(card)
@@ -248,8 +275,8 @@ class UserPage(Page):
             card = self._user_card(info)
             self._cards.append(card)
         self._columns = 0
-        self._equalize_card_heights()
         self._layout_cards(force=True)
+        self._schedule_card_fit()
 
     def _available_width(self) -> int:
         """网格可用宽度：优先取滚动区域视口宽度，减去左右留白。"""
@@ -288,14 +315,23 @@ class UserPage(Page):
             self.grid.setRowStretch(row, 0)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt 命名
-        """视口尺寸变化时重排卡片，保证卡片始终随可用宽度自适应。"""
-        if obj is self.scroll.viewport() and event.type() == QEvent.Type.Resize:
-            self._layout_cards()
+        """视口尺寸变化时重排卡片；操作区换行后的高度变化也要重新等高。"""
+        if event.type() == QEvent.Type.Resize:
+            if obj is self.scroll.viewport():
+                self._layout_cards()
+                self._schedule_card_fit()
+            elif any(obj is getattr(card, "actions_area", None) for card in self._cards):
+                self._schedule_card_fit()
         return super().eventFilter(obj, event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().resizeEvent(event)
         self._layout_cards()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        """页面重新可见时操作区才量得出高度（不可见时 sync_height 直接返回），补一次等高。"""
+        super().showEvent(event)
+        self._schedule_card_fit()
 
     def _user_card(self, info) -> UserCard:
         card = UserCard(self.grid_host)
@@ -332,18 +368,20 @@ class UserPage(Page):
         title_row.addStretch(1)
         info_box.addLayout(title_row)
 
-        summary = BodyLabel(
+        # 摘要挂在卡片提示里，卡片上改成一行一条的图标说明：固定宽度下不会被裁掉
+        card.setToolTip(
             card_summary(
                 item_count=info.item_count,
                 category_count=info.category_count,
                 created_at=info.user.created_at,
-            ),
-            card,
+            )
         )
-        summary.setToolTip(summary.text())
-        info_box.addWidget(summary)
         header.addLayout(info_box, 1)
         layout.addLayout(header)
+        # 信息行放在头像行下面、占满卡片宽度：挤在头像右侧的窄列里会被裁掉
+        for line_icon, line_text in card_info_lines(info):
+            # 这几行只有图标看不懂（几项数据 / 几个分类 / 创建时间），不跟着「简化显示」藏文字
+            layout.addWidget(icon_text_label(line_icon, line_text, card, keep_text=True))
 
         # ③ 操作区：两列按钮网格，保证 CARD_WIDTH 下按钮完整显示。
         allow = card_permissions(
@@ -354,7 +392,7 @@ class UserPage(Page):
         )
         buttons: list[PushButton] = []
 
-        switch_button = PushButton(
+        switch_button = IconTextButton(
             FluentIcon.SYNC, "当前用户" if mine else "切换为当前用户", card
         )
         switch_button.setEnabled(allow["switch"])
@@ -365,44 +403,40 @@ class UserPage(Page):
         card.switch_button = switch_button
 
         if allow["rename"]:
-            rename_button = PushButton(FluentIcon.EDIT, "重命名", card)
+            rename_button = IconTextButton(FluentIcon.EDIT, "重命名", card)
             rename_button.clicked.connect(lambda _=False, item=info: self._rename_user(item))
             buttons.append(rename_button)
 
         if allow["password"]:
-            password_button = PushButton(FluentIcon.FINGERPRINT, "口令", card)
+            password_button = IconTextButton(FluentIcon.FINGERPRINT, "口令", card)
             password_button.clicked.connect(lambda _=False, item=info: self._set_password(item))
             buttons.append(password_button)
 
         if allow["clear_password"]:
-            clear_button = PushButton(FluentIcon.BROOM, "清除口令", card)
+            clear_button = IconTextButton(FluentIcon.BROOM, "清除口令", card)
             clear_button.clicked.connect(lambda _=False, item=info: self._clear_password(item))
             buttons.append(clear_button)
 
         card.delete_button = None
         if allow["delete"]:
-            delete_button = PushButton(FluentIcon.DELETE, "删除", card)
+            delete_button = IconTextButton(FluentIcon.DELETE, "删除", card)
             delete_button.clicked.connect(lambda _=False, item=info: self._delete_user(item))
             buttons.append(delete_button)
             card.delete_button = delete_button
         elif mine and not info.is_default:
             # 当前用户不允许删除自己：按钮保留但禁用，说明要先切换用户。
-            delete_button = PushButton(FluentIcon.DELETE, "删除", card)
+            delete_button = IconTextButton(FluentIcon.DELETE, "删除", card)
             delete_button.setEnabled(False)
             delete_button.setToolTip("不能删除当前用户，请先切换到其他用户再删除")
             buttons.append(delete_button)
             card.delete_button = delete_button
 
-        buttons_grid = QGridLayout()
-        buttons_grid.setHorizontalSpacing(6)
-        buttons_grid.setVerticalSpacing(6)
-        for index, button in enumerate(buttons):
-            buttons_grid.addWidget(
-                button, index // CARD_BUTTON_COLUMNS, index % CARD_BUTTON_COLUMNS
-            )
-        for column in range(CARD_BUTTON_COLUMNS):
-            buttons_grid.setColumnStretch(column, 1)
-        layout.addLayout(buttons_grid)
+        # 操作区按按钮自己的文字宽度流式排列：简化显示下按钮缩成方形，两列网格会各占一格、显得很空
+        actions = FlowArea(card, horizontal_spacing=6, vertical_spacing=6)
+        actions.add_widgets(buttons)
+        layout.addWidget(actions)
+        card.actions_area = actions
+        actions.installEventFilter(self)
         return card
 
     def _avatar(self, info, highlighted: bool) -> QLabel:
@@ -413,14 +447,42 @@ class UserPage(Page):
         avatar.setStyleSheet(avatar_style(highlighted))
         return avatar
 
+    def _schedule_card_fit(self, *_args) -> None:
+        """高度要等布局跑完才量得准（操作区是流式容器），延后一轮重新等高。"""
+        self._fit_timer.start(0)
+
     def _equalize_card_heights(self) -> None:
-        """所有卡片统一为最大内容高度，保证网格行列对齐。"""
-        heights = [card.sizeHint().height() for card in self._cards]
+        """所有卡片统一为最大内容高度，保证网格行列对齐。
+
+        操作区（FlowArea）的高度取决于它自己的宽度，所以先按当前宽度同步一次再量，
+        否则卡片会按「没有操作区」的高度定死，按钮被卡片下边缘裁掉。
+        """
+        self.grid.activate()
+        heights: list[int] = []
+        for card in self._cards:
+            area = getattr(card, "actions_area", None)
+            if area is not None:
+                area.sync_height()
+            card_layout = card.layout()
+            if card_layout is not None:
+                card_layout.activate()
+            area = getattr(card, "actions_area", None)
+            if area is not None:
+                area.sync_height()
+            heights.append(card.sizeHint().height())
         if not heights:
             return
         height = max(heights)
         for card in self._cards:
-            card.setFixedHeight(height)
+            if card.height() != height or card.minimumHeight() != height:
+                card.setFixedHeight(height)
+        # 页面隐藏期间操作区量不到宽度，这时定下的高度会偏小：内容还需要更高时再排一轮
+        if any(card.sizeHint().height() > height for card in self._cards):
+            self._fit_rounds += 1
+            if self._fit_rounds <= 3:
+                self._schedule_card_fit()
+        else:
+            self._fit_rounds = 0
 
     # ------------------------------------------------------------------ 操作
     def _ask(self, title: str, placeholder: str = "", hint: str = "", text: str = "") -> str | None:

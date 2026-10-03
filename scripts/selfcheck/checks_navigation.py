@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .harness import Case, build_window, check, dispose_window
+from .harness import Case, build_window, check, dispose_window, ensure_app
 
 HOME_ROUTE = "homePage"
 IMPORT_ROUTE = "importPage"
@@ -59,6 +59,7 @@ def _write_page_plugin(folder: Path) -> Path:
                 "id": PLUGIN_ID,
                 "name": "自检导航插件",
                 "version": "1.0.0",
+                "api_version": ">=1.0 <2.0",
                 "description": "自检用：往界面里加一个页面。",
                 "author": "selfcheck",
                 "entry": "plugin.py",
@@ -291,4 +292,40 @@ def navigation_workbench(case: Case) -> None:
     assert not problems, "导航工作台检查未通过：" + "；".join(problems)
 
 
-__all__ = ["navigation_workbench"]
+@check("workbench_lists_builtin_pages", "pages")
+def workbench_lists_builtin_pages(case: Case) -> None:
+    """「页面管理」启动时就列出全部内置页面：没有插件页面时也不能是空页。
+
+    `PageBase.auto_refresh` 只连信号、不会立刻刷新，而插件又是在主窗口之前载入的，
+    所以这里不借助自检基座的逐个刷新，直接构造主窗口看页面自己有没有填一次。
+    """
+    from app.ui.main_window import BUILTIN_PAGES, MainWindow
+
+    ensure_app()
+    window = MainWindow()
+    problems: list[str] = []
+    try:
+        rows = window.workbench_page.rows
+        want = [title for _attr, title, _icon, _bottom in BUILTIN_PAGES]
+        titles = [row.title_text for row in rows]
+        _expect(problems, titles == want, f"页面管理应列出全部内置页面 {want}，实际 {titles}")
+        for attr, title, _icon, _bottom in BUILTIN_PAGES:
+            row = window.workbench_page.row_for(getattr(window, attr).objectName())
+            _expect(problems, row is not None, f"页面管理缺少「{title}」的行")
+            if row is not None:
+                _expect(problems, getattr(row, "open_button", None) is not None, f"「{title}」行应有「打开」按钮")
+        if rows:
+            first = window.workbench_page.row_for(getattr(window, "home_page").objectName())
+            if first is not None:
+                first.open_button.click()
+            _expect(
+                problems,
+                window.stackedWidget.currentWidget() is window.home_page,
+                f"点「首页」行的「打开」应切到首页，实际 {window.stackedWidget.currentWidget()}",
+            )
+    finally:
+        dispose_window(window)
+    assert not problems, "页面管理页未通过：" + "；".join(problems)
+
+
+__all__ = ["navigation_workbench", "workbench_lists_builtin_pages"]

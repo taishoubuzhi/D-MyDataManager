@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl
+from app.sdk.ui import IconTextButton
 try:  # 环境缺少 QtMultimedia 时库本身仍然可用，只有用到播放器时才会报错
     from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
     from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -84,7 +85,7 @@ class MediaViewer(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
-        self._play_button = PushButton(FluentIcon.PLAY, "播放", self)
+        self._play_button = IconTextButton(FluentIcon.PLAY, "播放", self)
         self._play_button.clicked.connect(self._toggle)
         bar.addWidget(self._play_button)
         self._position_label = CaptionLabel("0:00", self)

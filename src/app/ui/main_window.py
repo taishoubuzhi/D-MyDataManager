@@ -88,6 +88,8 @@ class MainWindow(FluentWindow):
             position = NavigationItemPosition.BOTTOM if bottom else NavigationItemPosition.TOP
             self.addSubInterface(getattr(self, attr), icon, title, position)
         self._sync_plugin_pages()
+        # 「页面管理」列出全部页面：启动时自己填一次，没有插件页面也不能是空页。
+        self.workbench_page.refresh()
 
     # ------------------------------------------------------ 插件界面
     def _app_ui(self):

@@ -90,6 +90,13 @@ def reset_config(root: Path) -> None:
     config.set(config.keepVersions, 10)
     config.set(config.keepSize, 2048)
     config.set(config.keepDays, 30)
+    config.set(config.pageSize, 50)
+    config.set(config.showCategoryPanel, True)
+    config.set(config.showFilterPanel, True)
+    config.set(config.expandCategories, False)
+    config.set(config.expandedFilters, [])
+    config.set(config.simpleDisplay, "none")
+    config.set(config.tooltipDelay, 2000)
 
 
 def reset_runtime_dirs() -> None:

@@ -2,6 +2,7 @@
   "id": "builtin.lib.dialog",
   "name": "内置弹窗工具库",
   "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
   "description": "弹窗工具库：在程序本体之外弹出独立窗口；其他插件（如七个查看器）依赖它来显示自己的页面。",
   "author": "D-MyDataManager",
   "builtin": true,

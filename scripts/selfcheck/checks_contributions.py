@@ -24,6 +24,7 @@ def _sample_manifest() -> dict:
     assert manifest.is_file(), f"缺少界面扩展示例插件：{manifest}"
     data = json.loads(manifest.read_text(encoding="utf-8"))
     assert data.get("id") == SAMPLE_ID, f"示例插件清单 id 不是 {SAMPLE_ID}：{data.get('id')!r}"
+    assert data.get("builtin") is True, f"示例插件随程序一起分发，清单应写 builtin: true：{manifest}"
     return data
 
 

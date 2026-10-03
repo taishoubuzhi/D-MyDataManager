@@ -10,6 +10,7 @@ from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton
 
 from app.sdk.data import read_text
 from app.sdk.ui import COMPACT_MARGINS
+from app.sdk.ui import IconTextButton
 
 RENDER_INDEX = 0
 SOURCE_INDEX = 1
@@ -37,7 +38,7 @@ class MarkdownViewer(QWidget):
 
         bar = QHBoxLayout()
         bar.setSpacing(8)
-        self._toggle_button = PushButton(FluentIcon.CODE, "查看源码", self)
+        self._toggle_button = IconTextButton(FluentIcon.CODE, "查看源码", self)
         self._toggle_button.clicked.connect(self._toggle)
         bar.addWidget(self._toggle_button)
         bar.addStretch(1)

@@ -45,6 +45,7 @@ from ..framework import (
     type_name,
 )
 from ..framework.contributions import icon_of, items, text_of, title_of, value_of
+from ..framework import IconTextButton, IconTextPrimaryButton, icon_label
 
 KPI_TITLES = ("数据总量", "占用空间", "今日导入", "用户数", "分类", "标签数", "存档数")
 
@@ -56,6 +57,17 @@ KPI_ICONS: dict[str, FluentIcon] = {
     "分类": FluentIcon.LIBRARY,
     "标签数": FluentIcon.TAG,
     "存档数": FluentIcon.HISTORY,
+}
+
+#: 每个 KPI 卡片的悬停说明：鼠标停在卡片（含里面的数字与标题）上才显示
+KPI_HINTS: dict[str, str] = {
+    "数据总量": "当前用户的数据条数；副标题是今天新增的数量",
+    "占用空间": "数据本身占用的空间；副标题是资源文件夹在磁盘上的实际占用",
+    "今日导入": "今天导入的数据条数；副标题是最近 7 天的导入量",
+    "用户数": "本机的用户数量；副标题是当前用户的分类数量",
+    "分类": "当前用户的分类数量；副标题是标签数量",
+    "标签数": "当前用户的标签数量；副标题是回收站里的数据条数",
+    "存档数": "当前用户的存档数量；副标题是检测到的重复内容组数",
 }
 
 
@@ -113,14 +125,23 @@ class StatCard(CardWidget):
         caption = CaptionLabel(title, self)
         self._value = TitleLabel("0", self)
         self._sub = CaptionLabel("", self)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(4)
+        title_row.addWidget(caption)
+        title_row.addStretch(1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(*DETAIL_MARGINS)
         layout.setSpacing(2)
         layout.addWidget(icon_label)
         layout.addWidget(self._value)
-        layout.addWidget(caption)
+        layout.addLayout(title_row)
         layout.addWidget(self._sub)
+
+    def set_hint(self, text: str) -> None:
+        """卡片说明：整张卡片都带提示，鼠标停上去就弹出来。"""
+        self.setToolTip(text)
 
     def set_value(self, value: str, sub: str = "") -> None:
         self._value.setText(value)
@@ -191,7 +212,7 @@ class HomePage(ScrollPage):
         self.user_box.setMinimumWidth(150)
         self.user_box.setToolTip("切换当前用户；数据管理、标签、存档等页面会随之切换")
         self.user_box.currentIndexChanged.connect(self._on_user_changed)
-        self.header.add_action(CaptionLabel("当前用户", self.header))
+        self.header.add_action(icon_label(FluentIcon.PEOPLE, "当前用户", self.header))
         self.header.add_action(self.user_box)
 
         cards_card, cards_body = self.add_section("概览", "当前用户的数据总量、占用空间与今日导入情况")
@@ -203,19 +224,18 @@ class HomePage(ScrollPage):
         actions_card, actions_body = self.add_section(
             "快捷操作", "常用入口：导入数据、管理数据、打开资源文件夹与新建存档"
         )
-        self.actions_host = FlowArea(
-            actions_card, adaptive=True, minimum_width=120, horizontal_spacing=8, vertical_spacing=8
-        )
-        import_button = PrimaryPushButton(FluentIcon.ADD, "导入数据", self.actions_host)
+        # 普通流式布局：按钮保持自己的宽度换行，不会被等分压窄到文字显示不全
+        self.actions_host = FlowArea(actions_card, horizontal_spacing=8, vertical_spacing=8)
+        import_button = IconTextPrimaryButton(FluentIcon.ADD, "导入数据", self.actions_host)
         import_button.setToolTip("导入文件或文件夹，自动去重并记录特征")
         import_button.clicked.connect(lambda: signalBus.requestImport.emit())
-        manage_button = PushButton(FluentIcon.FOLDER, "数据管理", self.actions_host)
+        manage_button = IconTextButton(FluentIcon.FOLDER, "数据管理", self.actions_host)
         manage_button.setToolTip("打开数据管理页，筛选、编辑与批量操作")
         manage_button.clicked.connect(lambda: signalBus.requestManage.emit())
-        folder_button = PushButton(FluentIcon.FOLDER_ADD, "打开资源文件夹", self.actions_host)
+        folder_button = IconTextButton(FluentIcon.FOLDER_ADD, "打开资源文件夹", self.actions_host)
         folder_button.setToolTip("在资源管理器中打开资源文件夹（库内容与数据库文件都在这里）")
         folder_button.clicked.connect(self._open_resource_folder)
-        archive_button = PushButton(FluentIcon.HISTORY, "新建存档", self.actions_host)
+        archive_button = IconTextButton(FluentIcon.HISTORY, "新建存档", self.actions_host)
         archive_button.setToolTip("为当前数据创建一份存档快照")
         archive_button.clicked.connect(self._create_archive)
         self.actions_host.add_widgets((import_button, manage_button, folder_button, archive_button))
@@ -276,6 +296,7 @@ class HomePage(ScrollPage):
         self.kpi_cards = []
         for title, value, sub in entries:
             card = StatCard(title, KPI_ICONS.get(title, FluentIcon.LABEL), self.cards_host)
+            card.set_hint(KPI_HINTS.get(title, ""))
             card.set_value(value, sub)
             self.cards_host.add_widget(card)
             self.kpi_cards.append(card)
@@ -297,6 +318,8 @@ class HomePage(ScrollPage):
         for item in items(ExtensionPoint.HOME_KPI):
             data = value_of(item)
             card = StatCard(title_of(item), icon_of(data.get("icon")), self.cards_host)
+            # 插件也可以在卡片数据里给一句 hint，作为悬停说明
+            card.set_hint(text_of(data.get("hint")))
             card.set_value(text_of(data.get("value")), text_of(data.get("sub")))
             self.cards_host.add_widget(card)
             self.plugin_cards.append(card)

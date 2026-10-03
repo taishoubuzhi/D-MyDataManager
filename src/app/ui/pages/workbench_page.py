@@ -20,6 +20,7 @@ from qfluentwidgets import (
 
 from ...core.signals import signalBus
 from ..framework import COMPACT_MARGINS, ROW_SPACING, ScrollPage, clear_layout
+from ..framework import IconTextButton
 
 #: 本页自己的路由名。
 WORKBENCH_ROUTE = "workbenchPage"
@@ -64,7 +65,8 @@ class WorkbenchPage(ScrollPage):
         super().__init__(parent)
         self.section_card, self.rows_layout = self.add_section(
             "页面",
-            "内置页面固定在左侧导航里（设置在最下面），插件页面按载入顺序追加。",
+            "内置页面与插件页面都在这里列出，点「打开」即可切过去；左侧导航顺序固定：设置恒在最下面，"
+            "插件页面按载入顺序追加，追加不下的只在这里打开。",
         )
         self.rows_layout.setSpacing(ROW_SPACING)
         self.rows: list[QWidget] = []
@@ -107,7 +109,7 @@ class WorkbenchPage(ScrollPage):
         text.addWidget(CaptionLabel(f"{entry.kind_text} · {entry.place_text}", row))
         layout.addLayout(text, 1)
 
-        open_button = PushButton(FluentIcon.VIEW, "打开", row)
+        open_button = IconTextButton(FluentIcon.VIEW, "打开", row)
         open_button.clicked.connect(lambda: self._on_open(entry.route))
         layout.addWidget(open_button)
 

@@ -451,15 +451,31 @@ def plugin_page_detail(case: Case) -> None:
             )
             _expect(
                 problems,
-                page.count_label.text() == f"{expected_total} / {expected_total} 个插件",
+                page.count_label.text() == f"共 {expected_total} 个插件",
                 f"插件计数文案不对：{page.count_label.text()!r}",
             )
+            _expect(problems, page.reset_button.isHidden(), "没有筛选时不该出现「清除筛选」按钮")
 
             by_point = _point_counts()
             for point, expected in {**by_point, "": expected_total}.items():
                 page.apply_contribution(point)
                 got = len(_listed_plugin_ids(page))
                 _expect(problems, got == expected, f"贡献 {point or '全部'} 应筛出 {expected} 个插件，实际 {got}")
+                _expect(
+                    problems,
+                    page.count_label.text()
+                    == (
+                        f"已筛选：{expected} / 共 {expected_total} 个插件"
+                        if point
+                        else f"共 {expected_total} 个插件"
+                    ),
+                    f"贡献 {point or '全部'} 的计数文案不对：{page.count_label.text()!r}",
+                )
+                _expect(
+                    problems,
+                    page.reset_button.isHidden() is not bool(point),
+                    f"贡献 {point or '全部'} 的「清除筛选」可见性不对",
+                )
             _expect(problems, ExtensionPoint.VIEWER in by_point, f"应有登记 {ExtensionPoint.VIEWER} 贡献的插件")
             page.apply_contribution("app.ui.nonexistent")
             _expect(problems, page.point_box.currentData() in ("", None), "未知贡献应回到「全部贡献」")
@@ -495,7 +511,7 @@ def plugin_page_detail(case: Case) -> None:
             info = plugin_service.get("builtin.image")
             _expect(problems, info is not None and info.has_options, "内置图片插件应声明可配置选项")
             protocol = page.detail_protocol.text()
-            for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适用管理器版本", "入口文件"):
+            for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适配 SDK", "适用管理器版本", "入口文件"):
                 _expect(problems, label in protocol, f"协议行缺少「{label}」：{protocol!r}")
             _expect(problems, f"插件选项（{len(info.options)}）" in page.detail_options.text(), f"选项行不对：{page.detail_options.text()!r}")
             _expect(problems, "plugin.json" in page.detail_path.text(), f"应显示清单路径，实际 {page.detail_path.text()!r}")

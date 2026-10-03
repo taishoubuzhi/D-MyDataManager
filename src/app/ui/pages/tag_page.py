@@ -27,6 +27,7 @@ from ..components.data_table import (
     match_filters,
     prepare_table,
 )
+from ..framework import IconTextButton, IconTextPrimaryButton
 
 #: 表格第一列是批量操作勾选框，其余列依次对应 名称 / 归属 / 创建者 / 数据项数。
 TAG_CHECK_COLUMN = 0
@@ -65,7 +66,7 @@ class TagPage(Page):
 
         self.global_box = CheckBox("新建时设为全局标签", self)
         self.header.add_action(self.global_box)
-        self.create_button = PrimaryPushButton(FluentIcon.ADD, "新建标签", self)
+        self.create_button = IconTextPrimaryButton(FluentIcon.ADD, "新建标签", self)
         self.create_button.clicked.connect(self._on_create)
         self.header.add_action(self.create_button)
 
@@ -78,7 +79,7 @@ class TagPage(Page):
             ("删除", FluentIcon.DELETE, self._on_delete),
             ("清理未使用标签", FluentIcon.BROOM, self._on_cleanup),
         ):
-            button = PushButton(icon, text, self)
+            button = IconTextButton(icon, text, self)
             button.clicked.connect(slot)
             actions.addWidget(button)
         actions.addStretch(1)
@@ -95,7 +96,7 @@ class TagPage(Page):
         self.filter_caption = CaptionLabel("", self)
         info_row.addWidget(self.filter_caption)
         info_row.addStretch(1)
-        reset_button = PushButton(FluentIcon.CLEAR_SELECTION, "重置筛选", self)
+        reset_button = IconTextButton(FluentIcon.CLEAR_SELECTION, "重置筛选", self)
         reset_button.clicked.connect(self._on_reset_filters)
         info_row.addWidget(reset_button)
         self.add_row(info_row)
@@ -189,26 +190,26 @@ class TagPage(Page):
         self.selection_label = CaptionLabel("未选择标签", parent)
         bar.addWidget(self.selection_label)
 
-        self.select_all_button = PushButton(FluentIcon.ACCEPT, "全选", parent)
+        self.select_all_button = IconTextButton(FluentIcon.ACCEPT, "全选", parent)
         self.select_all_button.setToolTip("勾选当前显示的全部标签")
         self.select_all_button.clicked.connect(self.select_all)
-        self.select_none_button = PushButton(FluentIcon.CLOSE, "全不选", parent)
+        self.select_none_button = IconTextButton(FluentIcon.CLOSE, "全不选", parent)
         self.select_none_button.setToolTip("取消全部勾选")
         self.select_none_button.clicked.connect(self.select_none)
-        self.invert_button = PushButton(FluentIcon.SYNC, "反选", parent)
+        self.invert_button = IconTextButton(FluentIcon.SYNC, "反选", parent)
         self.invert_button.setToolTip("反转当前显示标签的勾选状态")
         self.invert_button.clicked.connect(self.invert_selection)
         for button in (self.select_all_button, self.select_none_button, self.invert_button):
             bar.addWidget(button)
         bar.addStretch(1)
 
-        self.batch_global_button = PushButton(FluentIcon.GLOBE, "批量转为全局", parent)
+        self.batch_global_button = IconTextButton(FluentIcon.GLOBE, "批量转为全局", parent)
         self.batch_global_button.setToolTip("把勾选的标签转为全局标签；只有创建者能改归属")
         self.batch_global_button.clicked.connect(lambda: self._on_batch_switch_global(True))
-        self.batch_personal_button = PushButton(FluentIcon.PEOPLE, "批量转为个人", parent)
+        self.batch_personal_button = IconTextButton(FluentIcon.PEOPLE, "批量转为个人", parent)
         self.batch_personal_button.setToolTip("把勾选的标签转为个人标签；只有创建者能改归属")
         self.batch_personal_button.clicked.connect(lambda: self._on_batch_switch_global(False))
-        self.batch_delete_button = PushButton(FluentIcon.DELETE, "批量删除", parent)
+        self.batch_delete_button = IconTextButton(FluentIcon.DELETE, "批量删除", parent)
         self.batch_delete_button.setToolTip("删除勾选的标签；只有创建者能删除")
         self.batch_delete_button.clicked.connect(self._on_batch_delete)
         for button in (self.batch_global_button, self.batch_personal_button, self.batch_delete_button):

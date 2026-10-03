@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QFileDialog, QFrame, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PushButton
 
 from ..framework import accent_color
+from ..framework import IconTextButton
 
 
 def _frame_qss() -> str:
@@ -59,7 +60,7 @@ class DropArea(QWidget):
         )
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        browse = PushButton(FluentIcon.FOLDER_ADD, "选择文件", self._frame)
+        browse = IconTextButton(FluentIcon.FOLDER_ADD, "选择文件", self._frame)
         browse.clicked.connect(self.browse)
 
         inner = QVBoxLayout(self._frame)
