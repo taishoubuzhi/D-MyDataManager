@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from loguru import logger
+from app.sdk.console import console_for
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon
 
@@ -19,6 +19,8 @@ from dm_plugin.builtin.lib.ui.plugin import (
     strong_label,
     toolbar,
 )
+
+_console = console_for("builtin.lib.viewer")
 
 #: 默认的弹窗扩展接口名（弹窗工具库 builtin.lib.ui 提供）
 DEFAULT_HOST = "dialog"
@@ -67,7 +69,7 @@ class ViewerWindow(QWidget):
         try:
             widget = self.build(self.content)
         except Exception as exc:  # 查看器异常不应影响主界面
-            logger.exception("创建查看器控件失败：{}", self.viewer_name)
+            _console.exception(f"创建查看器控件失败：{self.viewer_name}")
             self._show_hint(f"内置查看器无法显示该文件：{exc}")
             return
         self.content_widget = widget

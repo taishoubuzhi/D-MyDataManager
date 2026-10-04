@@ -20,7 +20,7 @@ from typing import Any
 
 from loguru import logger
 
-__all__ = ["config_dir", "config_file", "read_json", "write_json"]
+__all__ = ["config_dir", "config_file", "data_dir", "read_json", "resources_dir", "write_json"]
 
 
 def config_dir() -> Path:
@@ -33,6 +33,24 @@ def config_dir() -> Path:
 def config_file(name: str) -> Path:
     """配置目录下的一个文件名（只取末段文件名，避免越界写到别处）。"""
     return config_dir() / Path(str(name)).name
+
+
+def resources_dir() -> Path:
+    """资源文件夹根目录（`.resources`，用户可在设置里改到别处）。
+
+    插件需要放大文件（模型权重、缓存等）时用它，别写进插件自己的目录：
+    插件目录在覆盖安装时会被整个删掉重建。
+    """
+    from ..core import paths
+
+    return paths.DATA_DIR
+
+
+def data_dir(name: str) -> Path:
+    """资源文件夹下的一个子目录（按需创建）；只取目录名，避免越界写到别处。"""
+    target = resources_dir() / Path(str(name)).name
+    target.mkdir(parents=True, exist_ok=True)
+    return target
 
 
 def read_json(path: str | Path, default: Any = None) -> Any:

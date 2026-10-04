@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from loguru import logger
+from app.sdk.console import console_for
+
+_console = console_for("builtin.lib.viewer")
 
 #: 没有特别指定时的宿主扩展接口名
 DEFAULT_HOST = "dialog"
@@ -38,7 +40,7 @@ def open_page_via_host(ctx, target: Path, factory, name: str, host: str, parent=
             meta=name,
         )
     except Exception as exc:  # 查看器异常不应影响主界面
-        logger.exception("打开查看器失败：{}", target)
+        _console.exception(f"打开查看器失败：{target}")
         return False, f"打开查看器失败：{exc}"
     return True, name
 
@@ -53,7 +55,7 @@ def open_viewer(ctx, viewer, path: str | Path, parent=None) -> tuple[bool, str]:
         try:
             return opener(target, parent)
         except Exception as exc:
-            logger.exception("查看器打开失败：{}", target)
+            _console.exception(f"查看器打开失败：{target}")
             return False, f"打开查看器失败：{exc}"
     factory = getattr(viewer, "factory", None)
     if factory is None:

@@ -235,6 +235,51 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
   最多显示 7 个，追加不下的只出现在内置的「页面管理」页里（那一页每行点整行即进入该页面）。
 - 页面挂了 `session` 之类资源时，在 `Plugin.teardown()` 里释放（主窗口关闭时也会逐个调用）。
 
+### 3.4 扩展接口：`model.open`（模型调度）
+
+`model.open` 不是扩展点，而是**扩展接口**（插件用 `ctx.provide("model.open", ModelOpenApi(...))` 提供、消费方 `ctx.require("model.open")` 取用）：
+程序侧门面是 `app.sdk.models`（`list_models()` / `model_by_id()` / `capabilities()` / `loaded()` / `acquire()` / `invoke()`），
+由内置库插件 `builtin.lib.model` 实现，成员与用法见 [`builtin.lib.model/PLUGIN.md`](builtin.lib.model/PLUGIN.md)；
+完整的消费方写法（按能力取租约 → 调用 → 归还 + 没有模型时的降级）见示例插件 [`example.model_usage/PLUGIN.md`](example.model_usage/PLUGIN.md)。
+同类的运行期接口还有查看器的 `viewer.open` 与编辑器的 `editor.open`（分别见 `builtin.lib.viewer/PLUGIN.md` / `builtin.lib.editor/PLUGIN.md`）。
+
+### 3.5 扩展接口：`console.output`（控制台输出）
+
+`console.output` 是扩展接口：**程序本体实现、插件只消费**。插件侧门面是 `app.sdk.console`，
+`ctx.console` 就是已经绑好来源（插件 id）的 `Console`：
+
+```python
+ctx.console.stage("下载权重", "第 2 片")     # … | INFO | builtin.lib.model | page.py:123 | [下载权重] 第 2 片
+ctx.console.progress(3, 10, "解压")          # … | INFO | builtin.lib.model | page.py:124 | 进度 解压 3/10
+ctx.console.warning("模型没登记，走降级分支")
+```
+
+控制台与文件日志共用一套格式（`app.core.logging_setup.DEFAULT_FORMAT`）：
+
+    时间 | 级别 | 来源 | 函数:行 | 消息
+
+「来源」列由 `emit()` 保证填对：调用点在插件里就是插件 id，在程序里就是 `app.<模块>`；`函数:行` 用
+`logger.opt(depth=…)` 跳过门面与 `console.output` 实现，指到真正发那行日志的位置。正文里**不要**再自己拼
+`[来源]` 前缀（那会污染消息），阶段前缀由 `stage` 参数拼成 `[下载权重] 第 2 片`。
+
+| 调用 | 说明 |
+| --- | --- |
+| `info / success / warning / error / debug(message, *, source="", stage="")` | 按级别各写一行 |
+| `write(message, *, level="info", source="", stage="")` | 级别用字符串给（`progress` 会加「进度 」前缀） |
+| `stage(name, message="", *, level="info")` | 阶段播报：`stage("下载", "开始")` → `[下载] 开始` |
+| `progress(done, total=None, message="")` | 进度播报：`progress(3, 10, "解压")` → `进度 解压 3/10` |
+
+- 程序没有提供实现时（脚本、单测）**直接落 loguru**，插件不需要判断运行环境；
+- 插件里**不要**直接 `import loguru`：一律走 `ctx.console` / `console_for("插件.id")`，来源、函数行号、级别才统一
+  （自检 `plugin_logging_via_sdk` 会扫插件源码拦这条）；
+- 插件侧优先用 `ctx.console`；拿不到 ctx 的地方用 `app.sdk.console.console_for("插件.id")`；
+  什么都不传来源也可以（`console_for()`）；
+- 程序侧实现是 `app.services.console_service.ConsoleOutput`（在 `src/main.py` 用
+  `plugin_service.bootstrap(CONSOLE_EXTENSION, ConsoleOutput())` 挂上）；
+  把设置里「日志 → 输出到控制台」关掉后，插件播报只会进文件日志；
+- 加载某类数据、进到某个阶段时都建议播报一句（模型工具库的安装 / 卸载 / 设备探测已经这么做），
+  方便用户和作者定位「卡在哪一步」。
+
 ## 4. 事件
 
 程序在状态变化后广播事件；插件用 `ctx.on(event, handler)` 订阅，处理函数必须能接住关键字参数：

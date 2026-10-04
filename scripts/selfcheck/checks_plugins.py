@@ -554,3 +554,55 @@ def plugin_load_summary(case: Case) -> None:
     assert any("插件扫描完成：发现 " in text for text in records), "插件扫描结果没有写到控制台"
     assert any("插件载入：共 " in text for text in records), "插件载入汇总没有写到控制台"
 
+
+@check("sdk_console_output", "services")
+def sdk_console_output(case: Case) -> None:
+    """控制台输出接口：默认落 loguru，程序提供实现时转发，插件侧用 ctx.console 播报。"""
+    from loguru import logger
+
+    from app.core.extensions import extension_registry
+    from app.sdk import console as console_api
+    from app.sdk.context import PluginContext
+
+    assert callable(console_api.write) and callable(console_api.stage), "SDK 缺少控制台播报函数"
+    assert isinstance(PluginContext.console, property), "插件上下文没有 console 属性"
+
+    records: list[str] = []
+    sources: list[str] = []
+    sink = logger.add(lambda message: records.append(str(message)), level="DEBUG", format="{message}")
+    # 来源走 loguru 的 extra（统一格式里的「来源」列），不在消息正文里拼前缀
+    source_sink = logger.add(
+        lambda message: sources.append(str(message.record["extra"].get("source") or "")),
+        level="DEBUG",
+        format="{message}",
+    )
+    previous = extension_registry.provider(console_api.CONSOLE_EXTENSION)
+    owner = extension_registry.provider_plugin(console_api.CONSOLE_EXTENSION)
+    try:
+        extension_registry.provide(console_api.CONSOLE_EXTENSION, None, "")
+        assert not console_api.available(), "没有实现时 available() 应为假"
+        console_api.info("自检：默认输出", source="selfcheck")
+        console_api.stage("自检阶段", "开始")
+        console_api.progress(1, 2, "数数")
+        assert any("自检：默认输出" in text for text in records), f"默认输出没落到日志：{records}"
+        assert "selfcheck" in sources, f"来源没有带进日志：{sources}"
+        assert any("[自检阶段] 开始" in text for text in records), f"阶段前缀不对：{records}"
+        assert any("进度 数数 1/2" in text for text in records), f"进度格式不对：{records}"
+
+        calls: list[dict[str, str]] = []
+
+        class _FakeOutput:
+            def write(self, *, level: str = "info", message: str = "", source: str = "", stage: str = "") -> None:
+                calls.append({"level": level, "message": message, "source": source, "stage": stage})
+
+        extension_registry.provide(console_api.CONSOLE_EXTENSION, _FakeOutput(), "console-selfcheck")
+        assert console_api.available(), "提供实现后 available() 应为真"
+        console_api.console_for("builtin.lib.model").success("转发成功")
+        assert calls == [
+            {"level": "success", "message": "转发成功", "source": "builtin.lib.model", "stage": ""}
+        ], f"程序接口没收到转发：{calls}"
+    finally:
+        logger.remove(source_sink)
+        logger.remove(sink)
+        extension_registry.drop_plugin("console-selfcheck")
+        extension_registry.provide(console_api.CONSOLE_EXTENSION, previous, owner)

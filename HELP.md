@@ -52,14 +52,26 @@
   存档记录 `ArchiveEntry.is_hidden`（schema 5 → 6），还原时按存档把隐藏状态对齐回来（内容相同但隐藏状态不同也算 `changed`）。
 - 隐私保护（`src/app/core/acl.py` + `src/app/services/privacy_service.py`）：配置项 `Storage/Resource-Protected`（锁资源文件夹）与
   `Storage/Hidden-Protected`（只锁各 `.hiddens/`），在「设置 → 隐私保护」用两个开关切换。
-  `acl.lock()` 用 `icacls <路径> /inheritance:r /deny *S-1-1-0:(OI)(CI)(RX)` 拒绝 Everyone 读取并去掉继承，`acl.unlock()` 反向恢复。
+  `acl.lock()` 用 `icacls <路径> /deny *S-1-1-0:(OI)(CI)(RX)` 拒绝 Everyone 读取，`acl.lock(path, deep=False)` 只挂 `(RX)` 挡住对象本身；
+  `acl.unlock()` 用 `icacls <路径> /remove:d *S-1-1-0` 摘掉拒绝项，并在摘掉后查一次 `icacls <路径>`，**已经在继承时跳过 `/inheritance:e`**——
+  那是空操作，却会让 Windows 把 ACE 重新传播到整棵子树（`.resources` 下的运行环境 venv 有十几万个文件，一次传播能卡住启动好几分钟）。
+  **浅层锁**：拒绝项一律不带 `/inheritance:r`（继承链不动），`acl.lock_tree()` 先给资源根下的每个直接子项（`.resources/models/` 除外，见 `UNPROTECTED_DIRS`）挂一条深拒绝，
+  最后才给资源根挂一条浅拒绝（`deep=False`）——顺序不能反，拒绝项连「遍历」权限一起挡，先锁根就列不出子项，子目录会全漏在保护之外；
+  `acl.unlock_tree()` 反向逐项 `/remove:d`（先放行根才枚举得到子项，子项绝不 `/inheritance:e`，否则又会在那十几万个文件上传播一遍）；
+  它用的是与 `lock_tree()` 同一份跳过名单——对从没被锁过的 `.resources/models/` 多跑一次 icacls 会重写它的 DACL，Windows 顺势把可继承的 ACE
+  传播进整棵子树，启动就卡在那里几分钟（`_icacls()` 另有 60 秒超时兜底，宁可放弃这次操作也不无声挂住启动路径）。
+  一次锁 / 放行的 ACL 传播范围因此从十几万个对象降到几百个，开启「保护资源文件夹」后退出与启动都是秒级。
+  运行环境与模型权重（`.resources/models/`）是程序自己装 / 下载的，不算用户资料却占了十几万个文件，**整棵子树从头到尾一个 ACE 都不碰**，
+  程序没在跑的时候（比如 llama-server、ollama 想读权重）它们也照样可用。
   资源文件夹受保护时隐藏项开关置灰并自动收起（`targets()` 用 `elif`：资源根已锁就不再单独列 `.hiddens`），
   设置页 `_normalize_privacy()` 负责把同时为真的两个开关收敛掉。
 - **静态保护模型**：ACL 无法区分同一用户下的不同进程，程序自己也会被拒绝，因此不再「平时锁着、读写时瞬时放行」，而是
   **运行期整场放行、退出时才锁定**。开关的语义随之变为：打开只是记下设置（下次启动整场放行、退出后锁定），关闭立刻放行
   （`_on_protection_changed()` → `privacy.unlock()`）。`privacy.guard()` / `@guarded` 现在是纯语义标记（直接 `yield`），不再翻转 ACL；
   数据库连接、备份、删除 `-wal`/`-shm` 都不再需要放行窗口（`database._privacy_guard()` / `_guarded_sqlite_connection()` 已删除）。
-- **异常退出自愈**：启动时 `privacy.begin_session()` 先强制放行资源根与各 `.hiddens`（`force_unlock()` 无视设置），
+- **异常退出自愈**：启动时 `privacy.begin_session()` 在保护开启时强制放行资源根与各 `.hiddens`（`force_unlock()` 无视设置）；
+  两个开关都是关的时候它**一次 icacls 都不跑**（没有锁要解，白跑一次就是上面那几分钟的传播），
+  万一真留着锁，`_bootstrap_data()` 会失败、`_degrade_protection()` 的强制放行仍会解开它。
   `paths.make_dir()` 建目录失败只告警不致命，`paths.release_locked_root()` 每个进程只放行一次（`_released` 标志）。
   `_bootstrap_data()`（建目录 + 开库 + 补数据）失败时 `_degrade_protection()` 会关掉两个开关并强制放行再重试一次；
   仍然失败则打印 `python src/main.py --unlock` 的应急提示并返回码 2。`--unlock` 只强制放行、不改设置。
@@ -204,7 +216,8 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 区间由纯函数 `ManagePage.range_ids(order, anchor, target)` 计算，`_anchor` 记录最近一次点击项）。`ItemCard` 是 qfluentwidgets 的
 `CardWidget`，它的 `mouseReleaseEvent` 无条件发出 `clicked`，所以页面用 `_press_button` 只认左键，右键不会破坏多选。
 工具栏下方的选择条（`ManagePage._build_selection_bar()`）有三态全选框「全选本页」（`tri_state(checked, total)`：空 = 全不选、横 = 部分选中、
-勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」与「清空选择」，没有选中项时批量按钮禁用。
+勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」、「标签管理」、「关键词管理」、
+「批量重命名…」与「清空选择」，没有选中项时这些批量按钮（`_batch_buttons`）一并禁用。
 
 左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
 三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
@@ -217,7 +230,7 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 （「每页条数」下拉、「分类栏默认展开」开关）。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` / `editor_menu_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、
 **查看器**（系统默认程序 / 点名某个内置查看器 / 交给系统选择…）、**编辑器**（系统默认程序 / 点名某个内置编辑器 / 交给系统选择…）、
-插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」）、在文件夹中显示、复制路径、移动到分类…、编辑信息、添加标签、隐藏 / 取消隐藏、导出选中项、移入回收站、
+插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」）、在文件夹中显示、复制路径、移动到分类…、编辑信息、标签管理、关键词管理、批量重命名…、隐藏 / 取消隐藏、导出选中项、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
 「移入回收站」只在选中项里确有未删除项时可用（`ItemService.delete()` 也会先滤掉已在回收站里的项并返回真实条数），
 全部已删除时按钮禁用、即便误触发也只会提示「选中的数据都已在回收站里」。
@@ -226,7 +239,21 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 「编辑信息…」弹出的 `ItemEditDialog` 分两块：上方只读的「数据信息」（类型 / 大小 / 归属用户 / 所在库 / 库内路径 / 磁盘位置 / 创建时间 / 内容指纹，由 `ManagePage._item_info()` 拼装），
 下方「可修改的信息」才是名称 / 分类 / 标签 / 关键词 / 隐藏；改名会顺带把库内那份文件一起重命名（`ItemService.update()` → `LibraryService.rename_item_file()`：
 沿用原后缀、同名冲突时加 `_N`、文件不在库里时只改显示名并记一条警告），分类变化仍由 `move_item()` 搬目录。
-刷新的开销也做了控制：`PageBase.auto_refresh()` 只在页面可见（或整个窗口不可见）时刷新，否则记一个待刷新标记、`showEvent` 补刷；
+「标签管理」/「关键词管理」（`ManagePage._on_manage_tags()` / `_on_manage_keywords()`）打开 `TagManagerDialog` / `KeywordManagerDialog`
+（`src/app/ui/dialogs.py` 的 `TriStateManagerDialog` 子类）：上半区是输入框 + 「添加」——输入一个**新的**标签 / 关键词就对所选数据全部加上，
+输入一个**已存在**的、且下面那一行不是全选状态时也按「全选」处理（等于给所选数据全加上）；下面用 `TriStateList`
+（`src/app/ui/components/tri_state_list.py`）列出「所选数据现有标签 / 关键词」的合集，每项一个三态复选框：勾 = 所选数据全都有、
+横杠 = 只有一部分有、空 = 全都没有；点勾即批量添加、点掉即批量移除（用户点出来的横杠按「勾」处理，避免一次点击变成什么也不做），
+关闭后 `ItemService.add_tags()` / `remove_tags()` / `add_keywords()` / `remove_keywords()` 一次提交，没有任何改动则提示「没有改动」；
+「标签管理」里全局标签（`TagRepository.global_names()`）在名字后标「（全局）」，被全局标签遮蔽的同名用户标签不重复列出。
+「批量重命名…」打开 `BatchRenameDialog`（`src/app/core/naming.py` 是纯规则）：先选方式——**替换**（子串替换，例：`abc.md` / `bdh.md` / `kjc.md`
+把 `b` 换成 `j` 得 `ajc.md` / `jdh.md` / `kjc.md`）、**覆盖**（整体改成一个主干名，可带编号 / 多级字母）、**插入**（在名称的某个位置统一插入文本）、
+**删除**（从某个位置起删掉固定长度，没有则跳过，例：`abc.md` 去掉第 2 个字符得 `ac.md`）；编号样式可选数字（可设起始与位数，如 `001`）或字母（`a`…`z`、`aa`…，
+大小写可切换），插入 / 删除的位置按字符计。改完**先弹变更清单**（`条目：原名称 → 新名称`，每行可取消勾选），确认后逐个走
+`ItemService.update(name=...)`（文件同 `ItemEditDialog` 一起重命名）；重名自动在主干后加 `-1`、`-2`（本页未选中项的原名也算占用），
+取消则一项都不改。
+
+`PageBase.auto_refresh()` 只在页面可见（或整个窗口不可见）时刷新，否则记一个待刷新标记、`showEvent` 补刷；
 数据管理页的卡片 / 列表行改为复用控件池（`ItemCard.set_item()` / `ItemListRow.set_item()`），删除与回档后的整页重建从约 260ms 降到 30ms 量级。
 
 ## 数据存档
@@ -568,6 +595,46 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 `app.sdk.editors.open_system()` 退回系统默认程序，子菜单不会因为缺少插件而消失。
 「编辑器」配置页与「查看器」页同构：左列格式清单每行标注当前打开方式（`内置编辑器（…）` / `自定义程序（…）` / `继承系统默认`）与「库中 N 项」，
 搜索框按「格式 + 编辑器名」过滤，见 `EditorConfigPage._fill_list()` / `_state_text()`。
+
+### 模型机制与模型插件
+
+模型能力由内置库插件 `builtin.lib.model` 通过扩展接口 `model.open` 提供，程序侧只剩调度门面 `app.sdk.models`
+（`list_models()` / `model_by_id()` / `capabilities()` / `loaded()` / `acquire()` / `invoke()`）：没有启用模型插件时
+列表返回空、`acquire()` / `invoke()` 直接抛 `SdkError`。模型分两类：**本地模型**（权重放 `.resources/models/local/`，
+也可以由「扫描目录」或拖拽直接登记用户自己目录里的权重，由 worker 子进程 / llama-server / ollama 跑）与**外部模型**
+（填接口地址、模型名与密钥，走 OpenAI 兼容接口或 Ollama）。登记表在 `.resources/models/registry.json`，设置与密钥在
+`.configs/models.json`（密钥只存本地，日志与界面一律打码）；权重与运行环境都放在资源文件夹，插件目录被覆盖安装删掉也不会丢。
+
+其它插件对接模型统一走 `ctx.require("model.open")` 或 `import app.sdk.models`：按 `model_id` 或 `capability`
+（`chat` / `completion` / `embedding` / `rerank` / `vision` / `asr` / `tts` / `image` / `ocr` / `classify`）取一份**租约**，
+`lease.invoke(task, payload)` 调用、`lease.close()` 归还。模型不会一开始就常驻：`acquire()` 时才加载（同一模型加载中会排队，
+超时抛 `ModelBusyError`），常驻上限默认 1、超出按最久没用到卸载（卸载等于杀进程，显存会真的还回去），空闲默认 600 秒自动卸载。
+
+「模型」页（`plugin.model_manager`）负责新建本地 / 外部模型、一键下载（HuggingFace官方 + HF-Mirror镜像顺序回退、断点续传、sha256 校验）、
+扫描或拖入权重目录登记、加载 / 卸载 / 测试、查看下载队列，以及**运行环境**（每个 profile 一套独立 venv，装在
+`.resources/models/runtime/<profile>/venv`，装依赖前弹确认框、**永不静默安装**，失败可重建或整目录卸载）。
+带 `-gpu` 的运行环境会一并装上 CUDA 12 运行库（cudart / cuBLAS / cuDNN，走 `nvidia-*-cu12` 这几个包），
+否则 GPU 版 llama.cpp 加载时会报缺 DLL；模型登记的是 CPU 版 profile（如 `llama-cpp`）而只装了 `-gpu` 版也能跑；设备选到 CUDA 时 llama.cpp 默认把所有层放上显卡（参数里写了 `n_gpu_layers` 就按写的来），CPU 设备则强制全走 CPU。
+同页设置里，最上面是「代理」（填本地代理地址，留空就是直连），接着「下载源（模型）」下拉决定去哪个地址
+（「HuggingFace官方」/「HF-Mirror镜像」/「自定义」，自定义时可以一行行加自己的下载路径，和「安装源（pip）」一样：下拉
+左边、自定义输入框和按钮右边对齐）；它下面那行**提示**跟着选项变——选官方写官方地址、选镜像写镜像地址、选自定义写最先用的那条路径（都是提示，界面上不给改）。
+「下载源（GitHub）」下拉管的是 GitHub 上的资源（模型地址指向 GitHub，或装运行环境时
+pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选「Github官方」就直连，三个镜像各是一个独立选项
+（「ghproxy镜像」「gh-proxy镜像」「ghfast镜像」，选谁就只拼谁的前缀），选「自定义网址」填自己的前缀，
+除官方档外最后都还会退回官方直连——模型下载和装运行环境都认它。
+这一页**没有「保存设置」按钮**——代理、下载并发、同时常驻模型数、空闲多久卸载、
+推理设备、安装源、下载源（GitHub）、下载源（模型）、程序环境开关都是改一下就立刻存盘。运行环境每行除「安装 / 卸载 / 日志」外还有「本地 whl…」，
+可以挑手上已有的 `.whl` 离线安装（先校验文件名里的 Python 与平台对不对得上；装好后这个按钮变灰，要换包先「卸载」，
+离线装会把清单里还差的包一起补上（不要求 whl 自带全部依赖），例如 `-gpu` 环境缺的 CUDA 运行库会顺手从镜像拉；
+要是普通安装卡在 `github.com` 连不上（llama.cpp 的 CUDA 轮子挂在 GitHub Releases 上），失败提示会直接告诉你改用「本地 whl…」，
+或者把「下载源（GitHub）」换成镜像后重试（pip 失败时程序会自己从日志里认出那条 GitHub 直链、换成镜像地址再跑一次）；
+控制台与行内悬停提示会写明「来源：本地文件：…」）；**不同运行环境可以同时装**（互不等待，同一个环境不会开两条），
+一键补全点下去会先让你选「并发安装」（几个环境同时装，默认）还是「挨个安装」（装完一个再装下一个）；
+安装中点「暂停 / 取消」会立刻掐掉 pip 进程（行内写「正在暂停…」/「正在取消…」），
+卸载成功（含装进程序环境的模式）连日志一起清掉；模型卡片上有「日志」按钮（跑过一次才会出现），一个模型只留最新一份日志，
+删掉模型会连它的日志一起删；本地模型加载失败后卡片按钮不会消失，改好设置可以直接重试，
+不必先点「刷新」。
+细节与接口成员见 [`plugins/builtin.lib.model/PLUGIN.md`](plugins/builtin.lib.model/PLUGIN.md)。
 启动时的控制台输出分三层，程序侧不需要再打印任何东西：`app.sdk` 第一次被导入时播报一次
 「SDK 已载入：版本 1.0」（`app.sdk.sdk_banner()`），随后每载入成功一个插件各来一行「插件 `<id>` 已载入」，
 最后由 `PluginService.loaded_summary()` 给一句汇总，形如

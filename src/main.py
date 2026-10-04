@@ -27,6 +27,8 @@ from app.core.config import Language, config  # noqa: E402
 from app.core.logging_setup import setup_logging  # noqa: E402
 from app.db.database import dispose_engine, init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
+from app.sdk.console import CONSOLE_EXTENSION  # noqa: E402
+from app.services.console_service import ConsoleOutput  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.services.privacy_service import privacy  # noqa: E402
@@ -234,6 +236,8 @@ def main() -> int:
 
     # 程序本体以扩展接口的形式向插件开放界面能力（插件可注册自己的导航页面）
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
+    # 控制台输出接口：插件用 ctx.console 播报阶段 / 进度，落到程序自己的日志
+    plugin_service.bootstrap(CONSOLE_EXTENSION, ConsoleOutput())
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     plugin_service.load_viewers()
     _stage(7, "插件系统已就绪")

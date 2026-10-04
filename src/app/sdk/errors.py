@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ["DependencyError", "ManifestError", "PluginError", "SdkError", "VersionError"]
+__all__ = [
+    "DependencyError",
+    "ManifestError",
+    "ModelBusyError",
+    "ModelError",
+    "PluginError",
+    "SdkError",
+    "VersionError",
+]
 
 
 class PluginError(Exception):
@@ -23,3 +31,11 @@ class VersionError(PluginError):
 
 class SdkError(PluginError):
     """插件使用 SDK 的方式不正确（缺接口、依赖未声明等）。"""
+
+
+class ModelError(Exception):
+    """模型加载或调用失败（下载未完成、后端崩了、参数不对等）。"""
+
+
+class ModelBusyError(ModelError):
+    """模型忙或等不到：超时、被占用、常驻上限已满。"""

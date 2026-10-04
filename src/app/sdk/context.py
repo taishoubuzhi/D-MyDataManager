@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping, Protocol, runtime_checkable
 
+from .console import console_for
 from .plugin import Plugin
 from .points import Contribution
 
@@ -100,6 +101,7 @@ class PluginContext:
     def __init__(self, plugin: Plugin, services: ContextServices) -> None:
         self._plugin = plugin
         self._services = services
+        self._console = console_for(plugin.id)
 
     # ---- 基本信息 ---------------------------------------------------
 
@@ -118,6 +120,11 @@ class PluginContext:
     @property
     def log(self):
         return self._plugin.log
+
+    @property
+    def console(self):
+        """控制台输出：`ctx.console.stage("下载", "开始")`，来源自动带上插件 id。"""
+        return self._console
 
     def data_path(self, key: str):
         return self._plugin.data_path(key)

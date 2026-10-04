@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from loguru import logger
+from app.sdk.console import console_for
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PushButton, StrongBodyLabel, TransparentToolButton
+
+_console = console_for("builtin.lib.ui")
 
 #: 扩展接口名：查看器等插件用 ctx.require(EXTENSION_NAME) 取到 DialogApi
 EXTENSION_NAME = "dialog"
@@ -68,7 +70,7 @@ class PopupWindow(QWidget):
         try:
             widget = content_factory(self.content)
         except Exception as exc:  # 插件页面出错不应该影响主界面
-            logger.exception("创建弹窗内容失败：{}", title)
+            _console.exception(f"创建弹窗内容失败：{title}")
             widget = CaptionLabel(f"页面无法显示：{exc}", self.content)
         self.content_widget = widget
         if widget is not None:

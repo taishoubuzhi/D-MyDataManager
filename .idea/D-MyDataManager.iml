@@ -23,6 +23,11 @@
       <excludeFolder url="file://$MODULE_DIR$/PyQt-Fluent-Widgets" />
       <excludeFolder url="file://$MODULE_DIR$/tests/_scratch" />
       <excludeFolder url="file://$MODULE_DIR$/.logs/_gates/tmp/pyc314/Program/PyCharm/python/LeetCode/D-MyDataManager/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/.configs" />
+      <excludeFolder url="file://$MODULE_DIR$/.logs" />
+      <excludeFolder url="file://$MODULE_DIR$/.packages" />
+      <excludeFolder url="file://$MODULE_DIR$/.plugins" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/example.model_usage" />
     </content>
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />

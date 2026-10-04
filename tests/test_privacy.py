@@ -35,14 +35,102 @@ class AclCommandCase(unittest.TestCase):
         code, text = self.results.pop(0) if self.results else (0, "")
         return type("Result", (), {"returncode": code, "stdout": text, "stderr": ""})()
 
-    def test_lock_closes_inheritance_and_denies_everyone(self):
+    def test_lock_denies_everyone_without_touching_inheritance(self):
+        # 只挂拒绝项、不关继承：/inheritance:r 会让放行时的 /inheritance:e 再传播一遍全子树
         acl.subprocess.run = self._fake_run
         ok, message = acl.lock(self.temp.path)
         self.assertTrue(ok, message)
         self.assertEqual(
             self.calls,
-            [["icacls", str(self.temp.path), "/inheritance:r", "/deny", "*S-1-1-0:(OI)(CI)(RX)"]],
+            [["icacls", str(self.temp.path), "/deny", "*S-1-1-0:(OI)(CI)(RX)"]],
         )
+
+    def test_lock_shallow_only_denies_the_object_itself(self):
+        # 资源根用浅拒绝：不带继承标志，拒绝项不会传播到十几万个文件上
+        acl.subprocess.run = self._fake_run
+        ok, message = acl.lock(self.temp.path, deep=False)
+        self.assertTrue(ok, message)
+        self.assertEqual(
+            self.calls,
+            [["icacls", str(self.temp.path), "/deny", "*S-1-1-0:(RX)"]],
+        )
+
+    def test_lock_file_never_gets_inherit_flags(self):
+        acl.subprocess.run = self._fake_run
+        target = self.temp.path / "data.db"
+        target.write_text("x", encoding="utf-8")
+        ok, message = acl.lock(target)
+        self.assertTrue(ok, message)
+        self.assertEqual(
+            self.calls,
+            [["icacls", str(target), "/deny", "*S-1-1-0:(RX)"]],
+        )
+
+    def test_lock_tree_denies_children_first_then_root_shallowly(self):
+        # 根必须最后锁：拒绝项连遍历一起挡，先锁根就列不出子项（子目录会全漏掉）
+        acl.subprocess.run = self._fake_run
+        root = self.temp.path
+        (root / "library").mkdir()
+        (root / "models").mkdir()
+        (root / "data.db").write_text("x", encoding="utf-8")
+        count, message = acl.lock_tree(root, skip=("models",))
+        self.assertEqual((count, message), (3, ""))
+        self.assertEqual(
+            self.calls,
+            [
+                ["icacls", str(root / "data.db"), "/deny", "*S-1-1-0:(RX)"],
+                ["icacls", str(root / "library"), "/deny", "*S-1-1-0:(OI)(CI)(RX)"],
+                ["icacls", str(root), "/deny", "*S-1-1-0:(RX)"],
+            ],
+        )
+
+    def test_unlock_tree_releases_children_without_restoring_inheritance(self):
+        # 子项只摘拒绝项：/inheritance:e 会在子项上再传播一遍（models/ 有十几万个文件）
+        acl.subprocess.run = self._fake_run
+        root = self.temp.path
+        (root / "library").mkdir()
+        (root / "data.db").write_text("x", encoding="utf-8")
+        self.results = [(0, ""), (0, f"{root} Everyone:(I)(OI)(CI)(F)")]
+        count, message = acl.unlock_tree(root)
+        self.assertEqual((count, message), (3, ""))
+        self.assertEqual(
+            self.calls,
+            [
+                ["icacls", str(root), "/remove:d", "*S-1-1-0"],
+                ["icacls", str(root)],
+                ["icacls", str(root / "data.db"), "/remove:d", "*S-1-1-0"],
+                ["icacls", str(root / "library"), "/remove:d", "*S-1-1-0"],
+            ],
+        )
+
+    def test_unlock_tree_skips_unprotected_children(self):
+        # models/ 从没被锁过：多执行一次 icacls 会重写它的 DACL，触发十几万对象的 ACE 传播
+        acl.subprocess.run = self._fake_run
+        root = self.temp.path
+        (root / "library").mkdir()
+        (root / "models").mkdir()
+        self.results = [(0, ""), (0, f"{root} Everyone:(I)(OI)(CI)(F)")]
+        count, message = acl.unlock_tree(root, skip=("models",))
+        self.assertEqual((count, message), (2, ""))
+        self.assertEqual(
+            self.calls,
+            [
+                ["icacls", str(root), "/remove:d", "*S-1-1-0"],
+                ["icacls", str(root)],
+                ["icacls", str(root / "library"), "/remove:d", "*S-1-1-0"],
+            ],
+        )
+
+    def test_icacls_gives_up_after_timeout(self):
+        # 改 ACE 可能触发全子树传播：超时必须放弃，不能让启动路径无声挂住
+        def _timeout(command, **_kwargs):
+            self.calls.append(list(command))
+            raise acl.subprocess.TimeoutExpired(command, 60)
+
+        acl.subprocess.run = _timeout
+        ok, message = acl.unlock(self.temp.path)
+        self.assertFalse(ok)
+        self.assertIn("超时", message)
 
     def test_unlock_removes_deny_then_restores_inheritance(self):
         acl.subprocess.run = self._fake_run
@@ -52,7 +140,22 @@ class AclCommandCase(unittest.TestCase):
             self.calls,
             [
                 ["icacls", str(self.temp.path), "/remove:d", "*S-1-1-0"],
+                ["icacls", str(self.temp.path)],
                 ["icacls", str(self.temp.path), "/inheritance:e"],
+            ],
+        )
+
+    def test_unlock_skips_inheritance_when_already_inheriting(self):
+        # 已经在继承时 /inheritance:e 是空操作，却要把整棵子树再传播一遍（十几万个文件）
+        acl.subprocess.run = self._fake_run
+        self.results = [(0, ""), (0, f"{self.temp.path} Everyone:(I)(OI)(CI)(RX)")]
+        ok, message = acl.unlock(self.temp.path)
+        self.assertTrue(ok, message)
+        self.assertEqual(
+            self.calls,
+            [
+                ["icacls", str(self.temp.path), "/remove:d", "*S-1-1-0"],
+                ["icacls", str(self.temp.path)],
             ],
         )
 
@@ -79,13 +182,29 @@ class PrivacyServiceCase(IsolatedCase):
         self.privacy = PrivacyService()
         self.unlocked: list[Path] = []
         self.locked: list[Path] = []
+        self.released: list[Path] = []
+        self.shallow: list[Path] = []
+        self.order: list[str] = []
         self._lock, self._unlock, self._supported = acl.lock, acl.unlock, acl.is_supported
+        self._remove_deny = acl.remove_deny
         acl.is_supported = lambda: True
-        acl.lock = lambda path: (self.locked.append(Path(path)), (True, ""))[1]
-        acl.unlock = lambda path: (self.unlocked.append(Path(path)), (True, ""))[1]
+        acl.lock = self._recorder("lock", self.locked)
+        acl.unlock = self._recorder("unlock", self.unlocked)
+        acl.remove_deny = self._recorder("remove_deny", self.released)
+
+    def _recorder(self, kind: str, bucket: list[Path]):
+        def call(path, **kwargs):
+            bucket.append(Path(path))
+            self.order.append(kind)
+            if not kwargs.get("deep", True):
+                self.shallow.append(Path(path))
+            return True, ""
+
+        return call
 
     def tearDown(self):
         acl.lock, acl.unlock, acl.is_supported = self._lock, self._unlock, self._supported
+        acl.remove_deny = self._remove_deny
         super().tearDown()
 
     def _make_hidden_dir(self) -> Path:
@@ -135,19 +254,49 @@ class PrivacyServiceCase(IsolatedCase):
         self.assertEqual(self.privacy.unlock(), (0, "当前系统不支持 ACL 锁定"))
         self.assertEqual(self.locked, [])
 
+    def test_lock_skips_models_and_denies_children(self):
+        # models/（运行环境 venv + 模型权重）不参与保护：浅层锁直接跳过，一个 ACE 都不碰
+        config.set(config.resourceProtected, True)
+        root = resources_root()
+        models = root / "models"
+        models.mkdir(parents=True, exist_ok=True)
+        library = root / "library"
+        library.mkdir(parents=True, exist_ok=True)
+        self.privacy.lock()
+        self.assertEqual(self.locked[-1], root)  # 根最后锁
+        self.assertIn(library, self.locked)
+        self.assertNotIn(models, self.locked)
+        self.assertEqual(self.shallow, [root])  # 根是浅拒绝，只有子项带继承标志
+
+    def test_hidden_only_lock_does_not_touch_the_resource_root(self):
+        # 只保护隐藏目录时不碰资源根：它不是隐藏目录，也不在锁定路径上
+        config.set(config.hiddenProtected, True)
+        hidden = self._make_hidden_dir()
+        self.privacy.invalidate()
+        self.privacy.lock()
+        self.assertEqual(self.locked, [hidden])
+
     def test_lock_and_unlock_follow_targets(self):
         config.set(config.resourceProtected, True)
-        self.assertEqual(self.privacy.lock(), (1, ""))
-        self.assertEqual(self.locked, [resources_root()])
+        count, message = self.privacy.lock()
+        self.assertEqual((count, message), (len(self.locked), ""))
+        self.assertEqual(self.locked[-1], resources_root())  # 根最后锁
         self.privacy.unlock()
         self.assertIn(resources_root(), self.unlocked)
         self.assertIn(paths.DATA_DIR, self.unlocked)
 
-    def test_begin_session_releases_even_when_switches_are_off(self):
+    def test_begin_session_does_nothing_without_protection(self):
+        # 开关全关时一次 icacls 都不能跑：白放行一次要给整棵 .resources 传播继承，启动会卡住
+        count, message = self.privacy.begin_session()
+        self.assertEqual((count, message), (0, "没有开启保护"))
+        self.assertEqual(self.unlocked, [])
+        self.assertTrue(self.privacy.in_session())
+
+    def test_begin_session_releases_when_protection_is_on(self):
+        config.set(config.resourceProtected, True)
         count, _ = self.privacy.begin_session()
         self.assertGreaterEqual(count, 1)
         self.assertIn(resources_root(), self.unlocked)
-        self.assertTrue(self.privacy.in_session())
 
     def test_begin_session_releases_hidden_dirs_too(self):
         config.set(config.hiddenProtected, True)
@@ -159,8 +308,8 @@ class PrivacyServiceCase(IsolatedCase):
         config.set(config.resourceProtected, True)
         self.privacy.begin_session()
         count, message = self.privacy.end_session()
-        self.assertEqual((count, message), (1, ""))
-        self.assertIn(resources_root(), self.locked)
+        self.assertEqual((count, message), (len(self.locked), ""))
+        self.assertEqual(self.locked[-1], resources_root())  # 根最后锁
         self.assertFalse(self.privacy.in_session())
 
     def test_end_session_does_nothing_without_protection(self):
@@ -199,12 +348,15 @@ class PathsBootstrapCase(IsolatedCase):
         super().setUp()
         self.unlocked: list[Path] = []
         self._unlock, self._supported, self._released = acl.unlock, acl.is_supported, paths._released
+        self._remove_deny = acl.remove_deny
         acl.is_supported = lambda: True
         acl.unlock = lambda path: (self.unlocked.append(Path(path)), (True, ""))[1]
+        acl.remove_deny = lambda path: (self.unlocked.append(Path(path)), (True, ""))[1]
         paths._released = False
 
     def tearDown(self):
         acl.unlock, acl.is_supported = self._unlock, self._supported
+        acl.remove_deny = self._remove_deny
         paths._released = self._released
         super().tearDown()
 
@@ -251,15 +403,18 @@ class SessionMarkerCase(IsolatedCase):
         self.unlocked: list[Path] = []
         self.locked: list[Path] = []
         self._lock, self._unlock, self._supported = acl.lock, acl.unlock, acl.is_supported
+        self._remove_deny = acl.remove_deny
         acl.is_supported = lambda: True
-        acl.lock = lambda path: (self.locked.append(Path(path)), (True, ""))[1]
+        acl.lock = lambda path, **kwargs: (self.locked.append(Path(path)), (True, ""))[1]
         acl.unlock = lambda path: (self.unlocked.append(Path(path)), (True, ""))[1]
+        acl.remove_deny = lambda path: (self.unlocked.append(Path(path)), (True, ""))[1]
         self._dispose = main.dispose_engine
         main.dispose_engine = lambda: None
         main._locked = False
 
     def tearDown(self):
         acl.lock, acl.unlock, acl.is_supported = self._lock, self._unlock, self._supported
+        acl.remove_deny = self._remove_deny
         self.main.dispose_engine = self._dispose
         self.main._locked = False
         super().tearDown()
@@ -283,8 +438,10 @@ class SessionMarkerCase(IsolatedCase):
         config.set(config.resourceProtected, True)
         self.main._write_session_marker()
         self.main._lock_on_exit()
+        self.assertEqual(self.locked[-1], resources_root())  # 根最后锁
+        first = list(self.locked)
         self.main._lock_on_exit()  # 幂等
-        self.assertEqual(self.locked, [resources_root()])
+        self.assertEqual(self.locked, first)
         self.assertFalse(paths.SESSION_FILE.exists())
 
     def test_unlock_only_forces_release(self):

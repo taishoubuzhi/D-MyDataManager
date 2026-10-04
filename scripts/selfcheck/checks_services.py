@@ -362,9 +362,52 @@ def privacy_state(case: Case) -> None:
     session = case.session
     assert not privacy.enabled(), "默认不应开启保护"
     assert privacy.state_text(), "状态文本不应为空"
+    # 开关全关时启动不能碰 ACL：白放行一次要给整棵 .resources 传播继承（十几万个文件），
+    # 表现就是「启动 3/8」卡住几分钟起不来
+    from app.core import acl
+
+    calls: list[str] = []
+    real_unlock = acl.unlock
+    acl.unlock = lambda path: (calls.append(str(path)), (True, ""))[1]
+    try:
+        count, message = privacy.begin_session()
+    finally:
+        acl.unlock = real_unlock
+    assert (count, message) == (0, "没有开启保护"), f"没开保护时启动不应放行：{(count, message)}"
+    assert not calls, f"没开保护却调用了 icacls：{calls}"
     config.set(config.resourceProtected, True)
     assert privacy.enabled(), "资源保护开关没有生效"
     assert privacy.targets() == [resources_root()], f"资源保护应对准资源根：{privacy.targets()}"
+    # models/（运行环境 venv + 模型权重）不参与保护：浅层锁直接跳过它，一个 ACE 都不碰；
+    # 资源根只挂不带继承标志的拒绝项，否则 Windows 会把 ACE 传播进整棵子树（十几万个文件）
+    real_lock, real_children = acl.lock, acl._children
+    locks: list[tuple[str, bool]] = []
+    acl.lock = lambda path, *, deep=True: (locks.append((str(path), deep)), (True, ""))[1]
+    try:
+        models = resources_root() / "models"
+        models.mkdir(parents=True, exist_ok=True)
+        library = resources_root() / "library"
+        library.mkdir(parents=True, exist_ok=True)
+        acl._children = lambda root: [models, library]
+        privacy.lock()
+        # 根必须最后锁：拒绝项连「遍历」一起挡，先锁根就列不出子项（子目录会全漏掉）
+        assert locks and locks[-1] == (str(resources_root()), False), f"资源根必须最后浅锁：{locks}"
+        assert all(name != str(models) for name, _deep in locks), f"models/ 不该被锁：{locks}"
+        assert (str(library), True) in locks, f"资源根的子目录应深锁：{locks}"
+        # 放行侧要用同一份跳过名单：对从没锁过的 models/ 跑 icacls 会重写它的 DACL，
+        # Windows 顺势把可继承的 ACE 传播进十几万个对象，启动就这样卡住好几分钟
+        real_unlock, real_release = acl.unlock, acl.remove_deny
+        released: list[str] = []
+        acl.unlock = lambda path: (True, "")
+        acl.remove_deny = lambda path: (released.append(str(path)), (True, ""))[1]
+        try:
+            privacy.unlock()
+        finally:
+            acl.unlock, acl.remove_deny = real_unlock, real_release
+        assert str(library) in released, f"放行时应摘掉子项的拒绝项：{released}"
+        assert str(models) not in released, f"放行时不该对 models/ 跑 icacls：{released}"
+    finally:
+        acl.lock, acl._children = real_lock, real_children
     config.set(config.resourceProtected, False)
     config.set(config.hiddenProtected, True)
     assert privacy.enabled(), "隐藏目录保护开关没有生效"

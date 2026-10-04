@@ -110,7 +110,7 @@ class Config(QConfig):
     logAsJson = ConfigItem("Log", "Format-To-JSON", False, BoolValidator())
     logFormat = ConfigItem(
         "Log", "Log-Format",
-        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[source]} | {function}:{line} | {message}",
     )
     # single：单文件追加；session：每次启动一个文件；daily：每天一个文件；size：按大小切分
     logMode = OptionsConfigItem(

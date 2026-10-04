@@ -1,0 +1,238 @@
+{
+  "version": 2,
+  "note": "外部模型模板：先选「供应商」，再选这个供应商下的「模型」。供应商条目的 base_url / adapter 决定连哪个接口，models 里是当前在售的模型。模型名会随供应商更新而过时——以 docs 里的官方文档为准，必要时直接改这里；也可以完全不选模板，手工填。",
+  "templates": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "adapter": "openai_compat",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-6.1-sol",
+      "api_key_ref": "openai",
+      "capabilities": ["chat", "vision", "embedding"],
+      "description": "OpenAI 官方接口，需要 api.openai.com 的 API Key。",
+      "docs": "https://platform.openai.com/docs/models",
+      "models": [
+        {"id": "gpt-6.1-sol-pro", "name": "GPT-6.1 Sol Pro", "capabilities": ["chat", "vision"], "description": "旗舰，看图 + 长文档，最贵。"},
+        {"id": "gpt-6.1-sol", "name": "GPT-6.1 Sol", "capabilities": ["chat", "vision"], "description": "旗舰的均衡版，日常首选。"},
+        {"id": "gpt-6-luna-pro", "name": "GPT-6 Luna Pro", "capabilities": ["chat", "vision"], "description": "Luna 系列高配。"},
+        {"id": "gpt-6-luna", "name": "GPT-6 Luna", "capabilities": ["chat", "vision"], "description": "Luna 系列标准版，便宜一些。"},
+        {"id": "gpt-6-astra", "name": "GPT-6 Astra", "capabilities": ["chat", "vision"], "description": "通用对话。"},
+        {"id": "gpt-5.6-terra", "name": "GPT-5.6 Terra", "capabilities": ["chat", "vision"], "description": "上一代，性价比高。"},
+        {"id": "gpt-5.6-luna", "name": "GPT-5.6 Luna", "capabilities": ["chat", "vision"], "description": "上一代轻量版。"},
+        {"id": "text-embedding-3-large", "name": "text-embedding-3-large", "capabilities": ["embedding"], "description": "向量化模型，检索 / 聚类用。"}
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek（深度求索）",
+      "adapter": "openai_compat",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4.1-flash",
+      "api_key_ref": "deepseek",
+      "capabilities": ["chat", "vision"],
+      "description": "DeepSeek 官方接口，中文与代码都不错，价格低。",
+      "docs": "https://api-docs.deepseek.com/zh-cn/",
+      "models": [
+        {"id": "deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "capabilities": ["chat", "vision"], "description": "当前最新，支持图片输入，快且便宜。"},
+        {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "capabilities": ["chat"], "description": "V4 高配版，复杂推理更稳。"},
+        {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "capabilities": ["chat"], "description": "V4 轻量版。"},
+        {"id": "deepseek-v4-pro-0813", "name": "DeepSeek V4 Pro 0813", "capabilities": ["chat"], "description": "V4 Pro 的 08-13 快照，行为固定。"},
+        {"id": "deepseek-v4-flash-0731", "name": "DeepSeek V4 Flash 0731", "capabilities": ["chat"], "description": "V4 Flash 的 07-31 快照。"},
+        {"id": "deepseek-v3.2", "name": "DeepSeek V3.2", "capabilities": ["chat"], "description": "上一代通用模型，便宜。"},
+        {"id": "deepseek-chat-v3.1", "name": "DeepSeek V3.1", "capabilities": ["chat"], "description": "老版本对话模型。"},
+        {"id": "deepseek-r1-0528", "name": "DeepSeek R1 0528", "capabilities": ["chat", "completion"], "description": "推理模型，会先想再答，token 消耗高。"}
+      ]
+    },
+    {
+      "id": "dashscope",
+      "name": "阿里云百炼（通义千问）",
+      "adapter": "openai_compat",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.8-flash",
+      "api_key_ref": "dashscope",
+      "capabilities": ["chat", "vision", "embedding"],
+      "description": "阿里云百炼的 OpenAI 兼容地址，Key 在百炼控制台申请。",
+      "docs": "https://bailian.console.aliyun.com/",
+      "models": [
+        {"id": "qwen3.8-max-prime", "name": "Qwen3.8 Max Prime", "capabilities": ["chat", "vision"], "description": "通义旗舰。"},
+        {"id": "qwen3.8-max-0902", "name": "Qwen3.8 Max (0902)", "capabilities": ["chat", "vision"], "description": "Max 快照版。"},
+        {"id": "qwen3.8-flash", "name": "Qwen3.8 Flash", "capabilities": ["chat", "vision"], "description": "便宜快速，日常够用。"},
+        {"id": "qwen3.8-27b", "name": "Qwen3.8 27B", "capabilities": ["chat", "vision"], "description": "中小尺寸，性价比高。"},
+        {"id": "qwen3.8-omni-flash", "name": "Qwen3.8 Omni Flash", "capabilities": ["chat", "vision", "asr"], "description": "全模态：文字 / 图片 / 音频输入。"},
+        {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus", "capabilities": ["chat", "vision"], "description": "上一代均衡版。"},
+        {"id": "qwen-plus", "name": "qwen-plus（通用别名）", "capabilities": ["chat"], "description": "官方长期保留的溢出别名，跟着最新 Plus 走。"},
+        {"id": "text-embedding-v4", "name": "text-embedding-v4", "capabilities": ["embedding"], "description": "通义向量化模型。"}
+      ]
+    },
+    {
+      "id": "zhipu",
+      "name": "智谱 AI（GLM）",
+      "adapter": "openai_compat",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "model": "glm-5.3-flash",
+      "api_key_ref": "zhipu",
+      "capabilities": ["chat", "vision", "embedding"],
+      "description": "智谱开放平台的 OpenAI 兼容地址。",
+      "docs": "https://docs.bigmodel.cn/cn/guide/develop/openai/introduction",
+      "models": [
+        {"id": "glm-5.3", "name": "GLM-5.3", "capabilities": ["chat"], "description": "智谱当前旗舰。"},
+        {"id": "glm-5.3-flash", "name": "GLM-5.3 Flash", "capabilities": ["chat", "vision"], "description": "快速版，便宜，支持看图。"},
+        {"id": "glm-4.7", "name": "GLM-4.7", "capabilities": ["chat"], "description": "上一代主力模型。"},
+        {"id": "glm-4.7-flash", "name": "GLM-4.7 Flash", "capabilities": ["chat"], "description": "上一代快速版。"},
+        {"id": "glm-5v-turbo", "name": "GLM-5V Turbo", "capabilities": ["chat", "vision"], "description": "视觉专用，看图 / 视频帧。"},
+        {"id": "embedding-3", "name": "embedding-3", "capabilities": ["embedding"], "description": "向量化模型。"}
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "月之暗面（Kimi）",
+      "adapter": "openai_compat",
+      "base_url": "https://api.moonshot.cn/v1",
+      "model": "kimi-k2.6",
+      "api_key_ref": "moonshot",
+      "capabilities": ["chat", "vision"],
+      "description": "Kimi 开放平台，长上下文见长。",
+      "docs": "https://platform.moonshot.cn/docs/",
+      "models": [
+        {"id": "kimi-k3", "name": "Kimi K3", "capabilities": ["chat", "vision"], "description": "当前旗舰，支持图片 / 视频输入。"},
+        {"id": "kimi-k2.7-code", "name": "Kimi K2.7 Code", "capabilities": ["chat"], "description": "偏代码。"},
+        {"id": "kimi-k2.6", "name": "Kimi K2.6", "capabilities": ["chat", "vision"], "description": "通用对话。"},
+        {"id": "kimi-k2-thinking", "name": "Kimi K2 Thinking", "capabilities": ["chat"], "description": "推理模型，先想再答。"},
+        {"id": "moonshot-v1-8k", "name": "moonshot-v1-8k（旧）", "capabilities": ["chat"], "description": "老版本，兼容用。"}
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "adapter": "openai_compat",
+      "base_url": "https://api.minimaxi.com/v1",
+      "model": "minimax-m2.5",
+      "api_key_ref": "minimax",
+      "capabilities": ["chat", "vision"],
+      "description": "MiniMax 开放平台。国内站换成 https://api.minimax.chat/v1，Key 也要用对应站点的。",
+      "docs": "https://platform.minimax.io/docs/api-reference/text-openai-api",
+      "models": [
+        {"id": "minimax-m3", "name": "MiniMax M3", "capabilities": ["chat", "vision"], "description": "当前旗舰，支持图片 / 视频输入。"},
+        {"id": "minimax-m2.7", "name": "MiniMax M2.7", "capabilities": ["chat"], "description": "通用对话。"},
+        {"id": "minimax-m2.5", "name": "MiniMax M2.5", "capabilities": ["chat"], "description": "便宜，够日常用。"},
+        {"id": "minimax-m1", "name": "MiniMax M1", "capabilities": ["chat"], "description": "上一代。"}
+      ]
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic（Claude）",
+      "adapter": "openai_compat",
+      "base_url": "https://api.anthropic.com/v1",
+      "model": "claude-sonnet-5",
+      "api_key_ref": "anthropic",
+      "capabilities": ["chat", "vision"],
+      "description": "Anthropic 的 OpenAI 兼容入口（不是原生 Messages 接口）。",
+      "docs": "https://platform.claude.com/docs",
+      "models": [
+        {"id": "claude-sonnet-5.5", "name": "Claude Sonnet 5.5", "capabilities": ["chat", "vision"], "description": "均衡之选。"},
+        {"id": "claude-opus-5.5", "name": "Claude Opus 5.5", "capabilities": ["chat", "vision"], "description": "最强，最贵。"},
+        {"id": "claude-sonnet-5", "name": "Claude Sonnet 5", "capabilities": ["chat", "vision"], "description": "上一代 Sonnet。"},
+        {"id": "claude-opus-4.8", "name": "Claude Opus 4.8", "capabilities": ["chat", "vision"], "description": "上一代 Opus。"}
+      ]
+    },
+    {
+      "id": "siliconflow",
+      "name": "硅基流动（SiliconFlow）",
+      "adapter": "openai_compat",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "model": "deepseek-ai/DeepSeek-V3",
+      "api_key_ref": "siliconflow",
+      "capabilities": ["chat", "embedding", "rerank"],
+      "description": "国内聚合网关，模型名带 `组织/模型` 前缀，以控制台模型广场为准。",
+      "docs": "https://cloud.siliconflow.cn/models",
+      "models": [
+        {"id": "deepseek-ai/DeepSeek-V3", "name": "DeepSeek V3", "capabilities": ["chat"], "description": "通用对话。"},
+        {"id": "deepseek-ai/DeepSeek-R1", "name": "DeepSeek R1", "capabilities": ["chat"], "description": "推理模型。"},
+        {"id": "Qwen/Qwen3-8B", "name": "Qwen3 8B", "capabilities": ["chat"], "description": "小尺寸开源模型。"},
+        {"id": "BAAI/bge-m3", "name": "bge-m3", "capabilities": ["embedding"], "description": "多语言向量化。"},
+        {"id": "BAAI/bge-reranker-v2-m3", "name": "bge-reranker-v2-m3", "capabilities": ["rerank"], "description": "检索重排。"}
+      ]
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter（聚合网关）",
+      "adapter": "openai_compat",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "deepseek/deepseek-v4-pro",
+      "api_key_ref": "openrouter",
+      "capabilities": ["chat", "vision"],
+      "description": "一个 Key 调所有主流模型；模型名是 `供应商/模型`，完整列表看 https://openrouter.ai/models。",
+      "docs": "https://openrouter.ai/models",
+      "models": [
+        {"id": "openai/gpt-6.1-sol", "name": "OpenAI GPT-6.1 Sol", "capabilities": ["chat", "vision"], "description": "走 OpenRouter 调 OpenAI。"},
+        {"id": "anthropic/claude-sonnet-5.5", "name": "Claude Sonnet 5.5", "capabilities": ["chat", "vision"], "description": "走 OpenRouter 调 Claude。"},
+        {"id": "deepseek/deepseek-v4-pro", "name": "DeepSeek V4 Pro", "capabilities": ["chat"], "description": "便宜好用的中文模型。"},
+        {"id": "deepseek/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "capabilities": ["chat", "vision"], "description": "最新 Flash，支持图片输入。"},
+        {"id": "z-ai/glm-5.3", "name": "GLM-5.3", "capabilities": ["chat"], "description": "智谱旗舰。"},
+        {"id": "qwen/qwen3.8-max", "name": "Qwen3.8 Max", "capabilities": ["chat", "vision"], "description": "通义旗舰。"},
+        {"id": "moonshotai/kimi-k3", "name": "Kimi K3", "capabilities": ["chat", "vision"], "description": "月之暗面旗舰。"},
+        {"id": "minimax/minimax-m3", "name": "MiniMax M3", "capabilities": ["chat", "vision"], "description": "MiniMax 旗舰。"}
+      ]
+    },
+    {
+      "id": "ollama-local",
+      "name": "Ollama（本机）",
+      "adapter": "ollama",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "qwen3:8b",
+      "api_key_ref": "",
+      "capabilities": ["chat", "embedding"],
+      "description": "本机 Ollama 服务，不需要 Key；模型名要先用 `ollama pull` 拉下来。",
+      "docs": "https://ollama.com/library",
+      "models": [
+        {"id": "qwen3:8b", "name": "qwen3:8b", "capabilities": ["chat"], "description": "中文对话，8B。"},
+        {"id": "qwen3:4b", "name": "qwen3:4b", "capabilities": ["chat"], "description": "更小更快。"},
+        {"id": "llama3.2:3b", "name": "llama3.2:3b", "capabilities": ["chat"], "description": "轻量英文对话。"},
+        {"id": "deepseek-r1:7b", "name": "deepseek-r1:7b", "capabilities": ["chat"], "description": "小尺寸推理模型。"},
+        {"id": "nomic-embed-text", "name": "nomic-embed-text", "capabilities": ["embedding"], "description": "向量化。"},
+        {"id": "bge-m3", "name": "bge-m3", "capabilities": ["embedding"], "description": "多语言向量化。"}
+      ]
+    },
+    {
+      "id": "lm-studio-local",
+      "name": "LM Studio（本机）",
+      "adapter": "openai_compat",
+      "base_url": "http://127.0.0.1:1234/v1",
+      "model": "local-model",
+      "api_key_ref": "",
+      "capabilities": ["chat"],
+      "description": "LM Studio 起好本地服务后，模型名一般填什么都行（它只加载了那一个模型）；不确定就在 LM Studio 里看模型标识。",
+      "docs": "https://lmstudio.ai/docs/app/api",
+      "models": [
+        {"id": "local-model", "name": "local-model（占位）", "capabilities": ["chat"], "description": "服务端只认当前加载的模型，这里填占位通常也能通。"}
+      ]
+    },
+    {
+      "id": "llama-server-local",
+      "name": "llama-server（本机）",
+      "adapter": "llama_server",
+      "base_url": "http://127.0.0.1:8080",
+      "model": "local-model",
+      "api_key_ref": "",
+      "capabilities": ["chat", "embedding"],
+      "description": "自己用 llama.cpp 起的 `llama-server`，默认监听 8080。",
+      "docs": "https://github.com/ggml-org/llama.cpp/tree/master/tools/server",
+      "models": [
+        {"id": "local-model", "name": "local-model（占位）", "capabilities": ["chat"], "description": "llama-server 只服务它加载的那个 gguf。"}
+      ]
+    },
+    {
+      "id": "custom",
+      "name": "自定义（OpenAI 兼容）",
+      "adapter": "openai_compat",
+      "base_url": "",
+      "model": "",
+      "api_key_ref": "custom",
+      "capabilities": ["chat"],
+      "description": "任何 OpenAI 兼容接口：自己填接口地址与模型名。",
+      "docs": "",
+      "models": []
+    }
+  ]
+}

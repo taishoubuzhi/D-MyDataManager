@@ -92,6 +92,42 @@ class ItemService:
         ]
         return self.items.bulk_remove_tags(items, tags)
 
+    def add_keywords(self, items: list[DataItem], words: list[str]) -> int:
+        """给一批数据追加关键词，返回被改动的数据条数（已有的词不重复添加）。"""
+        names: list[str] = []
+        for word in words:
+            word = str(word).strip()
+            if word and word not in names:
+                names.append(word)
+        if not names or not items:
+            return 0
+        changed = 0
+        for item in items:
+            current = [str(word) for word in (item.keywords or [])]
+            merged = current + [name for name in names if name not in current]
+            if len(merged) != len(current):
+                item.keywords = merged
+                changed += 1
+        if changed:
+            self.session.flush()
+        return changed
+
+    def remove_keywords(self, items: list[DataItem], words: list[str]) -> int:
+        """从一批数据里去掉若干关键词，返回被改动的数据条数。"""
+        drop = {str(word).strip() for word in words if str(word).strip()}
+        if not drop or not items:
+            return 0
+        changed = 0
+        for item in items:
+            current = [str(word) for word in (item.keywords or [])]
+            kept = [word for word in current if word not in drop]
+            if len(kept) != len(current):
+                item.keywords = kept
+                changed += 1
+        if changed:
+            self.session.flush()
+        return changed
+
     # ----------------------------------------------------------------- 回收站
     def delete(self, items: list[DataItem]) -> int:
         """把数据项移入回收站；已在回收站里的项会被跳过（重复删除没有意义）。"""

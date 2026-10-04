@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication,
@@ -64,10 +66,13 @@ from ..framework import (
 )
 from ..framework.contributions import icon_of, items, resolve, value_of
 from ..dialogs import (
+    BatchRenameDialog,
     CategoryConflictDialog,
     CategoryPickerDialog,
     DuplicateDialog,
     ItemEditDialog,
+    KeywordManagerDialog,
+    TagManagerDialog,
     TextInputDialog,
 )
 from ...core.config import DOUBLE_CLICK_EDITOR, config
@@ -100,7 +105,9 @@ MENU_LABELS: dict[str, tuple[str, str]] = {
     "copy": ("复制路径", "复制路径"),
     "move": ("移动到分类…", "移动到分类…（{count} 项）"),
     "edit": ("编辑信息", "编辑信息"),
-    "tag": ("添加标签", "添加标签"),
+    "tag": ("标签管理", "标签管理（{count} 项）"),
+    "keyword": ("关键词管理", "关键词管理（{count} 项）"),
+    "rename": ("批量重命名…", "批量重命名…（{count} 项）"),
     "hidden": ("隐藏 / 取消隐藏", "隐藏 / 取消隐藏"),
     "export": ("导出选中项", "导出选中项（{count}）"),
     "delete": ("移入回收站", "移入回收站（{count}）"),
@@ -116,6 +123,8 @@ MENU_ICONS: dict[str, FluentIcon] = {
     "move": FluentIcon.MOVE,
     "edit": FluentIcon.EDIT,
     "tag": FluentIcon.TAG,
+    "keyword": FluentIcon.DICTIONARY,
+    "rename": FluentIcon.FONT,
     "hidden": FluentIcon.VIEW,
     "export": FluentIcon.SAVE,
     "delete": FluentIcon.DELETE,
@@ -123,7 +132,7 @@ MENU_ICONS: dict[str, FluentIcon] = {
     "purge": FluentIcon.CLOSE,
     "details": FluentIcon.INFO,
 }
-MENU_SEPARATORS_AFTER = frozenset({"open_with", "editor", "copy", "hidden", "purge"})
+MENU_SEPARATORS_AFTER = frozenset({"open_with", "editor", "copy", "rename", "hidden", "purge"})
 MENU_SINGLE_ONLY = frozenset({"edit", "details"})
 
 
@@ -347,7 +356,9 @@ class ManagePage(Page):
         buttons = [
             ("move", FluentIcon.MOVE, "移动到分类", self._on_move),
             ("edit", FluentIcon.EDIT, "编辑", self._on_edit),
-            ("tag", FluentIcon.TAG, "加标签", self._on_add_tags),
+            ("tag", FluentIcon.TAG, "标签管理", self._on_manage_tags),
+            ("keyword", FluentIcon.DICTIONARY, "关键词管理", self._on_manage_keywords),
+            ("rename", FluentIcon.FONT, "批量重命名", self._on_batch_rename),
             ("hidden", FluentIcon.VIEW, "隐藏/显示", self._on_toggle_hidden),
             ("delete", FluentIcon.DELETE, "删除", self._on_delete),
             ("restore", FluentIcon.SYNC, "还原", self._on_restore),
@@ -421,10 +432,36 @@ class ManagePage(Page):
         self.move_button.clicked.connect(self._on_move)
         layout.addWidget(self.move_button)
 
+        self.tag_button = IconTextButton(FluentIcon.TAG, "标签管理", bar)
+        self.tag_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+        self.tag_button.setToolTip("用三态复选框批量增删所选数据的标签")
+        self.tag_button.clicked.connect(self._on_manage_tags)
+        layout.addWidget(self.tag_button)
+
+        self.keyword_button = IconTextButton(FluentIcon.DICTIONARY, "关键词管理", bar)
+        self.keyword_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+        self.keyword_button.setToolTip("汇总所选数据的关键词，用三态复选框批量增删")
+        self.keyword_button.clicked.connect(self._on_manage_keywords)
+        layout.addWidget(self.keyword_button)
+
+        self.rename_button = IconTextButton(FluentIcon.FONT, "批量重命名…", bar)
+        self.rename_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
+        self.rename_button.setToolTip("替换 / 覆盖 / 添加 / 删改，改之前先看变更清单")
+        self.rename_button.clicked.connect(self._on_batch_rename)
+        layout.addWidget(self.rename_button)
+
         self.clear_selection_button = IconTextButton(FluentIcon.RETURN, "清空选择", bar)
         self.clear_selection_button.setFixedHeight(TOOLBAR_BUTTON_HEIGHT)
         self.clear_selection_button.clicked.connect(self.clear_selection)
         layout.addWidget(self.clear_selection_button)
+        #: 没选中数据时统一置灰的批量按钮（清空选择也在内）。
+        self._batch_buttons = (
+            self.move_button,
+            self.tag_button,
+            self.keyword_button,
+            self.rename_button,
+            self.clear_selection_button,
+        )
         return bar
 
     def _build_filter_panel(self) -> QWidget:
@@ -572,9 +609,8 @@ class ManagePage(Page):
         label = getattr(self, "selection_label", None)
         if label is not None:
             label.setText(f"已选 {count} 项" if count else "未选择数据")
-        for button in (getattr(self, "move_button", None), getattr(self, "clear_selection_button", None)):
-            if button is not None:
-                button.setEnabled(bool(count))
+        for button in getattr(self, "_batch_buttons", ()):
+            button.setEnabled(bool(count))
         pager = getattr(self, "pager", None)
         if pager is not None:
             pager.set_selection(count, visible=len(getattr(self, "_items", ())))
@@ -979,7 +1015,9 @@ class ManagePage(Page):
             "copy": lambda: self._on_copy_path(item),
             "move": self._on_move,
             "edit": self._on_edit,
-            "tag": self._on_add_tags,
+            "tag": self._on_manage_tags,
+            "keyword": self._on_manage_keywords,
+            "rename": self._on_batch_rename,
             "hidden": self._on_toggle_hidden,
             "export": self._on_export,
             "delete": self._on_delete,
@@ -1107,23 +1145,133 @@ class ManagePage(Page):
             ("内容指纹", (item.checksum or "—")[:16]),
         ]
 
-    def _on_add_tags(self) -> None:
+    # ------------------------------------------------------------- 标签 / 关键词
+    def _tag_state(self, items: list, name: str) -> Qt.CheckState:
+        """三态：所选数据全都带这个标签 = 勾，部分带 = 横杠，都没带 = 空。"""
+        owned = sum(1 for item in items if name in item.tag_names)
+        return tri_state(owned, len(items))
+
+    def _on_manage_tags(self) -> None:
+        """标签快捷管理：现有用户标签 + 全局标签用三态复选框批量增减，也能直接新建。"""
         items = self._require_selection()
         if not items:
             return
-        dialog = TextInputDialog(
-            "添加标签", "多个标签用逗号分隔", parent=self.window(), hint="新标签会自动加入标签库"
+        global_names = sorted(self.tag_repo.global_names())
+        globals_set = set(global_names)
+        user_names = [
+            name
+            for name in self.tag_repo.names(user_id=self.user_service.current_id())
+            if name not in globals_set
+        ]
+        entries = [
+            (name, self._tag_state(items, name)) for name in user_names + global_names
+        ]
+        dialog = TagManagerDialog(
+            entries,
+            parent=self.window(),
+            count=len(items),
+            suffixes={name: "（全局）" for name in global_names},
         )
         if not dialog.exec():
             return
-        names = [part.strip() for part in dialog.value().replace("，", ",").split(",") if part.strip()]
-        if not names:
+        additions = dialog.additions()
+        removals = dialog.removals()
+        if not additions and not removals:
+            self.toast_info("没有改动", "标签的勾选状态没有变化")
             return
-        count = self.item_service.add_tags(items, names)
+        if additions:
+            self.item_service.add_tags(items, additions)
+        if removals:
+            self.item_service.remove_tags(items, removals)
         self.session.commit()
         signalBus.itemsChanged.emit()
         signalBus.tagsChanged.emit()
-        self.toast_success("已添加标签", f"{'、'.join(names)}（影响 {count} 项）")
+        self.toast_success(
+            "标签已更新", f"新增 {len(additions)} 个、移除 {len(removals)} 个（影响 {len(items)} 项）"
+        )
+
+    def _keyword_names(self, items: list) -> list[str]:
+        """所选数据的关键词汇总，保持首次出现的顺序。"""
+        names: list[str] = []
+        for item in items:
+            for word in item.keywords or []:
+                word = str(word)
+                if word not in names:
+                    names.append(word)
+        return names
+
+    def _on_manage_keywords(self) -> None:
+        """关键词快捷管理：所选数据的关键词汇总成三态复选框，批量加减或新建。"""
+        items = self._require_selection()
+        if not items:
+            return
+        entries = [
+            (
+                name,
+                tri_state(
+                    sum(1 for item in items if name in (item.keywords or [])), len(items)
+                ),
+            )
+            for name in self._keyword_names(items)
+        ]
+        dialog = KeywordManagerDialog(entries, parent=self.window(), count=len(items))
+        if not dialog.exec():
+            return
+        additions = dialog.additions()
+        removals = dialog.removals()
+        if not additions and not removals:
+            self.toast_info("没有改动", "关键词的勾选状态没有变化")
+            return
+        if additions:
+            self.item_service.add_keywords(items, additions)
+        if removals:
+            self.item_service.remove_keywords(items, removals)
+        self.session.commit()
+        signalBus.itemsChanged.emit()
+        self.toast_success(
+            "关键词已更新", f"新增 {len(additions)} 个、移除 {len(removals)} 个（影响 {len(items)} 项）"
+        )
+
+    # --------------------------------------------------------------- 批量改名
+    def _item_display_name(self, item: DataItem) -> str:
+        """改名清单里显示的名称：补上文件后缀，让用户看到的和磁盘上一致。"""
+        suffix = Path(item.file_path or "").suffix
+        if suffix and not item.name.lower().endswith(suffix.lower()):
+            return f"{item.name}{suffix}"
+        return item.name
+
+    def _on_batch_rename(self) -> None:
+        """批量重命名：先看变更清单、勾选要改的行，再一次性应用。"""
+        items = self._require_selection()
+        if not items:
+            return
+        selected_ids = {item.id for item in items}
+        dialog = BatchRenameDialog(
+            [(item.id, self._item_display_name(item)) for item in items],
+            parent=self.window(),
+            reserved={
+                self._item_display_name(item)
+                for item in self._items
+                if item.id not in selected_ids
+            },
+        )
+        if not dialog.exec():
+            return
+        renames = dialog.renames()
+        by_id = {item.id: item for item in items}
+        changed = 0
+        for item_id, new_name in renames:
+            item = by_id.get(item_id)
+            if item is None or new_name == item.name:
+                continue
+            self.item_service.update(item, name=new_name)
+            changed += 1
+        if not changed:
+            self.toast_info("没有改动", "没有需要改名的文件")
+            return
+        self.session.commit()
+        signalBus.itemsChanged.emit()
+        self.toast_success("已重命名", f"{changed} 项")
 
     def _on_toggle_hidden(self) -> None:
         items = self._require_selection()

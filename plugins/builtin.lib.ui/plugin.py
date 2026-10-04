@@ -37,7 +37,9 @@ from .ui_tools import (
     PAGE_SPACING,
     PANEL_MARGINS,
     ROW_SPACING,
+    ClickCard,
     DetailPanel,
+    FormDialog,
     ListPanel,
     MediaBar,
     PageHeader,
@@ -48,11 +50,15 @@ from .ui_tools import (
     body_label,
     caption,
     check_box,
+    check_grid,
     clear_layout,
+    click_card,
     combo_box,
     confirm,
     empty_state,
+    field,
     fill_table,
+    form_dialog,
     form_row,
     format_time,
     icon_button,
@@ -64,15 +70,20 @@ from .ui_tools import (
     page_template,
     panel_card,
     primary_button,
+    progress_bar,
     push_button,
+    radio_button,
     read_only_table,
     release_widget,
+    scroll_area,
     search_edit,
     section_card,
+    spin_box,
     status_label,
     strong_label,
     text_area,
     text_browser,
+    text_edit,
     title_label,
     toast_error,
     toast_info,
@@ -81,6 +92,8 @@ from .ui_tools import (
     tool_button,
     toolbar,
     view_stack,
+    widget_column,
+    widget_row,
 )
 
 #: 扩展接口名：UI 工具库门面（页面模板工厂 + 弹窗能力）
@@ -91,7 +104,10 @@ __all__ = [
     "caption",
     "CARD_SPACING",
     "check_box",
+    "check_grid",
     "clear_layout",
+    "ClickCard",
+    "click_card",
     "combo_box",
     "COMPACT_MARGINS",
     "confirm",
@@ -105,7 +121,10 @@ __all__ = [
     "DURATION_WARNING",
     "empty_state",
     "EXTENSION_NAME",
+    "field",
     "fill_table",
+    "FormDialog",
+    "form_dialog",
     "form_row",
     "format_time",
     "icon_button",
@@ -126,18 +145,23 @@ __all__ = [
     "PlayerPanel",
     "PopupWindow",
     "primary_button",
+    "progress_bar",
     "push_button",
+    "radio_button",
     "read_only_table",
     "release_widget",
     "ROW_SPACING",
+    "scroll_area",
     "ScrollPageTemplate",
     "search_edit",
     "section_card",
+    "spin_box",
     "SplitPage",
     "status_label",
     "strong_label",
     "text_area",
     "text_browser",
+    "text_edit",
     "title_label",
     "toast_error",
     "toast_info",
@@ -148,6 +172,8 @@ __all__ = [
     "UiApi",
     "UiPlugin",
     "view_stack",
+    "widget_row",
+    "widget_column",
 ]
 
 
@@ -181,6 +207,10 @@ class UiApi:
     def page(self, title: str = "", subtitle: str = "", *, scroll: bool = False) -> PageTemplate:
         """建一个标准页面（标题区 + 内容区），插件可以继续往里加分区。"""
         return PageTemplate(title, subtitle, None, scroll=scroll)
+
+    def form_dialog(self, parent: QWidget | None = None, title: str = "", **fields) -> FormDialog:
+        """建一个插件弹窗外壳（标题 + 字段区 + 确定 / 取消，字段见 FormDialog）。"""
+        return FormDialog(parent, title=title, **fields)
 
     def split_page(self, title: str = "", subtitle: str = "", **fields) -> SplitPage:
         """建一个标准「左列表 + 右详情」页面（字段见 SplitPage）。"""

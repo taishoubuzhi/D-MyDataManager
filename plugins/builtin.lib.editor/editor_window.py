@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
-from loguru import logger
+from app.sdk.console import console_for
 from qfluentwidgets import FluentIcon
 
 from app.sdk import ui
@@ -24,6 +24,8 @@ from dm_plugin.builtin.lib.ui.plugin import (
     toolbar,
 )
 
+_console = console_for("builtin.lib.editor")
+
 
 def _call(widget, name: str):
     """安全调用控件上的可选方法（没有就返回 None）。"""
@@ -35,7 +37,7 @@ def _call(widget, name: str):
     try:
         return method()
     except Exception:
-        logger.exception("编辑器控件调用 {}() 失败", name)
+        _console.exception(f"编辑器控件调用 {name}() 失败")
         return None
 
 
@@ -91,7 +93,7 @@ class EditorWindow(QWidget):
         try:
             widget = self.build(self.content)
         except Exception as exc:
-            logger.exception("内置编辑器无法打开：{}", self.path)
+            _console.exception(f"内置编辑器无法打开：{self.path}")
             self._show_hint(f"内置编辑器无法打开该文件：{exc}")
             return
         self.content_widget = widget
@@ -122,7 +124,7 @@ class EditorWindow(QWidget):
         try:
             result = save()
         except Exception as exc:
-            logger.exception("保存失败：{}", self.path)
+            _console.exception(f"保存失败：{self.path}")
             toast_warning(self, "保存失败", str(exc))
             return
         ok, message = True, "已保存"
@@ -136,7 +138,7 @@ class EditorWindow(QWidget):
                 try:
                     self._on_saved(self.path)
                 except Exception:
-                    logger.exception("保存后同步库内条目失败：{}", self.path)
+                    _console.exception(f"保存后同步库内条目失败：{self.path}")
         else:
             toast_warning(self, "保存失败", message)
         self._refresh_state()

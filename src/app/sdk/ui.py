@@ -10,6 +10,7 @@ from pathlib import Path
 
 __all__ = [
     "CARD_SPACING",
+    "ClickCard",
     "IconTextButton",
     "IconTextPrimaryButton",
     "COMPACT_MARGINS",
@@ -30,8 +31,15 @@ __all__ = [
     "simple_mode",
 ]
 
-#: 按钮类按需导入：插件可以直接写 `ui.IconTextButton(...)`，导入本模块仍然不拉起 Qt。
-_LAZY_EXPORTS = ("IconTextButton", "IconTextPrimaryButton", "simple_display", "simple_mode")
+#: 按钮与卡片类按需导入：插件可以直接写 `ui.IconTextButton(...)` / `ui.ClickCard(...)`，
+#: 导入本模块仍然不拉起 Qt。
+_LAZY_EXPORTS = (
+    "ClickCard",
+    "IconTextButton",
+    "IconTextPrimaryButton",
+    "simple_display",
+    "simple_mode",
+)
 
 
 def __getattr__(name: str):

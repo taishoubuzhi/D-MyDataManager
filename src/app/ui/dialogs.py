@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QTreeWidgetItem
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    CheckBox,
     ComboBox,
+    FluentIcon,
     LineEdit,
     MessageBoxBase,
+    SingleDirectionScrollArea,
+    SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
     SwitchButton,
@@ -18,11 +22,13 @@ from qfluentwidgets import (
     TreeWidget,
 )
 
+from ..core.naming import NUMBER_STYLES, RENAME_MODES, RenameRule, build_plan, split_suffix
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
-from .framework import IconTextButton, format_size
+from .framework import IconTextButton, clear_scroll_background, format_size
 from .components.keyword_input import KeywordInput
 from .components.tag_picker import TagPicker
+from .components.tri_state_list import TriStateList
 
 
 class TextInputDialog(MessageBoxBase):
@@ -305,10 +311,302 @@ class DuplicateDialog(MessageBoxBase):
         return ids
 
 
+class BatchRenameDialog(MessageBoxBase):
+    """批量重命名：选一种改名方式，再在变更清单里勾选要改的行。"""
+
+    def __init__(
+        self,
+        entries: list[tuple[int, str]],
+        parent: QWidget | None = None,
+        reserved: set[str] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._entries = list(entries)
+        self._reserved = set(reserved or ())
+        self._rows: list[tuple[int, str, CheckBox, BodyLabel]] = []
+
+        self.viewLayout.addWidget(SubtitleLabel("批量重命名", self))
+        self.viewLayout.addWidget(
+            BodyLabel("先选一种方式，下面的清单就是每个文件的最终名称；只勾选要改的行。", self)
+        )
+
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(BodyLabel("改名方式", self))
+        self.mode_box = ComboBox(self)
+        for key, text in RENAME_MODES:
+            self.mode_box.addItem(text, userData=key)
+        self.mode_box.setMinimumWidth(320)
+        mode_row.addWidget(self.mode_box, 1)
+        self.viewLayout.addLayout(mode_row)
+
+        self._params = QGridLayout()
+        self._params.setContentsMargins(0, 0, 0, 0)
+        self._params.setHorizontalSpacing(8)
+        self._params.setVerticalSpacing(6)
+        self.viewLayout.addLayout(self._params)
+
+        self.find_edit = LineEdit(self)
+        self.find_edit.setPlaceholderText("要替换掉的文字")
+        self.replace_edit = LineEdit(self)
+        self.replace_edit.setPlaceholderText("替换成什么（留空 = 删掉这段文字）")
+        self.base_edit = LineEdit(self)
+        self.base_edit.setPlaceholderText("新名称（扩展名保持不动）")
+        self.numbered_box = CheckBox("自动编号", self)
+        self.numbered_box.setChecked(True)
+        self.start_edit = SpinBox(self)
+        self.start_edit.setRange(1, 99999)
+        self.width_edit = SpinBox(self)
+        self.width_edit.setRange(0, 8)
+        self.width_edit.setToolTip("数字编号补零位数，0 表示不补零")
+        self.style_box = ComboBox(self)
+        for key, text in NUMBER_STYLES:
+            self.style_box.addItem(text, userData=key)
+        self.text_edit = LineEdit(self)
+        self.text_edit.setPlaceholderText("要插入的文字")
+        self.position_edit = SpinBox(self)
+        self.position_edit.setRange(1, 9999)
+        self.position_edit.setToolTip("从第几个字开始（第一个字算第 1 个）")
+        self.length_edit = SpinBox(self)
+        self.length_edit.setRange(1, 9999)
+
+        self._add_param("查找", self.find_edit, {"replace"})
+        self._add_param("替换为", self.replace_edit, {"replace"})
+        self._add_param("新名称", self.base_edit, {"overwrite"})
+        self._add_param("编号设置", self.numbered_box, {"overwrite"})
+        self._add_param("起始编号", self.start_edit, {"overwrite"})
+        self._add_param("补零位数", self.width_edit, {"overwrite"})
+        self._add_param("编号样式", self.style_box, {"overwrite"})
+        self._add_param("插入文字", self.text_edit, {"insert"})
+        self._add_param("插入位置", self.position_edit, {"insert", "delete"})
+        self._add_param("删除字数", self.length_edit, {"delete"})
+
+        header = QHBoxLayout()
+        header.addWidget(StrongBodyLabel("变更清单", self))
+        header.addStretch(1)
+        self._summary = CaptionLabel("", self)
+        header.addWidget(self._summary)
+        self.viewLayout.addLayout(header)
+
+        self._host = QWidget(self)
+        self._list = QVBoxLayout(self._host)
+        self._list.setContentsMargins(0, 0, 0, 0)
+        self._list.setSpacing(4)
+        self._list.addStretch(1)
+        self._scroll = SingleDirectionScrollArea(self)
+        self._scroll.setWidget(self._host)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setFixedHeight(220)
+        clear_scroll_background(self._scroll)
+        self.viewLayout.addWidget(self._scroll)
+        self._build_rows()
+
+        self.mode_box.currentIndexChanged.connect(self._on_mode_changed)
+        for edit in (self.find_edit, self.replace_edit, self.base_edit, self.text_edit):
+            edit.textChanged.connect(self._refresh)
+        for box in (self.start_edit, self.width_edit, self.position_edit, self.length_edit):
+            box.valueChanged.connect(self._refresh)
+        self.style_box.currentIndexChanged.connect(self._refresh)
+        self.numbered_box.stateChanged.connect(self._refresh)
+        self._on_mode_changed()
+
+        self.yesButton.setText("应用改名")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(620)
+
+    # ------------------------------------------------------------------ 内部
+    def _add_param(self, label: str, widget: QWidget, modes: set[str]) -> None:
+        row = self._params.rowCount()
+        caption = BodyLabel(label, self)
+        for column, part in enumerate((caption, widget)):
+            part.setProperty("renameModes", ",".join(sorted(modes)))
+            self._params.addWidget(part, row, column)
+        widget.setMinimumWidth(260)
+
+    def _build_rows(self) -> None:
+        for item_id, name in self._entries:
+            row = QWidget(self._host)
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(6)
+            box = CheckBox(row)
+            box.setChecked(True)
+            box.setToolTip("取消勾选就不改这一项")
+            layout.addWidget(box)
+            old_label = BodyLabel(name, row)
+            old_label.setToolTip(name)
+            layout.addWidget(old_label, 3)
+            arrow = BodyLabel("→", row)
+            layout.addWidget(arrow)
+            new_label = BodyLabel(name, row)
+            layout.addWidget(new_label, 4)
+            box.stateChanged.connect(self._refresh)
+            self._list.insertWidget(self._list.count() - 1, row)
+            self._rows.append((item_id, name, box, new_label))
+
+    def _rule(self) -> RenameRule:
+        return RenameRule(
+            mode=self.mode_box.currentData() or "replace",
+            find=self.find_edit.text(),
+            replace=self.replace_edit.text(),
+            base=self.base_edit.text().strip(),
+            numbered=self.numbered_box.isChecked(),
+            start=self.start_edit.value(),
+            width=self.width_edit.value(),
+            style=self.style_box.currentData() or "number",
+            text=self.text_edit.text(),
+            position=self.position_edit.value(),
+            length=self.length_edit.value(),
+        )
+
+    def _on_mode_changed(self, *_args) -> None:
+        mode = self.mode_box.currentData() or "replace"
+        for index in range(self._params.count()):
+            widget = self._params.itemAt(index).widget()
+            if widget is None:
+                continue
+            modes = (widget.property("renameModes") or "").split(",")
+            widget.setVisible(mode in modes)
+        self._refresh()
+
+    # ------------------------------------------------------------------ 结果
+    def plan_names(self) -> list[str]:
+        """每行的最终名称，顺序与传入的 entries 一致。"""
+        names = [name for _item_id, name in self._entries]
+        selected = [row[2].isChecked() for row in self._rows]
+        return build_plan(names, self._rule(), selected, self._reserved)
+
+    def renames(self) -> list[tuple[int, str]]:
+        """(数据 id, 新的显示名称主干)：只含勾选了且确实变了的行。"""
+        plan = self.plan_names()
+        result: list[tuple[int, str]] = []
+        for (item_id, name, box, _label), new_name in zip(self._rows, plan):
+            if box.isChecked() and new_name != name:
+                result.append((item_id, split_suffix(new_name)[0]))
+        return result
+
+    def _refresh(self, *_args) -> None:
+        plan = self.plan_names()
+        changes = 0
+        for (item_id, name, box, label), new_name in zip(self._rows, plan):
+            label.setText(new_name)
+            label.setToolTip(new_name)
+            if box.isChecked() and new_name != name:
+                changes += 1
+        self._summary.setText(
+            f"本次将改名 {changes} 项" if changes else "还没有改动：先填好上面需要的参数"
+        )
+        self.yesButton.setEnabled(changes > 0)
+
+
+class TriStateManagerDialog(MessageBoxBase):
+    """标签 / 关键词快捷管理：三态复选框批量增减，输入框直接新建。"""
+
+    #: 条目在界面上的叫法（「标签」「关键词」），子类覆盖。
+    kind = "条目"
+
+    def __init__(
+        self,
+        entries: list[tuple[str, Qt.CheckState]],
+        parent: QWidget | None = None,
+        count: int = 1,
+        suffixes: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._initial = {name: state for name, state in entries}
+        self._suffixes = dict(suffixes or {})
+
+        self.viewLayout.addWidget(SubtitleLabel(f"{self.kind}管理", self))
+        self.viewLayout.addWidget(
+            BodyLabel(
+                f"勾选 = 所选 {count} 项数据全部拥有该{self.kind}，横杠 = 只有部分拥有，空 = 全都没有。"
+                f"确认后按勾选状态批量应用；在下面输入新的{self.kind}可直接新建。",
+                self,
+            )
+        )
+
+        self.list = TriStateList(self)
+        for name, state in entries:
+            self.list.add_name(name, state, label=self._display(name))
+        self.viewLayout.addWidget(self.list)
+
+        add_row = QHBoxLayout()
+        self.input = LineEdit(self)
+        self.input.setPlaceholderText(f"输入新的{self.kind}后回车添加")
+        self.input.returnPressed.connect(self._on_add)
+        add_row.addWidget(self.input, 1)
+        self.add_button = IconTextButton(FluentIcon.ADD, "添加", self)
+        self.add_button.clicked.connect(self._on_add)
+        add_row.addWidget(self.add_button)
+        self.viewLayout.addLayout(add_row)
+
+        self._hint = CaptionLabel("", self)
+        self.viewLayout.addWidget(self._hint)
+        self.list.changed.connect(lambda: self._hint.setText(""))
+
+        self.yesButton.setText("应用")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(520)
+
+    # ------------------------------------------------------------------ 内部
+    def _display(self, name: str) -> str:
+        return f"{name}{self._suffixes.get(name, '')}"
+
+    def _on_add(self) -> None:
+        name = self.input.text().strip()
+        if not name:
+            return
+        self.input.clear()
+        if self.list.has(name):
+            if self.list.state_of(name) == Qt.CheckState.Checked:
+                self._hint.setText(f"「{name}」已经是全选状态，无需重复添加")
+                return
+            self.list.set_state(name, Qt.CheckState.Checked)
+            self._hint.setText(f"「{name}」已存在，已改成对所选数据全部添加")
+            return
+        self.list.add_name(name, Qt.CheckState.Checked)
+        self._hint.setText(f"已新建「{name}」：确认后对所选数据全部添加")
+
+    # ------------------------------------------------------------------ 结果
+    def additions(self) -> list[str]:
+        """需要新增到全部所选数据的条目。"""
+        return [
+            name
+            for name, state in self.list.entries()
+            if state == Qt.CheckState.Checked and self._initial.get(name) != Qt.CheckState.Checked
+        ]
+
+    def removals(self) -> list[str]:
+        """需要从全部所选数据里移走的条目。"""
+        return [
+            name
+            for name, state in self.list.entries()
+            if state == Qt.CheckState.Unchecked
+            and self._initial.get(name, Qt.CheckState.Unchecked) != Qt.CheckState.Unchecked
+        ]
+
+
+class TagManagerDialog(TriStateManagerDialog):
+    """标签快捷管理：现有标签（含全局标签）与新建标签一起管。"""
+
+    kind = "标签"
+
+
+class KeywordManagerDialog(TriStateManagerDialog):
+    """关键词快捷管理：所选数据现有词汇总，可批量加减或新建。"""
+
+    kind = "关键词"
+
+
 __all__ = [
+    "BatchRenameDialog",
     "CategoryConflictDialog",
     "CategoryPickerDialog",
     "DuplicateDialog",
     "ItemEditDialog",
+    "KeywordManagerDialog",
+    "TagManagerDialog",
     "TextInputDialog",
+    "TriStateManagerDialog",
 ]

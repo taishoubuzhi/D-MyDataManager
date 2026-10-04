@@ -73,6 +73,9 @@ LIBRARY_META_DIR = ".datamanager"
 UNASSIGNED_DIR_NAME = "未归属"
 # 隐藏数据的物理存放目录：<分类目录>/.hiddens/
 HIDDEN_DIR_NAME = ".hiddens"
+# 资源文件夹下不做 ACL 保护的子目录：程序自己下载/安装的运行环境权重（models/runtime 的
+# venv 有十几万个文件），锁它会让 Windows 把 ACE 传播到整棵子树，退出/启动都要好几分钟
+UNPROTECTED_DIRS = ("models",)
 LAYOUT_VERSION = 2
 LAYOUT_MARKER_FILE = "layout-2.json"
 
@@ -101,8 +104,11 @@ def release_locked_root() -> None:
     """放行被 ACL 锁上的资源文件夹（保护未开启时什么都不做）。
 
     上一次会话退出时会锁上资源文件夹，此时按路径的 mkdir / 新建都会被拒绝，
-    所以动文件系统前先放行。静态保护模型下运行期不再加锁，因此同一进程里
-    只真正放行一次（否则 `ensure_dirs()` 会反复调用 icacls，启动要多花好几秒）。
+    所以动文件系统前先放行。退出时用的是浅层锁（拒绝项挂在根与各直接子项上，见
+    `acl.lock_tree`），所以这里也走 `acl.unlock_tree()` 连子项一起摘掉；名单里的
+    `models/` 从来没被锁过，放行时同样跳过（对它执行 icacls 反而会触发全子树 ACE 传播）。
+    静态保护模型下运行期不再加锁，因此同一进程里只真正放行一次（否则 `ensure_dirs()`
+    会反复调用 icacls，启动要多花好几秒）。
     """
     global _released
     if _released:
@@ -113,7 +119,7 @@ def release_locked_root() -> None:
     if not config.resourceProtected.value or not acl.is_supported():
         return
     for target in dict.fromkeys((resources_root(), DATA_DIR, DEFAULT_RESOURCE_DIR)):
-        acl.unlock(target)
+        acl.unlock_tree(target, skip=UNPROTECTED_DIRS)
     _released = True
 
 

@@ -739,6 +739,7 @@ def settings_privacy_group(case: Case) -> None:
     hidden_key = bool(config.hiddenProtected.value)
     original_mode = str(config.logMode.value)
     real_lock, real_unlock = acl.lock, acl.unlock
+    real_children, real_release = acl._children, acl.remove_deny
     calls: list[str] = []
     try:
         texts = _widget_texts(page)
@@ -786,8 +787,10 @@ def settings_privacy_group(case: Case) -> None:
         if not privacy.state_text():
             problems.append("隐私状态文案为空")
 
-        acl.lock = lambda path: (calls.append(f"lock:{path}"), (True, ""))[1]
+        acl.lock = lambda path, **kwargs: (calls.append(f"lock:{path}"), (True, ""))[1]
         acl.unlock = lambda path: (calls.append(f"unlock:{path}"), (True, ""))[1]
+        acl._children = lambda root: []
+        acl.remove_deny = lambda path: (calls.append(f"release:{path}"), (True, ""))[1]
         config.set(config.resourceProtected, True)
         config.set(config.hiddenProtected, True)
         page._normalize_privacy()
@@ -812,6 +815,7 @@ def settings_privacy_group(case: Case) -> None:
         config.set(config.resourceProtected, protected_key)
         config.set(config.hiddenProtected, hidden_key)
         acl.lock, acl.unlock = real_lock, real_unlock
+        acl._children, acl.remove_deny = real_children, real_release
         try:
             page._refresh_privacy()
         except Exception:

@@ -38,6 +38,51 @@ MODE_USES_KEEP_DAYS = {MODE_SINGLE: False, MODE_SESSION: False, MODE_DAILY: True
 
 LOG_GLOB = "*.log"
 
+#: 来源字段：所有日志行都带 `extra["source"]`，格式串里用 `{extra[source]}` 取。
+SOURCE_EXTRA = "source"
+#: 格式串里的来源占位符（loguru 的格式串取 extra 必须写 `{extra[source]}`）
+SOURCE_FIELD = "extra[" + SOURCE_EXTRA + "]"
+#: 插件模块的前缀（插件按 `dm_plugin.<插件 id>.<模块>` 导入）
+PLUGIN_MODULE_PREFIX = "dm_plugin."
+#: 统一格式规范：时间 | 级别 | 来源 | 函数:行 | 消息
+DEFAULT_FORMAT = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[source]} | {function}:{line} | {message}"
+)
+#: 旧默认格式：没有来源列，启动时自动升级成 `DEFAULT_FORMAT`
+LEGACY_DEFAULT_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}"
+#: 中间版本用过的格式：`{source}` 这种写法 loguru 取不到 extra，同样升级掉
+LEGACY_SOURCE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {source} | {function}:{line} | {message}"
+_LEGACY_FORMATS = frozenset({LEGACY_DEFAULT_FORMAT, LEGACY_SOURCE_FORMAT})
+
+
+def source_of(name: str) -> str:
+    """模块名 → 来源列：程序侧留 `app.…`，插件侧去掉 `dm_plugin.` 前缀。
+
+    `__main__`（`src/main.py` 以脚本方式跑）记成 `app`；其余原样保留，
+    保证任何一行都能一眼看出「谁发的」。
+    """
+    text = str(name or "").strip()
+    if text.startswith(PLUGIN_MODULE_PREFIX):
+        return text[len(PLUGIN_MODULE_PREFIX) :] or "plugin"
+    if not text or text == "__main__":
+        return "app"
+    return text
+
+
+def active_format() -> str:
+    """当前日志格式：历史默认格式自动升级，用户自定义过的格式原样尊重。"""
+    text = str(config.logFormat.value or "")
+    if not text.strip() or text in _LEGACY_FORMATS:
+        return DEFAULT_FORMAT
+    return text
+
+
+def _patch_record(record) -> None:
+    """给每条日志补来源列（`logger.bind(source=...)` 显式给过的不覆盖）。"""
+    extra = record["extra"]
+    if not extra.get(SOURCE_EXTRA):
+        extra[SOURCE_EXTRA] = source_of(record["name"])
+
 
 def _file_name(mode: str) -> str:
     if mode == MODE_SINGLE:
@@ -145,6 +190,7 @@ LEVEL_COLORS: dict[str, str] = {
 FIELD_TAGS: tuple[tuple[str, str], ...] = (
     ("time", "green"),
     ("level", "level"),
+    ("extra[source]", "magenta"),
     ("name", "cyan"),
     ("module", "cyan"),
     ("function", "cyan"),
@@ -189,20 +235,22 @@ def setup_logging() -> None:
 
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
     mode = str(config.logMode.value)
+    template = active_format()
     common = dict(
         level=config.logLevel.value,
-        format=config.logFormat.value,
+        format=template,
         backtrace=config.logBacktrace.value,
         diagnose=config.logDiagnose.value,
         enqueue=config.logEnqueue.value,
     )
 
     logger.remove()
+    logger.configure(patcher=_patch_record)
     _apply_level_colors()
     if config.logToConsole.value:
         # 控制台写 stdout：PyCharm 等 IDE 会把 stderr 整体标红，让 INFO 看着像错误
         console = dict(common)
-        console["format"] = console_format(str(config.logFormat.value))
+        console["format"] = console_format(template)
         _add_sink(_console_stream(), colorize=True, **console)
 
     _add_sink(

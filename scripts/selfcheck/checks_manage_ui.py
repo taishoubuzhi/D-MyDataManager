@@ -11,12 +11,15 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QPushButton, QWidget
 from qfluentwidgets import StrongBodyLabel
 
+import app.ui.dialogs as dialogs_module
 import app.ui.pages.manage_page as manage_module
 from app.core import paths
 from app.core.config import resources_root
+from app.core.naming import RENAME_MODE_KEYS, RenameRule, build_plan
 from app.repositories import CategoryRepository, ItemFilter, TagRepository
 from app.services import (
     ImportService,
+    ItemService,
     LibraryService,
     TaxonomyService,
     UserService,
@@ -913,4 +916,253 @@ def manage_double_click_action(case: Case) -> None:
         manage_module.edit_path_with = original_edit
         editors.edit_path = original_edit
         config.set(config.doubleClickAction, original)
+        dispose_window(window)
+
+
+@check("manage_batch_rename", "pages")
+def manage_batch_rename(case: Case) -> None:
+    """批量重命名：四种方式的清单、重名 -1/-2、勾选范围、参数显隐与真实落盘改名。"""
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        app = ensure_app()
+        page = window.manage_page
+        imports = ImportService(case.session)
+        user_id = UserService(case.session).current_id()
+        items = [
+            imports.import_text(name, f"{name} 的正文", category_id=fixture.category_child, user_id=user_id)
+            for name in ("abc", "bdh", "kjc")
+        ]
+        case.session.commit()
+        page.refresh()
+        app.processEvents()
+
+        entries = [(item.id, page._item_display_name(item)) for item in items]
+        shown = [name for _id, name in entries]
+        if shown != ["abc.txt", "bdh.txt", "kjc.txt"]:
+            problems.append(f"变更清单里应是带后缀的文件名，实际 {shown}")
+
+        def dialog(mode: str):
+            built = dialogs_module.BatchRenameDialog(entries, parent=window)
+            built.mode_box.setCurrentIndex(RENAME_MODE_KEYS.index(mode))
+            return built
+
+        replace = dialog("replace")
+        replace.find_edit.setText("b")
+        replace.replace_edit.setText("j")
+        if replace.plan_names() != ["ajc.txt", "jdh.txt", "kjc.txt"]:
+            problems.append(f"替换 b→j 后是 {replace.plan_names()}")
+        if replace.renames() != [(items[0].id, "ajc"), (items[1].id, "jdh")]:
+            problems.append(f"只该交回真正变了的行：{replace.renames()}")
+
+        overwrite = dialog("overwrite")
+        overwrite.base_edit.setText("照片")
+        overwrite.width_edit.setValue(2)
+        overwrite._rows[2][2].setChecked(False)
+        if overwrite.plan_names() != ["照片01.txt", "照片02.txt", "kjc.txt"]:
+            problems.append(f"覆盖并编号、第三行取消勾选后是 {overwrite.plan_names()}")
+        if overwrite.renames() != [(items[0].id, "照片01"), (items[1].id, "照片02")]:
+            problems.append(f"取消勾选的行不应改：{overwrite.renames()}")
+
+        same = dialog("overwrite")
+        same.base_edit.setText("同名")
+        same.numbered_box.setChecked(False)
+        same._rows[2][2].setChecked(False)
+        if same.plan_names() != ["同名.txt", "同名-1.txt", "kjc.txt"]:
+            problems.append(f"重名应追加 -1、-2：{same.plan_names()}")
+        reserved = dialogs_module.BatchRenameDialog(entries, parent=window, reserved={"同名.txt"})
+        reserved.mode_box.setCurrentIndex(RENAME_MODE_KEYS.index("overwrite"))
+        reserved.base_edit.setText("同名")
+        reserved.numbered_box.setChecked(False)
+        if reserved.plan_names()[0] != "同名-1.txt":
+            problems.append(f"已被占用的名称应让位加 -1：{reserved.plan_names()}")
+
+        insert = dialog("insert")
+        if insert.text_edit.isHidden() or not insert.base_edit.isHidden() or not insert.find_edit.isHidden():
+            problems.append("切到「添加」后参数表没有换成插入用的控件")
+        insert.text_edit.setText("新-")
+        insert.position_edit.setValue(1)
+        insert._rows[2][2].setChecked(False)
+        if insert.plan_names() != ["新-abc.txt", "新-bdh.txt", "kjc.txt"]:
+            problems.append(f"开头插入后是 {insert.plan_names()}")
+
+        delete = dialog("delete")
+        delete.position_edit.setValue(2)
+        delete.length_edit.setValue(1)
+        delete._rows[2][2].setChecked(False)
+        if delete.plan_names() != ["ac.txt", "bh.txt", "kjc.txt"]:
+            problems.append(f"删掉第 2 个字后是 {delete.plan_names()}")
+
+        plan = build_plan(["a.txt"], RenameRule(mode="delete", position=99, length=1), [True], set())
+        if plan != ["a.txt"]:
+            problems.append(f"位置超出长度应跳过：{plan}")
+
+        class _FakeRenameDialog:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def exec(self) -> int:
+                return 1
+
+            def renames(self):
+                return [(items[0].id, "改名甲"), (items[1].id, "改名乙")]
+
+        original = manage_module.BatchRenameDialog
+        manage_module.BatchRenameDialog = _FakeRenameDialog
+        try:
+            page._selected = {item.id for item in items}
+            page._on_batch_rename()
+        finally:
+            manage_module.BatchRenameDialog = original
+        case.session.expire_all()
+        libraries = LibraryService(case.session)
+        if [item.name for item in items][:2] != ["改名甲", "改名乙"]:
+            problems.append(f"确认后应改掉显示名：{[item.name for item in items]}")
+        if [libraries.abs_path(item).name for item in items][:2] != ["改名甲.txt", "改名乙.txt"]:
+            problems.append(f"确认后应同时改掉库内文件名：{[libraries.abs_path(item).name for item in items]}")
+        if items[2].name != "kjc":
+            problems.append(f"没在清单里的数据不该被改：{items[2].name}")
+
+        assert not problems, "批量重命名：" + "；".join(problems[:12])
+    finally:
+        dispose_window(window)
+
+
+@check("manage_tri_state_managers", "pages")
+def manage_tri_state_managers(case: Case) -> None:
+    """标签 / 关键词管理：三态清单、同名追加、页面按钮与批量应用。"""
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        app = ensure_app()
+        page = window.manage_page
+        imports = ImportService(case.session)
+        user_id = UserService(case.session).current_id()
+        first = imports.import_text(
+            "三态甲",
+            "甲",
+            category_id=fixture.category_child,
+            user_id=user_id,
+            keywords=["共同词", "只甲"],
+            tags=["共同标签", "只甲标签"],
+        )
+        second = imports.import_text(
+            "三态乙",
+            "乙",
+            category_id=fixture.category_child,
+            user_id=user_id,
+            keywords=["共同词", "只乙"],
+            tags=["共同标签", "只乙标签"],
+        )
+        case.session.commit()
+        page.refresh()
+        app.processEvents()
+
+        for name, button in (
+            ("标签管理", getattr(page, "tag_button", None)),
+            ("关键词管理", getattr(page, "keyword_button", None)),
+            ("批量重命名", getattr(page, "rename_button", None)),
+        ):
+            if button is None:
+                problems.append(f"选择条缺少「{name}」按钮")
+        keys = dict(manage_module.menu_items(1))
+        for key in ("tag", "keyword", "rename"):
+            if key not in keys:
+                problems.append(f"右键菜单缺少 {key}")
+        many = dict(manage_module.menu_items(2))
+        if "2 项" not in many.get("rename", ""):
+            problems.append(f"多选时批量重命名没有标注数量：{many.get('rename')!r}")
+        page.clear_selection()
+        app.processEvents()
+        if getattr(page, "rename_button", None) is not None and page.rename_button.isEnabled():
+            problems.append("清空选择后批量重命名按钮仍可用")
+        page._selected = {first.id, second.id}
+        page._sync_selection()
+        app.processEvents()
+        if not page.rename_button.isEnabled() or not page.keyword_button.isEnabled():
+            problems.append("有选中项时选择条的批量按钮应可用")
+
+        dialog = dialogs_module.TagManagerDialog(
+            [("共同标签", tri_state(2, 2)), ("只甲标签", tri_state(1, 2)), ("没有的标签", tri_state(0, 2))],
+            parent=window,
+            count=2,
+            suffixes={"共同标签": "（全局）"},
+        )
+        if dialog.additions() or dialog.removals():
+            problems.append("刚打开时不该有改动")
+        if dialog.list.state_of("只甲标签") != Qt.CheckState.PartiallyChecked:
+            problems.append(f"只有一项带的标签应是横杠：{dialog.list.state_of('只甲标签').name}")
+        dialog.list.set_state("只甲标签", Qt.CheckState.Checked)
+        if dialog.additions() != ["只甲标签"]:
+            problems.append(f"横杠点成全选后应计入新增：{dialog.additions()}")
+        dialog.list.set_state("共同标签", Qt.CheckState.Unchecked)
+        if dialog.removals() != ["共同标签"]:
+            problems.append(f"全选点成空后应计入移除：{dialog.removals()}")
+        dialog.list.set_state("共同标签", Qt.CheckState.Checked)
+        if dialog.removals():
+            problems.append(f"改回全选后不该再移除：{dialog.removals()}")
+
+        dialog.input.setText("没有的标签")
+        dialog._on_add()
+        if dialog.list.state_of("没有的标签") != Qt.CheckState.Checked:
+            problems.append("已存在但没选中的条目应改成全选")
+        if "没有的标签" not in dialog.additions():
+            problems.append(f"全选后的已有条目应计入新增：{dialog.additions()}")
+        dialog.input.setText("没有的标签")
+        dialog._on_add()
+        if "无需" not in dialog._hint.text():
+            problems.append(f"已全选的条目再次添加应被拒绝：{dialog._hint.text()!r}")
+        dialog.input.setText("全新标签")
+        dialog._on_add()
+        if "全新标签" not in dialog.additions():
+            problems.append(f"新建的标签应计入新增：{dialog.additions()}")
+        if dialog.kind != "标签":
+            problems.append(f"标签弹窗的 kind 是 {dialog.kind!r}")
+
+        class _FakeTagDialog:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def exec(self) -> int:
+                return 1
+
+            def additions(self):
+                return ["新标签"]
+
+            def removals(self):
+                return ["只甲标签"]
+
+        class _FakeKeywordDialog:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def exec(self) -> int:
+                return 1
+
+            def additions(self):
+                return ["新词"]
+
+            def removals(self):
+                return ["只乙"]
+
+        original_tag = manage_module.TagManagerDialog
+        original_keyword = manage_module.KeywordManagerDialog
+        manage_module.TagManagerDialog = _FakeTagDialog
+        manage_module.KeywordManagerDialog = _FakeKeywordDialog
+        try:
+            page._on_manage_tags()
+            page._on_manage_keywords()
+        finally:
+            manage_module.TagManagerDialog = original_tag
+            manage_module.KeywordManagerDialog = original_keyword
+        case.session.expire_all()
+        names = set(first.tag_names) | set(second.tag_names)
+        if names != {"共同标签", "只乙标签", "新标签"}:
+            problems.append(f"标签批量应用后是 {sorted(names)}")
+        words = set(first.keywords or []) | set(second.keywords or [])
+        if words != {"共同词", "只甲", "新词"}:
+            problems.append(f"关键词批量应用后是 {sorted(words)}")
+
+        assert not problems, "标签/关键词管理：" + "；".join(problems[:12])
+    finally:
         dispose_window(window)

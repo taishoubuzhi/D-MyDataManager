@@ -19,8 +19,10 @@ from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidgetItem,
     QScrollArea,
     QSizePolicy,
@@ -38,25 +40,32 @@ from qfluentwidgets import (
     CheckBox,
     ComboBox,
     FluentIcon,
+    IndeterminateProgressBar,
     InfoBar,
     InfoBarPosition,
     LineEdit,
     ListWidget,
     MessageBox,
+    MessageBoxBase,
     PlainTextEdit,
+    ProgressBar,
     PushButton,
+    RadioButton,
     SearchLineEdit,
+    SingleDirectionScrollArea,
     Slider,
+    SpinBox,
     StrongBodyLabel,
     SubtitleLabel,
     TableWidget,
+    TextEdit,
     TitleLabel,
     ToolButton,
 )
 
 from app.sdk import ui as sdk_ui
 from app.sdk.data import human_size
-from app.sdk.ui import IconTextButton, IconTextPrimaryButton
+from app.sdk.ui import ClickCard, IconTextButton, IconTextPrimaryButton
 
 #: 间距与边距沿用 SDK 里的统一取值，插件不要再写死数字。
 CARD_SPACING = sdk_ui.CARD_SPACING
@@ -418,13 +427,16 @@ def line_edit(
     text: str = "",
     width: int | None = None,
     read_only: bool = False,
+    password: bool = False,
     on_change=None,
 ) -> LineEdit:
-    """单行输入框；`on_change(文本)` 由插件提供。"""
+    """单行输入框；`on_change(文本)` 由插件提供，`password=True` 时打码显示。"""
     field = LineEdit(parent)
     field.setPlaceholderText(placeholder)
     field.setText(text)
     field.setReadOnly(bool(read_only))
+    if password:
+        field.setEchoMode(QLineEdit.EchoMode.Password)
     if width:
         field.setFixedWidth(int(width))
     if on_change is not None:
@@ -549,6 +561,7 @@ def list_view(
     parent: QWidget | None = None,
     *,
     width: int | None = None,
+    minimum_height: int | None = None,
     on_select=None,
     spacing: int = 2,
 ) -> ListWidget:
@@ -558,6 +571,8 @@ def list_view(
     view.setUniformItemSizes(True)
     if width:
         view.setFixedWidth(int(width))
+    if minimum_height:
+        view.setMinimumHeight(int(minimum_height))
     if on_select is not None:
         view.currentItemChanged.connect(
             lambda current, _previous: on_select(
@@ -639,18 +654,28 @@ def form_row(
     widget: QWidget,
     *,
     label_width: int | None = None,
+    strong: bool = False,
     spacing: int = ROW_SPACING,
+    align_top: bool = False,
 ) -> QWidget:
-    """一行「标签 + 控件」；标签宽度固定时多行能对齐。"""
+    """一行「标签 + 控件」；标签宽度固定时多行能对齐，`strong=True` 时标签加粗。
+
+    `align_top=True` 让标签贴着行顶：控件是多行高块（选择框 + 提示 + 列表）时，
+    默认的垂直居中会把标签顶到中间，看起来跟选择项没对齐。
+    """
     host = QWidget(parent)
     row = QHBoxLayout(host)
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(spacing)
     if label:
-        text = BodyLabel(label, host)
+        text = (StrongBodyLabel if strong else BodyLabel)(label, host)
+        text.setWordWrap(True)
         if label_width:
             text.setFixedWidth(int(label_width))
-        row.addWidget(text)
+        if align_top:
+            row.addWidget(text, 0, Qt.AlignmentFlag.AlignTop)
+        else:
+            row.addWidget(text)
     row.addWidget(widget, 1)
     return host
 
@@ -661,6 +686,192 @@ def view_stack(parent: QWidget | None, *widgets: QWidget) -> QStackedWidget:
     for widget in widgets:
         stack.addWidget(widget)
     return stack
+
+
+def widget_row(
+    parent: QWidget | None = None,
+    *widgets: QWidget,
+    spacing: int = ROW_SPACING,
+    stretches: Sequence[int] | None = None,
+) -> QWidget:
+    """横排一行控件（工具按钮条、按钮 + 说明文字这类）；`stretches` 按位给伸缩比例。"""
+    host = QWidget(parent)
+    layout = QHBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(int(spacing))
+    for index, widget in enumerate(widgets):
+        stretch = int(stretches[index]) if stretches is not None and index < len(stretches) else 0
+        layout.addWidget(widget, stretch)
+    return host
+
+
+def widget_column(
+    parent: QWidget | None = None,
+    *widgets: QWidget,
+    spacing: int = 2,
+    stretches: Sequence[int] | None = None,
+) -> QWidget:
+    """竖排一列控件（「一行控件 + 底下的小字说明」这类）；`stretches` 按位给伸缩比例。"""
+    host = QWidget(parent)
+    layout = QVBoxLayout(host)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(int(spacing))
+    for index, widget in enumerate(widgets):
+        stretch = int(stretches[index]) if stretches is not None and index < len(stretches) else 0
+        layout.addWidget(widget, stretch)
+    return host
+
+
+def progress_bar(
+    parent: QWidget | None = None,
+    *,
+    value: int = 0,
+    indeterminate: bool = False,
+    width: int | None = None,
+    height: int | None = None,
+) -> ProgressBar | IndeterminateProgressBar:
+    """进度条；拿不到总量时用 `indeterminate=True`（来回滚动的那种）。"""
+    bar: ProgressBar | IndeterminateProgressBar = (
+        IndeterminateProgressBar(parent) if indeterminate else ProgressBar(parent)
+    )
+    if not indeterminate:
+        bar.setValue(int(value))
+    if width:
+        bar.setFixedWidth(int(width))
+    if height:
+        bar.setFixedHeight(int(height))
+    return bar
+
+
+def spin_box(
+    parent: QWidget | None = None,
+    *,
+    value: int = 0,
+    minimum: int = 0,
+    maximum: int = 100,
+    step: int = 1,
+    suffix: str = "",
+    width: int | None = None,
+    on_change=None,
+) -> SpinBox:
+    """数字输入框；`on_change(新值)`，`suffix` 是单位（如「秒」）。"""
+    box = SpinBox(parent)
+    box.setRange(int(minimum), int(maximum))
+    box.setSingleStep(int(step))
+    box.setValue(int(value))
+    if suffix:
+        box.setSuffix(f" {suffix}")
+    if width:
+        box.setFixedWidth(int(width))
+    if on_change is not None:
+        box.valueChanged.connect(lambda number: on_change(number))
+    return box
+
+
+def radio_button(
+    parent: QWidget | None = None,
+    *,
+    text: str = "",
+    checked: bool = False,
+    on_change=None,
+) -> RadioButton:
+    """单选按钮（同一父容器内互斥）；`on_change(是否选中)`。"""
+    button = RadioButton(text, parent)
+    button.setChecked(bool(checked))
+    if on_change is not None:
+        button.toggled.connect(lambda state: on_change(bool(state)))
+    return button
+
+
+def text_edit(
+    parent: QWidget | None = None,
+    *,
+    text: str = "",
+    placeholder: str = "",
+    read_only: bool = False,
+    height: int | None = None,
+    on_change=None,
+) -> TextEdit:
+    """多行富文本输入区；`on_change(文本)`，`height` 用来限制高度。"""
+    area = TextEdit(parent)
+    area.setPlaceholderText(placeholder)
+    area.setPlainText(text)
+    area.setReadOnly(bool(read_only))
+    if height:
+        area.setFixedHeight(int(height))
+    if on_change is not None:
+        area.textChanged.connect(lambda: on_change(area.toPlainText()))
+    return area
+
+
+def check_grid(
+    parent: QWidget | None,
+    items: Sequence[tuple[str, str]],
+    *,
+    columns: int = 3,
+    checked: Sequence[str] = (),
+    on_change=None,
+) -> tuple[QWidget, dict[str, CheckBox]]:
+    """多列勾选网格（能力、标签这类多选项）；返回 (容器, {值: 勾选框})。
+
+    `items` 是 `(值, 显示文本)`；`on_change(值, 是否勾选)`。
+    """
+    holder = QWidget(parent)
+    grid = QGridLayout(holder)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setSpacing(ROW_SPACING)
+    boxes: dict[str, CheckBox] = {}
+    chosen = tuple(checked)
+    column_count = max(1, int(columns))
+    for index, (value, text) in enumerate(items):
+        box = CheckBox(str(text), holder)
+        box.setChecked(value in chosen)
+        if on_change is not None:
+            box.toggled.connect(lambda state, key=value: on_change(key, bool(state)))
+        grid.addWidget(box, index // column_count, index % column_count)
+        boxes[str(value)] = box
+    return holder, boxes
+
+
+def field(parent: QWidget | None, label: str, widget: QWidget, *, spacing: int = 2) -> QWidget:
+    """竖排的一项：小标签在上、控件在下（弹窗表单用这种）。"""
+    holder = QWidget(parent)
+    layout = QVBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(spacing)
+    if label:
+        layout.addWidget(caption(holder, label))
+    layout.addWidget(widget)
+    return holder
+
+
+def scroll_area(
+    parent: QWidget | None = None,
+    *,
+    widget: QWidget | None = None,
+    minimum_height: int | None = None,
+    maximum_height: int | None = None,
+) -> SingleDirectionScrollArea:
+    """只竖着滚的滚动区（横向永远不出滚动条）。"""
+    area = SingleDirectionScrollArea(parent)
+    area.setWidgetResizable(True)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    if widget is not None:
+        area.setWidget(widget)
+    if minimum_height:
+        area.setMinimumHeight(int(minimum_height))
+    if maximum_height:
+        area.setMaximumHeight(int(maximum_height))
+    area.enableTransparentBackground()
+    return area
+
+
+def click_card(parent: QWidget | None = None, *, on_click=None) -> ClickCard:
+    """整块可点的卡片；`on_click()`（内部按钮的点击不会冒泡到这里）。"""
+    card = ClickCard(parent)
+    if on_click is not None:
+        card.clicked.connect(lambda: on_click())
+    return card
 
 
 # --------------------------------------------------------------- 组合构件
@@ -1038,13 +1249,105 @@ def image_canvas(parent: QWidget | None = None) -> tuple[QScrollArea, QLabel]:
     return area, label
 
 
+# --------------------------------------------------------------- 弹窗外壳
+class FormDialog(MessageBoxBase):
+    """插件弹窗外壳：标题 + 字段区（长了就滚动）+ 底部「确定 / 取消」。
+
+    插件不再自己 new MessageBoxBase、也不再手算滚动区高度：
+
+        dialog = form_dialog(parent, "新增模型", width=560)
+        dialog.add_field("名称", line_edit(dialog, placeholder="给这张卡片起的名字"))
+        dialog.set_buttons(yes="保存", cancel="取消")
+        if dialog.exec():
+            name = dialog.values()["name"]
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        title: str = "",
+        width: int | None = 560,
+        scroll: bool = True,
+        minimum_height: int = 320,
+        maximum_height: int | None = None,
+        spacing: int = PAGE_SPACING,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        if width:
+            self.widget.setFixedWidth(int(width))
+        self.titleLabel = strong_label(self, title)
+        if title:
+            self.viewLayout.addWidget(self.titleLabel)
+
+        self.area: SingleDirectionScrollArea | None = None
+        if scroll:
+            content = QWidget(self)
+            body = QVBoxLayout(content)
+            body.setContentsMargins(0, 0, 0, 0)
+            body.setSpacing(int(spacing))
+            self.area = scroll_area(
+                self,
+                widget=content,
+                minimum_height=minimum_height,
+                maximum_height=maximum_height or self._height_limit(minimum_height),
+            )
+            self.viewLayout.addWidget(self.area)
+            self.body = body
+        else:
+            # 不滚动时字段直接进 viewLayout（标题下面那一层）。
+            self.body = self.viewLayout
+
+    #: 字段区布局（和 `viewLayout` 同一种用法，插件也可以往里 addWidget）。
+    body: QVBoxLayout
+
+    def _height_limit(self, minimum: int) -> int:
+        """字段区最高到「窗口高度 - 260」，免得弹窗比屏幕还高。"""
+        window = self.parentWidget()
+        height = window.height() if window is not None else 720
+        return max(int(minimum), int(height) - 260)
+
+    def add_widget(self, widget: QWidget) -> QWidget:
+        """往字段区加一个控件。"""
+        self.body.addWidget(widget)
+        return widget
+
+    def add_field(self, label: str, widget: QWidget) -> QWidget:
+        """加一项「小标签在上、控件在下」的字段。"""
+        return self.add_widget(field(self, label, widget))
+
+    def add_row(self, label: str, widget: QWidget, *, label_width: int | None = None) -> QWidget:
+        """加一行「标签 + 控件」（横排，标签加粗）。"""
+        return self.add_widget(form_row(self, label, widget, label_width=label_width, strong=True))
+
+    def add_hint(self, text: str) -> CaptionLabel:
+        """加一句说明文字。"""
+        return self.add_widget(status_label(self, text))
+
+    def set_buttons(self, *, yes: str | None = None, cancel: str | None = None) -> None:
+        """改底部按钮文字。"""
+        if yes:
+            self.yesButton.setText(yes)
+        if cancel:
+            self.cancelButton.setText(cancel)
+
+
+def form_dialog(parent: QWidget | None = None, title: str = "", **fields) -> FormDialog:
+    """弹窗外壳工厂（字段见 `FormDialog`）。"""
+    return FormDialog(parent, title=title, **fields)
+
+
 
 __all__ = [
     "body_label",
     "caption",
     "CARD_SPACING",
     "check_box",
+    "check_grid",
     "clear_layout",
+    "ClickCard",
+    "click_card",
     "combo_box",
     "COMPACT_MARGINS",
     "confirm",
@@ -1055,7 +1358,10 @@ __all__ = [
     "DURATION_SUCCESS",
     "DURATION_WARNING",
     "empty_state",
+    "field",
     "fill_table",
+    "FormDialog",
+    "form_dialog",
     "form_row",
     "format_time",
     "icon_button",
@@ -1075,18 +1381,23 @@ __all__ = [
     "PANEL_MARGINS",
     "PlayerPanel",
     "primary_button",
+    "progress_bar",
     "push_button",
+    "radio_button",
     "read_only_table",
     "release_widget",
     "ROW_SPACING",
+    "scroll_area",
     "ScrollPageTemplate",
     "search_edit",
     "section_card",
+    "spin_box",
     "SplitPage",
     "status_label",
     "strong_label",
     "text_area",
     "text_browser",
+    "text_edit",
     "title_label",
     "toast_error",
     "toast_info",
@@ -1095,4 +1406,6 @@ __all__ = [
     "tool_button",
     "toolbar",
     "view_stack",
+    "widget_column",
+    "widget_row",
 ]

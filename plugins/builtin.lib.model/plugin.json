@@ -1,0 +1,31 @@
+{
+  "id": "builtin.lib.model",
+  "name": "模型工具库",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "模型工具库：登记本地与外部模型、按需下载与懒加载，并通过 model.open 接口把模型调用能力交给程序与其它插件；自带「模型」管理页。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "class": "ModelLibraryPlugin",
+  "depends": [
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "provides": [
+    "model.open"
+  ],
+  "data": {
+    "model_list": "data/model_list.json",
+    "api_templates": "data/api_templates.json",
+    "runtime_profiles": "data/runtime_profiles.json"
+  },
+  "libraries": [
+    {
+      "name": "model",
+      "module": "plugin.py",
+      "description": "模型记录 ModelRecord、注册表 ModelRegistry、调度接口 ModelOpenApi、管理器 ModelManager、适配器与「模型」页面 ModelPage"
+    }
+  ]
+}

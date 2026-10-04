@@ -11,12 +11,12 @@
 | plugin.json | 清单：provides 声明扩展接口 dialog（弹窗）与 ui（界面工具）；libraries 声明 plugin.py |
 | plugin.py | 插件类 UiPlugin：setup() 里登记 DialogApi 与 UiApi；对外转发界面构建件 |
 | dialog_host.py | 弹窗外壳 PopupWindow 与扩展接口 DialogApi 的实现 |
-| ui_tools.py | 页面模板 PageTemplate / ScrollPageTemplate、控件工厂（标签 / 输入框 / 文本区 / 下拉 / 勾选 / 列表 / 表格 / 按钮 / 表单行 / 视图堆叠）、组合构件（ListPanel / DetailPanel / SplitPage / MediaBar / PlayerPanel / image_canvas）、分区卡片、工具条、提示条与确认框 |
+| ui_tools.py | 页面模板 PageTemplate / ScrollPageTemplate、控件工厂（标签 / 输入框 / 文本区 / 下拉 / 勾选 / 数字 / 单选 / 进度条 / 列表 / 表格 / 按钮 / 表单行 / 组合行列 / 勾选网格 / 滚动区 / 视图堆叠）、弹窗外壳 FormDialog、组合构件（ListPanel / DetailPanel / SplitPage / MediaBar / PlayerPanel / image_canvas）、分区卡片、工具条、提示条与确认框 |
 
 ## 贡献
 
 - 扩展接口 provides: dialog —— 查看器等插件用 `ctx.require("dialog")` 取到 DialogApi。
-- 扩展接口 provides: ui —— `ctx.require("ui")` 取到 UiApi（`open_page()`、`page()`、`section()`、`list_panel()`、`detail_panel()`、
+- 扩展接口 provides: ui —— `ctx.require("ui")` 取到 UiApi（`open_page()`、`page()`、`section()`、`form_dialog()`、`list_panel()`、`detail_panel()`、
   `split_page()`、`media_bar()`、`player_panel()`、`image_canvas()`、`windows()`、`close_all()`）。
 - 库模块固定是 plugin.py（libraries 里的 ui -> plugin.py，转发 ui_tools.py 与 dialog_host.py 的实现）：
   - 页面模板：`PageTemplate(title, subtitle, parent, scroll=False)`、`ScrollPageTemplate(...)`、`page_template(...)`
@@ -26,6 +26,15 @@
   - 控件工厂：`body_label / strong_label / title_label / status_label`、`line_edit / search_edit`、`text_area / text_browser`、
     `combo_box / check_box`、`list_item / list_view`、`read_only_table / fill_table`、`tool_button / icon_button / primary_button / push_button`、
     `form_row`、`view_stack` —— 都返回配好间距与主题的控件，回调直接传进来（`on_change` / `on_select` / `on_click` / `on_link`）。
+  - 表单与自绘控件：`text_edit`（多行，可 `height=`）、`spin_box`（数字，`suffix` / `step` / `on_change`）、`radio_button`（单选，`on_change`）、
+    `progress_bar`（`indeterminate=True` 是忙等条）、`widget_row(parent, *widgets, stretches=…)`（横排一行）、`widget_column(parent, *widgets)`（竖排一列）、
+    `check_grid(parent, items, columns=3, checked=…)`（返回 `(控件, {key: CheckBox})`，适合能力多选）、`field(parent, label, widget)`（标签在上的一格）、
+    `scroll_area(parent, widget=…, minimum_height=…, maximum_height=…)` —— 都是给插件页面/弹窗拼布局用的，缺件先补这里再让插件用。
+  - 弹窗外壳：`class FormDialog(parent=None, *, title="", width=560, scroll=True, minimum_height=320, maximum_height=None)`
+    —— 基于 qfluentwidgets `MessageBoxBase`：`titleLabel` 是标题、`body` 放字段、`area` 是 `scroll=True` 时的滚动区，
+    方法 `add_widget(w)` / `add_field(label, w)` / `add_row(label, w)` / `add_hint(text)` / `set_buttons(yes=…, cancel=…)`，
+    点「确定」`exec()` 返回真；工厂 `form_dialog(parent, title, **fields)` 一行搭一个表单弹窗。
+  - 可点卡片：`click_card(parent, on_click=…)`（返回能整块点击的 `ClickCard`，`app.sdk.ui` 也导出 `ClickCard` 给跨插件用）。
   - 组合构件：`ListPanel`（左栏：搜索 + 列表 + 计数，`set_items([(data, 文本[, 气泡])])` / `filter()` / `select(data)`）、
     `DetailPanel`（右栏：标题 + 说明 + `add_row()` + 操作区）、`SplitPage`（左右两栏页面，`list_panel` / `detail_panel` 属性）、
     `MediaBar`（播放暂停 / 进度 / 音量条的纯控件）、`PlayerPanel(path, parent=None)`（基于 QtMultimedia 的完整播放控件，

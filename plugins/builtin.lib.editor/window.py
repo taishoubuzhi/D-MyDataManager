@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from loguru import logger
+from app.sdk.console import console_for
+
+_console = console_for("builtin.lib.editor")
 
 DEFAULT_HOST = "dialog"
 
@@ -34,7 +36,7 @@ def open_page_via_host(ctx, target, factory, name, host, parent=None, on_saved=N
             meta=name,
         )
     except Exception as exc:
-        logger.exception("打开编辑器失败：{}", target)
+        _console.exception(f"打开编辑器失败：{target}")
         return False, f"打开编辑器失败：{exc}"
     return True, name
 
@@ -49,7 +51,7 @@ def edit_editor(ctx, editor, path, parent=None) -> tuple[bool, str]:
         try:
             return opener(target, parent)
         except Exception as exc:
-            logger.exception("编辑器打开文件失败：{}", target)
+            _console.exception(f"编辑器打开文件失败：{target}")
             return False, f"打开编辑器失败：{exc}"
     factory = getattr(editor, "factory", None)
     name = str(getattr(editor, "name", "") or "")

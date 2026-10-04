@@ -4,7 +4,7 @@
 
 - 清单字段、版本范围、依赖规则、载入阶段、状态文件等**规范**见 [`plugins/PLUGIN_PROTOCOL.md`](plugins/PLUGIN_PROTOCOL.md)。
 - 程序开放了哪些**扩展点**、会广播哪些**事件**见 [`plugins/EXTENSION_POINTS.md`](plugins/EXTENSION_POINTS.md)。
-- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/builtin.image/`（功能插件样板）。
+- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/example.model_usage/`（消费 `model.open` 扩展接口）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/builtin.lib.model/`（模型库插件：下载 / 懒加载 / 运行环境）、`plugins/builtin.image/`（功能插件样板）。
 
 ## 1. 插件是什么
 
@@ -123,6 +123,7 @@ class HelloPlugin(Plugin):
 | --- | --- |
 | `ctx.plugin_id` / `ctx.plugin_name` / `ctx.manifest` | 自己的身份与清单 |
 | `ctx.log` | 日志器 |
+| `ctx.console` | 控制台播报：`stage()` / `progress()` / `info()`…，自动带插件 id（见 `EXTENSION_POINTS.md` §3.5） |
 | `ctx.data(key, default=None)` / `ctx.data_path(key)` | 读 `data` 文件 |
 | `ctx.option(key, default=None)` / `ctx.options()` | 读清单 `options` 的当前取值 |
 | `ctx.contribute(point, value, *, key="", order=100, description="", **extra)` | 往扩展点放东西 |
@@ -334,6 +335,7 @@ plugins/<id>/
 想一次看全「界面扩展点 + 事件 + 数据文件 + 选项」的写法，读这两个现成插件：
 
 - `plugins/example.ui_extension/`：往概览卡片、工具栏、右键菜单、详情、导入筛选、设置页各贡献一样东西，并订阅 5 个事件；它的 `PLUGIN.md` 是各插件说明文档的模板。
+- `plugins/example.model_usage/`：**消费别的插件提供的扩展接口**的样板——按能力向 `app.sdk.models` 取模型租约（`acquire` → `invoke` → `close`），没有模型可用时优雅降级；库插件一侧的契约见 `MODEL_PLUGIN.md`。
 - `plugins/builtin.image/`：功能插件的样板——`plugin.py` 只留一个 `create_view()`，扩展名 / 能力 / 宿主都在 `data/viewer.json`，用户可配置项在清单的 `options` 里。
 
 ## 9. 速查

@@ -9,11 +9,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from loguru import logger
+from app.sdk.console import console_for
 
 from app.sdk import storage
 
 from .registry import Editor, EditorRegistry, editor_registry, normalize_suffix
+
+_console = console_for("builtin.lib.editor")
 
 MODE_BUILTIN = "builtin"
 MODE_INHERIT = "inherit"
@@ -118,7 +120,7 @@ class EditorRules:
             },
         }
         if not storage.write_json(self._config_file, payload):
-            logger.warning("写入编辑器规则失败：{}", self._config_file)
+            _console.warning(f"写入编辑器规则失败：{self._config_file}")
 
     def set_rule(self, suffix: str, mode: str, program: str = "", args: str = "", editor_id: str = "") -> EditorRule:
         rule = EditorRule(

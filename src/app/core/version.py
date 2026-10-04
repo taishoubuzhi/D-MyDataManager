@@ -12,7 +12,7 @@ from __future__ import annotations
 
 APP_NAME = "D-MyDataManager"
 # 系统版本号：改这里就能改「关于」处显示的版本（勿在别处再写一份）
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3-rc"
 # 插件协议版本：插件清单里的 manager_version 不得高于它
 MANAGER_VERSION = APP_VERSION
 

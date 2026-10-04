@@ -894,6 +894,13 @@ def setting_change_toasts(case: Case) -> None:
             number.slider.setValue(step)
             app.processEvents()
         QTest.qWait(TOAST_DELAY_MS + 250)
+        # 去抖得真的把提示放出来：只死等一个固定时长，机器一忙就会误报「一条都没弹」
+        import time
+
+        deadline = time.monotonic() + 4.0
+        while page._toast_timer.isActive() and time.monotonic() < deadline:
+            QTest.qWait(TOAST_DELAY_MS + 50)
+        QTest.qWait(50)
         if len(toasts) != 1:
             problems.append(f"连续拖动滑块 6 次弹了 {len(toasts)} 条提示，应该合并成一条")
         elif not toasts[0][0]:
