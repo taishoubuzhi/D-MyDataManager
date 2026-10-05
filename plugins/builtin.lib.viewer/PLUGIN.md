@@ -78,6 +78,6 @@ ViewerPlugin 提供：
 
 ## 谁在用
 
-builtin.image / builtin.text / builtin.markdown / builtin.spreadsheet / builtin.archive /
-builtin.audio / builtin.video —— 它们都写 `depends: [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}]`，
-在自己的目录里放视图代码（例如 `plugins/builtin.image/image_view.py`），继承 ViewerPlugin 并只实现 create_view()。
+builtin.viewer.image / builtin.viewer.text / builtin.viewer.markdown / builtin.viewer.spreadsheet / builtin.viewer.archive /
+builtin.viewer.audio / builtin.viewer.video —— 它们都写 `depends: [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}]`，
+在自己的目录里放视图代码（例如 `plugins/builtin.viewer.image/image_view.py`），继承 ViewerPlugin 并只实现 create_view()。

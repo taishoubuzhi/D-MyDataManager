@@ -29,6 +29,7 @@ __all__ = [
     "csv_rows",
     "decode_text",
     "human_size",
+    "image_data_url",
     "image_info",
     "looks_binary",
     "read_text",
@@ -351,3 +352,34 @@ def image_info(path: Path) -> dict:
     except (OSError, ValueError) as exc:
         logger.error("读取图片信息失败：{}（{}）", path, exc)
         return {}
+
+
+def image_data_url(path: Path, max_side: int = 1024) -> str:
+    """把图片压成一段 `data:` 地址，供插件塞进模型请求（视觉模型多要求 base64 图片）。
+
+    有透明通道的图存 PNG，其余存 JPEG；最长边不超过 `max_side`；
+    读不了或不是图片时返回空串（调用方自己跳过这条数据）。
+    """
+    import base64
+    import io
+
+    from PIL import Image, ImageOps
+
+    try:
+        with Image.open(Path(path)) as image:
+            frame = ImageOps.exif_transpose(image)
+            frame.thumbnail((int(max_side), int(max_side)))
+            has_alpha = frame.mode in ("RGBA", "LA", "P")
+            if has_alpha:
+                buffer = io.BytesIO()
+                frame.convert("RGBA").save(buffer, format="PNG", optimize=True)
+                mime = "image/png"
+            else:
+                buffer = io.BytesIO()
+                frame.convert("RGB").save(buffer, format="JPEG", quality=85)
+                mime = "image/jpeg"
+    except (OSError, ValueError) as exc:
+        logger.error("转换图片为 data 地址失败：{}（{}）", path, exc)
+        return ""
+    payload = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:{mime};base64,{payload}"

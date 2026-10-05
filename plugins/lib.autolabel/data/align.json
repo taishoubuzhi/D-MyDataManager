@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "label": {
+    "rows": [
+      {
+        "datatype": "IMAGE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "blip-image-captioning-base",
+        "note": "先用图像描述模型把图片转成文字，再让对话模型生成标签"
+      },
+      {
+        "datatype": "VIDEO",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "clip-vit-base-patch32",
+        "note": "视频按画面做向量对齐（CLIP 只出向量、不参与提示词；抽帧还需要额外解码器，当下不生成文字描述）"
+      },
+      {
+        "datatype": "AUDIO",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "whisper-base",
+        "note": "先用语音识别把音频转成文字，再让对话模型生成标签"
+      },
+      {
+        "datatype": "DOCUMENT",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把正文压成向量（取最相关的片段），再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "SPREADSHEET",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把表格内容压成向量，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "PRESENTATION",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把幻灯片文字压成向量，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "ARCHIVE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "压缩包按文件名 / 清单做向量对齐，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "CODE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把代码片段压成向量，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "TEXT",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把正文压成向量，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "OTHER",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型压成向量，再让对话模型生成标签",
+        "align_template": "all-minilm-l6-v2"
+      }
+    ]
+  },
+  "keyword": {
+    "rows": [
+      {
+        "datatype": "IMAGE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "blip-image-captioning-base",
+        "note": "先用图像描述模型把图片转成文字，再让对话模型生成关键词"
+      },
+      {
+        "datatype": "VIDEO",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "clip-vit-base-patch32",
+        "note": "视频按画面做向量对齐（CLIP 只出向量、不参与提示词；抽帧还需要额外解码器，当下不生成文字描述）"
+      },
+      {
+        "datatype": "AUDIO",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "align_template": "whisper-base",
+        "note": "先用语音识别把音频转成文字，再让对话模型生成关键词"
+      },
+      {
+        "datatype": "DOCUMENT",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把正文压成向量（取最相关的片段），再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "SPREADSHEET",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把表格内容压成向量，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "PRESENTATION",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把幻灯片文字压成向量，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "ARCHIVE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "压缩包按文件名 / 清单做向量对齐，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "CODE",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把代码片段压成向量，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "TEXT",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型把正文压成向量，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      },
+      {
+        "datatype": "OTHER",
+        "template": "qwen2.5-1.5b-instruct-gguf",
+        "note": "先用轻量向量模型压成向量，再让对话模型生成关键词",
+        "align_template": "all-minilm-l6-v2"
+      }
+    ]
+  }
+}

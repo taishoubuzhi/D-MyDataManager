@@ -84,7 +84,7 @@ class ConsoleSdkCase(unittest.TestCase):
         sink_id = logger.add(sink, level="DEBUG", format=logging_setup.active_format(), colorize=False)
         try:
             line = _here() + 1
-            console_api.info("统一格式自检", source="builtin.lib.model")
+            console_api.info("统一格式自检", source="lib.model")
         finally:
             logger.remove(sink_id)
 
@@ -94,7 +94,7 @@ class ConsoleSdkCase(unittest.TestCase):
         match = LINE.match(rendered)
         assert match is not None, f"格式不符：{rendered!r}"
         assert match.group("level") == "INFO", rendered
-        assert match.group("source") == "builtin.lib.model", rendered
+        assert match.group("source") == "lib.model", rendered
         assert match.group("where") == "test_default_format_renders_source_and_caller", rendered
         assert int(match.group("line")) == line, rendered
         assert match.group("message") == "统一格式自检", rendered
@@ -114,7 +114,7 @@ class ConsoleSdkCase(unittest.TestCase):
 
     def test_active_format_upgrades_legacy_default(self) -> None:
         """老配置里存的是旧格式串，载入后要自动换成统一格式；用户自定义的格式原样尊重。"""
-        assert logging_setup.source_of("dm_plugin.builtin.lib.model.registry") == "builtin.lib.model.registry"
+        assert logging_setup.source_of("dm_plugin.lib.model.registry") == "lib.model.registry"
         assert logging_setup.source_of("__main__") == "app"
         assert logging_setup.SOURCE_FIELD in logging_setup.DEFAULT_FORMAT
 
@@ -134,13 +134,13 @@ class ConsoleSdkCase(unittest.TestCase):
         self._install()
 
         assert console_api.available(), "提供实现后 available() 应为真"
-        console_api.console_for("builtin.lib.model").success("装好了")
-        console_api.stage("下载", "第二片", source="builtin.lib.model")
+        console_api.console_for("lib.model").success("装好了")
+        console_api.stage("下载", "第二片", source="lib.model")
         console_api.warning("注意", source="demo", stage="扫描")
 
         assert self.recorder.calls == [
-            {"level": "success", "message": "装好了", "source": "builtin.lib.model", "stage": ""},
-            {"level": "info", "message": "第二片", "source": "builtin.lib.model", "stage": "下载"},
+            {"level": "success", "message": "装好了", "source": "lib.model", "stage": ""},
+            {"level": "info", "message": "第二片", "source": "lib.model", "stage": "下载"},
             {"level": "warning", "message": "注意", "source": "demo", "stage": "扫描"},
         ], self.recorder.calls
         assert self.recorder.messages == [], "有实现时不该再直接落 loguru"

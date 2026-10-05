@@ -2,7 +2,7 @@
 
 规则文件是 `.configs/viewers.json`（旧版是 `.configs/open_with.json`，首次读取时自动迁移）：
 
-    {"version": 1, "rules": {"md": {"mode": "builtin", "viewer_id": "builtin.markdown"}}}
+    {"version": 1, "rules": {"md": {"mode": "builtin", "viewer_id": "builtin.viewer.markdown"}}}
 
 解析顺序（程序本体不再参与，全部由本库决定）：
 

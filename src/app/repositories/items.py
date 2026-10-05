@@ -34,6 +34,8 @@ class ItemFilter:
     category_ids: set[int] = field(default_factory=set)
     library_ids: set[int] = field(default_factory=set)
     user_ids: set[int] = field(default_factory=set)
+    suffixes: set[str] = field(default_factory=set)
+    exclude_tags: set[str] = field(default_factory=set)
     include_hidden: bool = False
     only_hidden: bool = False
     include_deleted: bool = False
@@ -90,6 +92,19 @@ class ItemRepository(Repository[DataItem]):
             stmt = stmt.where(DataItem.user_id.in_(list(flt.user_ids)))
         if flt.tags:
             stmt = stmt.where(DataItem.tags.any(Tag.name.in_(list(flt.tags))))
+        if flt.exclude_tags:
+            # 一条都不要带上这些标签（批量打标签时用来跳过已经做过的条目）
+            stmt = stmt.where(~DataItem.tags.any(Tag.name.in_(list(flt.exclude_tags))))
+        if flt.suffixes:
+            # 后缀按「文件名结尾」匹配：存库路径与原始路径都算（SQLite 的 LIKE 对 ASCII 不区分大小写）
+            endings = []
+            for suffix in flt.suffixes:
+                text = str(suffix).strip().lower().lstrip(".")
+                if text:
+                    endings.append(DataItem.file_path.like(f"%.{text}"))
+                    endings.append(DataItem.source_path.like(f"%.{text}"))
+            if endings:
+                stmt = stmt.where(or_(*endings))
         for keyword in flt.keywords:
             values = func.json_each(DataItem.keywords).table_valued("value")
             stmt = stmt.where(

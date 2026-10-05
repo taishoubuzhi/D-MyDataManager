@@ -1,0 +1,52 @@
+{
+  "id": "auto_tag",
+  "name": "自动标签（模型）",
+  "version": "1.0.0",
+  "description": "用模型按数据类型给条目挂标签：规则方案与模型方案可切换，也能把两套标签合并；批量请求统一交给模型工具库调度。",
+  "author": "D-MyDataManager",
+  "api_version": ">=1.0 <2.0",
+  "builtin": false,
+  "enabled": false,
+  "entry": "plugin.py",
+  "class": "AutoTagPlugin",
+  "depends": [
+    { "id": "lib.autolabel" },
+    { "id": "lib.model", "optional": true },
+    { "id": "builtin.lib.ui" }
+  ],
+  "conflicts": ["auto_tag.rule"],
+  "options": [
+    {
+      "key": "min_tags",
+      "label": "最少挂几个标签",
+      "description": "模型给得太少时整条作废，不勉强挂。",
+      "kind": "int",
+      "default": 1,
+      "minimum": 1,
+      "maximum": 50
+    },
+    {
+      "key": "max_tags",
+      "label": "最多挂几个标签",
+      "description": "超出的部分按模型给的顺序截断；大于库里现有标签总数时以标签总数为准。",
+      "kind": "int",
+      "default": 5,
+      "minimum": 1,
+      "maximum": 50
+    },
+    {
+      "key": "merge_rule_tags",
+      "label": "合并规则方案的标签",
+      "description": "打开后：规则命中的标签 ∪ 模型给出的标签（去重后仍受上下限约束）。",
+      "kind": "bool",
+      "default": false
+    }
+  ],
+  "libraries": [
+    {
+      "name": "runner",
+      "module": "runner.py",
+      "description": "双方案的执行逻辑：规则命中、模型批量请求、标签合并与写库。"
+    }
+  ]
+}

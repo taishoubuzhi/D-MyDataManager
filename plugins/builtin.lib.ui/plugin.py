@@ -13,7 +13,7 @@
     from app.sdk import Plugin, PluginContext
     from dm_plugin.builtin.lib.ui.plugin import SplitPage, toast_success
 
-本插件由原先的 builtin.lib.dialog 并入而来：弹窗能力原样保留在 dialog_host.py。
+本插件由原先的 lib.dialog 并入而来：弹窗能力原样保留在 dialog_host.py。
 """
 
 from __future__ import annotations
@@ -78,6 +78,7 @@ from .ui_tools import (
     scroll_area,
     search_edit,
     section_card,
+    set_table_wrap,
     spin_box,
     status_label,
     strong_label,
@@ -149,6 +150,7 @@ __all__ = [
     "push_button",
     "radio_button",
     "read_only_table",
+    "set_table_wrap",
     "release_widget",
     "ROW_SPACING",
     "scroll_area",

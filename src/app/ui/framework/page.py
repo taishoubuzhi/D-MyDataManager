@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from loguru import logger
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CardWidget, ScrollArea
 
@@ -99,15 +100,36 @@ class PageBase:
             signal.connect(self._on_auto_refresh)
 
     def _on_auto_refresh(self) -> None:
+        self._expire_session()
         if self.isVisible() or not self.window().isVisible():
             self.refresh()
             return
         self._refresh_pending = True
 
+    def _expire_session(self) -> None:
+        """外部（插件）改库后先让本页会话失效。
+
+        插件通过 `app.sdk.items` 写库走的是它自己的会话，本页会话的 identity map 里
+        还是旧值：不失效的话，`refresh()` 重新查库读到的标签 / 关键词仍然是旧的
+        （实测：插件提交后同一会话 query 出来还是空标签，`expire_all()` 之后才拿到新值）。
+        页面自己有未提交改动时不动它，免得把编辑丢掉。
+        """
+        session = getattr(self, "session", None)
+        if session is None:
+            session = getattr(self, "_session", None)
+        if session is None:
+            return
+        try:
+            if not len(session.new) and not len(session.dirty):
+                session.expire_all()
+        except Exception:
+            logger.exception("刷新前让页面会话失效失败")
+
     def _flush_pending_refresh(self) -> None:
         """`showEvent` 里补做挂起的刷新（子类在自己的 showEvent 里调用）。"""
         if self._refresh_pending:
             self._refresh_pending = False
+            self._expire_session()
             self.refresh()
 
 

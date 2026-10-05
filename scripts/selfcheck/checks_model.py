@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QPushButton
 
 from .harness import Case, check, install_builtin_plugins
 
-_PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins" / "builtin.lib.model"
+_PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins" / "lib.model"
 _PAGE_KEY = "model_manager"
 
 
@@ -58,7 +58,7 @@ def _dispose(widget) -> None:
 def model_manifest_and_templates(case: Case) -> None:
     """清单声明 model.open 与三个只读模板，模板 JSON 的字段够页面直接用。"""
     manifest = json.loads((_PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
-    assert manifest.get("id") == "builtin.lib.model", f"插件 id 不对：{manifest.get('id')}"
+    assert manifest.get("id") == "lib.model", f"插件 id 不对：{manifest.get('id')}"
     assert "model.open" in (manifest.get("provides") or []), "清单没有提供 model.open"
     declared = set(manifest.get("data") or {})
     assert {"model_list", "api_templates", "runtime_profiles"} <= declared, f"清单 data 缺项：{sorted(declared)}"
@@ -146,7 +146,7 @@ def model_extension_api(case: Case) -> None:
 @check("model_templates_and_constants", "services")
 def model_templates_and_constants(case: Case) -> None:
     """模板里的后端名、能力名与插件常量表对得上，页面按能力选后端才不会落空。"""
-    from dm_plugin.builtin.lib.model import constants
+    from dm_plugin.lib.model import constants
 
     install_builtin_plugins()
     problems: list[str] = []
@@ -162,7 +162,7 @@ def model_templates_and_constants(case: Case) -> None:
             problems.append(f"CAPABILITY_BACKENDS 有未知能力：{capability}")
         if backend not in constants.BACKENDS and backend not in constants.ADAPTERS:
             problems.append(f"{capability} 的默认后端不合法：{backend}")
-    from dm_plugin.builtin.lib.model.worker import worker_main
+    from dm_plugin.lib.model.worker import worker_main
 
     known = set(worker_main._BACKENDS)
     for capability, backend in constants.CAPABILITY_BACKENDS.items():
@@ -207,7 +207,7 @@ def model_sdk_without_plugin(case: Case) -> None:
 def model_settings_roundtrip_and_secret(case: Case) -> None:
     """设置落 `.configs/models.json`：镜像、代理、并发、密钥都能存回，密钥打码不出原文。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import settings as settings_module
+    from dm_plugin.lib.model import settings as settings_module
 
     settings = settings_module.load_settings()
     problems: list[str] = []
@@ -310,8 +310,8 @@ def model_page_build_and_cards(case: Case) -> None:
 
         # 本地模型上次加载失败（state=error）时，权重还在，「加载 / 测试 / 更换权重」都得留着：
         # 早先这几颗按钮跟着 ready 走，一出错整排消失，只能刷新页面才回来。
-        from dm_plugin.builtin.lib.model.constants import STATE_ERROR
-        from dm_plugin.builtin.lib.model.paths import local_dir
+        from dm_plugin.lib.model.constants import STATE_ERROR
+        from dm_plugin.lib.model.paths import local_dir
 
         local = page._api.add_local("自检本地", capabilities=("chat",))
         weights = local_dir(local.id) / "demo.gguf"
@@ -324,13 +324,17 @@ def model_page_build_and_cards(case: Case) -> None:
         if local_card is None:
             problems.append("登记本地模型后页面上没有卡片")
         else:
-            for key in ("load", "test", "download"):
+            for key in ("load", "test", "download", "replace"):
                 button = local_card.action_button(key)
                 if button is None or button.isHidden():
                     problems.append(f"权重还在、上次加载失败时「{key}」按钮不该消失")
+            # 「下载」与「更换权重」是两个独立按钮：前者只补缺的文件，后者才换一整组。
             download = local_card.action_button("download")
-            if download is not None and "更换权重" not in download.toolTip():
-                problems.append(f"有权重的本地模型应把「下载」换成「更换权重」：{download.toolTip()}")
+            if download is not None and "更换权重" in download.toolTip():
+                problems.append(f"「下载」按钮不该再兼「更换权重」：{download.toolTip()}")
+            replace = local_card.action_button("replace")
+            if replace is not None and "更换权重" not in replace.toolTip():
+                problems.append(f"有权重的本地模型应显示「更换权重」：{replace.toolTip()}")
 
         assert not problems, "模型管理页：" + "；".join(problems[:12])
     finally:
@@ -351,10 +355,10 @@ def model_logs_latest_and_cleanup(case: Case) -> None:
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
 
-    from dm_plugin.builtin.lib.model import paths as paths_module
-    from dm_plugin.builtin.lib.model.record import slugify
+    from dm_plugin.lib.model import paths as paths_module
+    from dm_plugin.lib.model.record import slugify
 
-    page_module = importlib.import_module("dm_plugin.builtin.lib.model.ui.page")
+    page_module = importlib.import_module("dm_plugin.lib.model.ui.page")
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -460,7 +464,7 @@ def model_page_settings_form(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import settings as settings_module
+    from dm_plugin.lib.model import settings as settings_module
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -595,7 +599,7 @@ def model_page_github_source(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import settings as settings_module
+    from dm_plugin.lib.model import settings as settings_module
 
     original = settings_module.load_settings()
     _fixture, window = build_window(case)
@@ -879,7 +883,7 @@ def model_p4_system_install(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import runtime as runtime_module
+    from dm_plugin.lib.model import runtime as runtime_module
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -995,7 +999,7 @@ def model_dialog_form_scroll(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model.ui.dialogs import ExternalModelDialog, LocalModelDialog
+    from dm_plugin.lib.model.ui.dialogs import ExternalModelDialog, LocalModelDialog
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -1049,7 +1053,7 @@ def model_dialog_template_reset(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model.ui.dialogs import ExternalModelDialog, LocalModelDialog
+    from dm_plugin.lib.model.ui.dialogs import ExternalModelDialog, LocalModelDialog
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -1097,7 +1101,7 @@ def model_page_card_cleanup(case: Case) -> None:
     ensure_app()
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model.ui.cards import ModelCard
+    from dm_plugin.lib.model.ui.cards import ModelCard
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -1390,7 +1394,7 @@ def model_runtime_parallel_install(case: Case) -> None:
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
 
-    import dm_plugin.builtin.lib.model.ui.page as page_module
+    import dm_plugin.lib.model.ui.page as page_module
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -1553,7 +1557,7 @@ def model_local_wheels_source(case: Case) -> None:
 def model_pip_mirror_settings(case: Case) -> None:
     """安装源：默认官方、预设镜像地址正确、自定义源生效、能存回设置。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import settings as settings_module
+    from dm_plugin.lib.model import settings as settings_module
 
     problems: list[str] = []
     if tuple(key for key, _label, _url in settings_module.PIP_MIRRORS) != settings_module.PIP_MIRROR_KEYS:
@@ -1600,7 +1604,7 @@ def model_pip_mirror_settings(case: Case) -> None:
 def model_runtime_stop_and_marker(case: Case) -> None:
     """运行环境：半成品不算已安装（认完成标记）、暂停与取消各有自己的异常、discard 清干净。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import runtime as runtime_module
+    from dm_plugin.lib.model import runtime as runtime_module
 
     problems: list[str] = []
     if runtime_module.installed("selfcheck"):
@@ -1645,8 +1649,8 @@ def model_runtime_stop_and_marker(case: Case) -> None:
 def model_runtime_profile_twins(case: Case) -> None:
     """CPU / GPU 双胞胎环境：模型写 `llama-cpp`、盘上只有 `llama-cpp-gpu` 时也要能跑。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import runtime as runtime_module
-    from dm_plugin.builtin.lib.model.adapters.worker import WorkerAdapter
+    from dm_plugin.lib.model import runtime as runtime_module
+    from dm_plugin.lib.model.adapters.worker import WorkerAdapter
     import shutil
     import sys
     import types
@@ -1704,7 +1708,7 @@ def model_runtime_profile_twins(case: Case) -> None:
 def model_download_prune(case: Case) -> None:
     """下载收尾：临时目录空了才删、有东西就留着，`download/` 空了也顺手清，取消走 drop_part。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model.download import downloader
+    from dm_plugin.lib.model.download import downloader
 
     problems: list[str] = []
     folder = downloader.download_dir("local/selfcheck")
@@ -1737,9 +1741,9 @@ def model_download_prune(case: Case) -> None:
 def model_crash_recovery(case: Case) -> None:
     """异常退出：安装留「没装完」标记、下载留断点信息，重开后接着装 / 接着下。"""
     install_builtin_plugins()
-    from dm_plugin.builtin.lib.model import runtime as runtime_module
-    from dm_plugin.builtin.lib.model.download import downloader
-    from dm_plugin.builtin.lib.model.settings import ModelSettings
+    from dm_plugin.lib.model import runtime as runtime_module
+    from dm_plugin.lib.model.download import downloader
+    from dm_plugin.lib.model.settings import ModelSettings
 
     problems: list[str] = []
     profile_id = "selfcheck-crash"
@@ -1825,9 +1829,9 @@ def model_page_mirror_and_delete_dialog(case: Case) -> None:
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
 
-    from dm_plugin.builtin.lib.model import settings as settings_module
-    from dm_plugin.builtin.lib.model.paths import local_dir
-    from dm_plugin.builtin.lib.model.ui.dialogs import DeleteModelDialog
+    from dm_plugin.lib.model import settings as settings_module
+    from dm_plugin.lib.model.paths import local_dir
+    from dm_plugin.lib.model.ui.dialogs import DeleteModelDialog
 
     _fixture, window = build_window(case)
     problems: list[str] = []
@@ -1905,8 +1909,8 @@ def model_weight_replace_and_cleanup(case: Case) -> None:
     plugin_service.bootstrap(APP_UI_EXTENSION, AppUiApi())
     install_builtin_plugins()
 
-    from dm_plugin.builtin.lib.model.paths import local_dir, local_root
-    from dm_plugin.builtin.lib.model.ui.dialogs import CleanupWeightsDialog, ReplaceWeightsDialog
+    from dm_plugin.lib.model.paths import local_dir, local_root
+    from dm_plugin.lib.model.ui.dialogs import CleanupWeightsDialog, ReplaceWeightsDialog
 
     _fixture, window = build_window(case)
     problems: list[str] = []

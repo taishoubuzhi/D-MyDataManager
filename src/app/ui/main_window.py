@@ -80,6 +80,9 @@ class MainWindow(FluentWindow):
 
     def _init_navigation(self) -> None:
         """把页面挂进堆叠区：内置页按内置顺序装配侧栏，插件页面随后追加。"""
+        api = self._app_ui()
+        if api is not None and hasattr(api, "set_navigator"):
+            api.set_navigator(self.open_navigation)
         for attr, title, icon, bottom in BUILTIN_PAGES:
             position = NavigationItemPosition.BOTTOM if bottom else NavigationItemPosition.TOP
             self.addSubInterface(getattr(self, attr), icon, title, position)
@@ -114,8 +117,10 @@ class MainWindow(FluentWindow):
             if widget is None:
                 continue
             widget.setObjectName(spec.route)
+            widget.setProperty("isStackedTransparent", False)
             self._plugin_pages[key] = widget
             self._plugin_specs[key] = spec
+            # 插件页面只在这里进堆叠区一次，侧栏项由 _sync_plugin_nav 单独加（见那里的说明）。
             self.stackedWidget.addWidget(widget)
         self._sync_plugin_nav()
 
@@ -185,6 +190,19 @@ class MainWindow(FluentWindow):
             )
         return entries
 
+    def _page_opener(self, widget: QWidget):
+        """侧栏点击回调：必须返回 0 参可调用对象。
+
+        qfluentwidgets 把侧栏项的 `clicked(bool)` 直接接到 `onClick`，PyQt 按可调用对象的
+        形参个数投递信号参数：写成 `lambda page=widget: …` 会被当成「收一个参数」，
+        那个布尔量于是覆盖默认值（`switchTo(True)` → `TypeError: indexOf … unexpected type 'bool'`）。
+        """
+
+        def open_page() -> None:
+            self.switchTo(widget)
+
+        return open_page
+
     def _sync_plugin_nav(self) -> None:
         """把插件页面按载入顺序追加到侧栏；超出名额的只在「页面管理」页里出现。"""
         live = {widget.objectName() for widget in self._plugin_pages.values()}
@@ -201,7 +219,18 @@ class MainWindow(FluentWindow):
             if spec is None or len(self._plugin_nav_routes) >= PLUGIN_SIDEBAR_LIMIT:
                 continue
             # 插件页面一律追加在内置页面之后、设置之前：设置永远在最下面，谁也不能挤到它下面。
-            self.addSubInterface(widget, self._plugin_icon(spec.icon), spec.title, NavigationItemPosition.TOP)
+            # 这里只能用 addItem 加侧栏项，不能走 addSubInterface：页面已经在 _sync_plugin_pages
+            # 里进过堆叠区，再进一次 qfluentwidgets 的动画栈只会把控件挪到末尾、却不会删掉旧的
+            # 动画记录（aniInfos），索引从此错位——删页面时留下指向已删除控件的记录，点侧栏就崩。
+            self.navigationInterface.addItem(
+                routeKey=route,
+                icon=self._plugin_icon(spec.icon),
+                text=spec.title,
+                onClick=self._page_opener(widget),
+                position=NavigationItemPosition.TOP,
+                tooltip=spec.title,
+            )
+            self._updateStackedBackground()
             self._plugin_nav_routes.append(route)
         current = self.stackedWidget.currentWidget()
         if current is not None:

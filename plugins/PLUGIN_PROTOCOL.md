@@ -40,8 +40,7 @@ plugins/
 | `api_version` | 是 | 范围字符串 | 适配的 SDK 版本范围，例如 `>=1.0 <2.0`；缺字段、范围写法非法、当前 SDK 不满足都会拒绝载入 |
 | `manager_version` | 否 | 范围字符串 | 要求的程序版本范围，默认不限；不满足直接报错 |
 | `depends` | 否 | 数组 | 依赖的插件，见 2.2 |
-| `incompatible` | 否 | 字符串数组 | 不能同时载入的插件 id（冲突） |
-| `load_after` | 否 | 字符串数组 | 只影响载入顺序，不要求目标存在 |
+| `conflicts` | 否 | 字符串数组 | 冲突的插件 id：不能**同时启用**（对方没启用就不算冲突；两个都启用时靠前者胜出、后者保持禁用并提示与哪个插件冲突）。载入不受影响，见 2.3 |
 | `provides` | 否 | 字符串数组 | 声明对外暴露的**扩展接口名**（`ctx.provide()` / `ctx.require()`），见 2.7 |
 | `libraries` | 否 | 数组 | 对外暴露的**库模块**，见 2.4，与 `provides` 的分工见 2.7 |
 | `data` | 否 | 对象 | 数据文件声明（键 → 相对路径），见 2.5 |
@@ -70,10 +69,11 @@ plugins/
 
 ### 2.3 冲突与顺序
 
-- `incompatible`：列表里任意一个插件也被载入时，本插件标记为「与插件不兼容：…」并且不载入。
-- `load_after`：只用来表达「同层里我想排在它后面」，目标不存在时忽略。
+- `conflicts`：**只影响启用，不影响载入**。列表里任意一个插件同时启用时，本插件不能启用：已经在启用集合里的那个胜出（两个都启用时按实际载入顺序靠前者胜出），另一个保持禁用，插件页显示「与插件冲突」，控制台打印 `插件启用失败：<id>（与插件冲突：<对方>）；先禁用插件 <对方> 再启用本插件`。把胜出的那个禁用后，另一个即可启用。声明是对称的：任意一方写了就算双方冲突。
+- 载入顺序不用单独声明：同层里谁先谁后由依赖决定（想排在被依赖者之后，就写进 `depends`）。已取消的 `load_after` / `incompatible` 字段会在 `manifest` 阶段报 `插件清单已取消字段 …：请改用 …`。
 - 实际顺序：先按依赖拓扑排序（被依赖的先载入），同层内按 `(内置优先, id 字典序)` 排。
 - 循环依赖报错文本：`插件依赖存在循环：a → b → a`。
+- 载入失败（阶段 `manifest` / `dependency` / `import` / `construct` / `setup`）才是插件不可用：清单字段与版本范围不适配、缺依赖 / 依赖未启用、入口导入失败、构造或初始化抛异常。冲突不属于载入失败。
 
 ### 2.4 库模块（libraries）
 
@@ -128,14 +128,18 @@ plugins/
     {"key": "fit_on_open", "label": "打开时适应窗口", "kind": "bool", "default": true,
      "description": "打开图片时自动缩放到刚好填满窗口。"},
     {"key": "zoom_step", "label": "缩放步长", "kind": "choice", "default": "1.25",
-     "choices": {"1.1": "1.1×（细腻）", "1.25": "1.25×（默认）", "1.5": "1.5×（快速）"}}
+     "choices": {"1.1": "1.1×（细腻）", "1.25": "1.25×（默认）", "1.5": "1.5×（快速）"}},
+    {"key": "max_tags", "label": "最多挂几个标签", "kind": "int", "default": 5,
+     "minimum": 1, "maximum": 50, "step": 1}
   ]
 }
 ```
 
-- `kind` 只有三种：`bool` / `text` / `choice`。
+- `kind` 有四种：`bool` / `int` / `text` / `choice`。
 - `key` 匹配 `^[a-z][a-z0-9_.\-]{0,63}$`，同一个插件里不能重复。
 - `choice` 必须有非空 `choices`，且 `default` 必须是其中一个取值。
+- `int` 用数字微调框展示：`minimum` / `maximum` 限定范围（可省，默认 `-999999 ~ 999999`），`step` 是步长（默认 1）；
+  `default`、`minimum`、`maximum` 都得是数字，`minimum > maximum` 会在载入时直接报错，超范围的值会被钳到边界。
 - 插件里读：`ctx.option("zoom_step", 1.25)`；选项值由程序规范化，认不出的值回退默认值。
 - 用户在「插件」页改选项会写进 `.configs/plugins.json`，并**重新载入该插件**，所以 `setup()` 里读到的就是最新值。
 
@@ -191,12 +195,13 @@ plugins/
 | 阶段 | 做什么 | 典型失败 |
 | --- | --- | --- |
 | `manifest` | 读 `plugin.json`、白名单校验、解析依赖与数据声明 | 缺 `plugin.json`、JSON 语法错、未知字段、`data` 文件不存在 |
-| `dependency` | 检查依赖存在 / 版本 / 冲突 / 循环 | `缺少依赖插件：…`、`依赖插件 … 版本不满足`、`与插件不兼容：…` |
+| `dependency` | 检查依赖存在 / 版本 / 循环 | `缺少依赖插件：…`、`依赖插件 … 版本不满足`、`插件依赖存在循环：…` |
 | `import` | 注册 `dm_plugin.<id>` 包并导入入口脚本 | 入口文件里的语法错、导入期异常 |
 | `construct` | 找到插件类并实例化 | 入口里没有 `Plugin` 子类、构造函数抛错 |
 | `setup` | 调用插件类的 `setup(ctx)` | 插件自己抛出的异常 |
 
 - 失败信息记在插件上：`PluginInfo.error`（文本）+ `PluginInfo.error_phase`（阶段名），插件页会把它标成「异常」并禁用。
+- **冲突不算载入失败**：冲突插件的 `error` 为空、照常载入，只是 `PluginInfo.conflict_with` 非空、`state_label` 显示「与插件冲突」且不能启用（见 2.3）。
 - `PluginService.load_report()` 只汇总**载入过程**（import / construct / setup）的结果，且阶段消息是固定文案（`插件入口导入失败，详见日志` / `插件初始化失败，详见日志`），具体异常看日志。
 - `manifest` 阶段的错误不会出现在 `load_report()` 里：用 `plugin_service.discover()` 或 `plugin_service.get(id).error_phase` 取。
 - 一个插件坏掉不会影响其他插件：其余的照常载入。
@@ -246,7 +251,7 @@ plugins/
   "version": 1,
   "plugins": {
     "example.ui_extension": {"enabled": false},
-    "builtin.image": {
+    "builtin.viewer.image": {
       "enabled": true,
       "settings": {"fit_on_open": true, "zoom_step": "1.25", "smooth_scaling": true}
     }

@@ -1,0 +1,21 @@
+{
+  "id": "builtin.viewer.spreadsheet",
+  "name": "内置表格查看器",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "查看 xlsx / csv 表格，支持工作表切换与前若干行预览。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    {
+      "id": "builtin.lib.viewer"
+    },
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "data": {
+    "viewer": "data/viewer.json"
+  }
+}

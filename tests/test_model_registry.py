@@ -12,18 +12,19 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.harness import IsolatedCase
 
 
 def _register_plugin_namespace() -> None:
-    """把插件目录挂成 `dm_plugin.builtin.lib.model` 包（目录名带点，只能手工注册）。"""
-    root = Path(__file__).resolve().parents[1] / "plugins" / "builtin.lib.model"
+    """把插件目录挂成 `dm_plugin.lib.model` 包（目录名带点，只能手工注册）。"""
+    root = Path(__file__).resolve().parents[1] / "plugins" / "lib.model"
     for name, folder in (
         ("dm_plugin", None),
         ("dm_plugin.builtin", None),
         ("dm_plugin.builtin.lib", None),
-        ("dm_plugin.builtin.lib.model", root),
+        ("dm_plugin.lib.model", root),
     ):
         if name in sys.modules:
             continue
@@ -34,20 +35,21 @@ def _register_plugin_namespace() -> None:
 
 _register_plugin_namespace()
 
-from dm_plugin.builtin.lib.model import manager as manager_module  # noqa: E402
-from dm_plugin.builtin.lib.model import provider as provider_module  # noqa: E402
-from dm_plugin.builtin.lib.model import registry as registry_module  # noqa: E402
-from dm_plugin.builtin.lib.model import settings as settings_module  # noqa: E402
-from dm_plugin.builtin.lib.model.constants import (  # noqa: E402
+from dm_plugin.lib.model import manager as manager_module  # noqa: E402
+from dm_plugin.lib.model import provider as provider_module  # noqa: E402
+from dm_plugin.lib.model import registry as registry_module  # noqa: E402
+from dm_plugin.lib.model import settings as settings_module  # noqa: E402
+from dm_plugin.lib.model.constants import (  # noqa: E402
     KIND_EXTERNAL,
     KIND_LOCAL,
     STATE_DRAFT,
+    STATE_INCOMPLETE,
     STATE_READY,
 )
-from dm_plugin.builtin.lib.model.manager import ModelManager  # noqa: E402
-from dm_plugin.builtin.lib.model.paths import local_dir  # noqa: E402
-from dm_plugin.builtin.lib.model.record import ModelRecord, make_id, slugify  # noqa: E402
-from dm_plugin.builtin.lib.model.registry import ModelRegistry, reset  # noqa: E402
+from dm_plugin.lib.model.manager import ModelManager  # noqa: E402
+from dm_plugin.lib.model.paths import local_dir  # noqa: E402
+from dm_plugin.lib.model.record import ModelRecord, make_id, slugify  # noqa: E402
+from dm_plugin.lib.model.registry import ModelRegistry, reset  # noqa: E402
 
 
 class FakeAdapter:
@@ -158,10 +160,11 @@ class ModelRegistryCase(IsolatedCase):
         self.assertEqual(record.files, ("config.json", "model.gguf"))
         self.assertEqual(record.size_bytes, 12)
         self.assertEqual(record.local_path(), folder)
-        # primary_file 按 files 顺序取第一个存在的文件（新写盘的文件排在后面）
-        self.assertEqual(record.primary_file(), folder / "config.json")
-        record.files = ("model.gguf", "config.json")
+        # primary_file 先挑权重后缀（config.json 这种配置不能当主文件喂给推理后端），
+        # 没有权重才退回第一个存在的文件
         self.assertEqual(record.primary_file(), folder / "model.gguf")
+        record.files = ("config.json",)
+        self.assertEqual(record.primary_file(), folder / "config.json")
         self.assertEqual(record.state, STATE_DRAFT)  # sync_files 不动状态
         self.assertTrue(record.plugin_id)
         self.assertEqual(record.kind_label, "本地模型")
@@ -179,13 +182,13 @@ class ModelRegistryCase(IsolatedCase):
     def test_settings_roundtrip_and_secret(self) -> None:
         settings = settings_module.load_settings()
         settings.set_mirrors(["https://a", "https://b"])
-        settings.download["concurrent"] = 9  # 夹到 1–3
+        settings.download["concurrent"] = 9  # 夹到 1–12
         settings.runtime["max_resident"] = 0  # 至少 1
         settings.set_secret("kimi", "sk-1234567890")
         self.assertTrue(settings.save())
         again = settings_module.load_settings()
         self.assertEqual(again.mirrors, ("https://a", "https://b"))
-        self.assertEqual(again.concurrent, 3)
+        self.assertEqual(again.concurrent, 9)
         self.assertEqual(again.max_resident, 1)
         self.assertEqual(again.secret("kimi"), "sk-1234567890")
         self.assertNotIn("sk-1234567890", settings_module.mask_secret("sk-1234567890"))
@@ -451,12 +454,250 @@ class ModelProviderCase(IsolatedCase):
         self.assertTrue(self.api.remove(record.id))
         self.assertIsNone(self.api.model_by_id(record.id))
 
+    def test_requirements_accepts_gpu_twin(self) -> None:
+        """模型写 CPU 版 profile、机器只装了 GPU 版时，也算装好（孪生回退）。"""
+        from dm_plugin.lib.model import runtime as runtime_module
+
+        record = self.api.add_local("本地孪生", capabilities=("chat",), files=("m.gguf",))
+        record.runtime = {"profile": "llama-cpp"}
+        record.files = ["m.gguf"]
+        self.api.update(record)
+
+        profile = types.SimpleNamespace(name="llama.cpp（GPU）", id="llama-cpp-gpu")
+        with mock.patch.object(runtime_module, "resolve_id", lambda pid: "llama-cpp-gpu"):
+            with mock.patch.object(runtime_module, "installed", lambda pid: pid == "llama-cpp-gpu"):
+                with mock.patch.object(runtime_module, "profile_of", lambda pid, ctx=None: profile):
+                    gap = self.api.requirements(record.id)
+        self.assertTrue(gap["ok"], gap)
+        self.assertEqual(gap["profile"], "llama-cpp")
+        self.assertEqual(gap["profile_effective"], "llama-cpp-gpu")
+        self.assertIn("llama.cpp（GPU）", gap["hint"])
+
+    def test_requirements_caches_runtime_probe(self) -> None:
+        """`installed()` 会起子进程跑 python --version：同一 profile 只问一次。"""
+        from dm_plugin.lib.model import runtime as runtime_module
+
+        record = self.api.add_local("本地缓存", capabilities=("chat",), files=("m.gguf",))
+        record.runtime = {"profile": "llama-cpp"}
+        record.files = ["m.gguf"]
+        self.api.update(record)
+
+        calls: list[str] = []
+
+        def fake_installed(pid):
+            calls.append(pid)
+            return False
+
+        with mock.patch.object(runtime_module, "resolve_id", lambda pid: pid):
+            with mock.patch.object(runtime_module, "installed", fake_installed):
+                self.api.requirements(record.id)
+                self.api.requirements(record.id)
+        self.assertEqual(calls, ["llama-cpp"])
+        self.api.forget_runtime_cache()
+        with mock.patch.object(runtime_module, "resolve_id", lambda pid: pid):
+            with mock.patch.object(runtime_module, "installed", fake_installed):
+                self.api.requirements(record.id)
+        self.assertEqual(calls, ["llama-cpp", "llama-cpp"])
+
+    def test_download_queues_missing_weights(self) -> None:
+        """一键下载：把 source 里声明、盘上还没有的文件排进模型页的下载队列。"""
+        record = self.api.add_local("本地缺权重", capabilities=("chat",))
+        record.source = {"repo": "org/repo", "files": ["a.gguf", "b.gguf"]}
+        record.files = []
+        self.api.update(record)
+
+        jobs: list[tuple] = []
+
+        class FakeQueue:
+            def enqueue(self, model_id, urls, target, **kwargs):
+                jobs.append((model_id, tuple(urls), str(target), kwargs))
+
+        self.api.attach_downloads(lambda: FakeQueue())
+        with mock.patch(
+            "dm_plugin.lib.model.download.resolve_urls",
+            lambda base, mirrors, repo, name, revision: [f"https://example.invalid/{name}"],
+        ):
+            result = self.api.download(record.id)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(sorted(result["queued"]), ["a.gguf", "b.gguf"])
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(jobs[0][0], record.id)
+        self.assertTrue(jobs[0][1][0].startswith("https://example.invalid/"))
+
+        external = self.api.add_external("云端乙", base_url="http://127.0.0.1:8", model="m", capabilities=("chat",))
+        refused = self.api.download(external.id)
+        self.assertFalse(refused["ok"])
+        self.assertIn("外部模型", refused["hint"])
+
+    def test_download_without_model_page_says_so(self) -> None:
+        record = self.api.add_local("本地没模型页", capabilities=("chat",))
+        record.source = {"repo": "org/repo", "files": ["c.gguf"]}
+        record.files = []
+        self.api.update(record)
+        self.api.attach_downloads(None)
+        result = self.api.download(record.id)
+        self.assertFalse(result["ok"])
+        self.assertIn("模型页", result["hint"])
+
+    def test_requirements_groups_missing_files(self) -> None:
+        """缺口按「权重 / 配置 / 分词器」分组说清楚：transformers 的模型目录是成套的。"""
+        from dm_plugin.lib.model import runtime as runtime_module
+
+        record = self.api.add_local("本地成套", capabilities=("chat",))
+        record.source = {
+            "repo": "org/clip",
+            "files": [
+                "pytorch_model.bin",
+                "config.json",
+                "preprocessor_config.json",
+                "tokenizer.json",
+                "vocab.json",
+                "merges.txt",
+            ],
+        }
+        record.files = []
+        record.runtime = {"profile": "llama-cpp"}
+        self.api.update(record)
+
+        with mock.patch.object(runtime_module, "resolve_id", lambda pid: pid):
+            with mock.patch.object(runtime_module, "installed", lambda pid: True):
+                gap = self.api.requirements(record.id)
+        self.assertFalse(gap["ok"])
+        text = gap["missing"][0]
+        self.assertIn("缺模型文件：权重（pytorch_model.bin）", text)
+        self.assertIn("配置（config.json、preprocessor_config.json）", text)
+        self.assertIn("分词器（tokenizer.json、vocab.json、merges.txt）", text)
+
+    def test_job_done_syncs_record_and_refreshes(self) -> None:
+        """下载任务收尾要让记录认盘上的权重（否则一直是「未填充」，还得手动换权重）。"""
+        from PyQt6.QtWidgets import QApplication, QWidget
+
+        self.app = QApplication.instance() or QApplication([])
+        # 模型页 import 界面工具库：测试里补挂 `dm_plugin.builtin.lib.ui` 命名空间
+        ui_pkg = "dm_plugin.builtin.lib.ui"
+        if ui_pkg not in sys.modules:
+            ui_module = types.ModuleType(ui_pkg)
+            ui_module.__path__ = [
+                str(Path(__file__).resolve().parents[1] / "plugins" / "builtin.lib.ui")
+            ]
+            sys.modules[ui_pkg] = ui_module
+            setattr(sys.modules["dm_plugin.builtin.lib"], "ui", ui_module)
+        from dm_plugin.lib.model.ui.page import ModelPage
+
+        record = self.api.add_local("本地下载完", capabilities=("embedding",))
+        record.source = {"repo": "org/clip", "files": ["a.bin", "b.json"]}
+        record.files = []
+        self.api.update(record)
+
+        folder = local_dir(record.id)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "a.bin").write_bytes(b"x")
+
+        refreshed: list[str] = []
+
+        class FakeApi:
+            def model_by_id(self, model_id):
+                return record if model_id == record.id else None
+
+            def update(self, item):
+                return item
+
+        host = QWidget()
+        host._api = FakeApi()
+        host._downloads = types.SimpleNamespace(active=lambda: 0)
+        host._console_info = lambda *a, **k: None
+        host._console_error = lambda *a, **k: None
+        host.refresh = lambda: refreshed.append("refresh")
+
+        ModelPage._on_job_done(host, types.SimpleNamespace(model_id=record.id, state="done"))
+        self.assertIn("a.bin", record.files)
+        # 只缺非关键 sidecar（b.json）时不算「文件不完全」：各仓库的 sidecar 名字不一，
+        # 把它们都算「缺」会让 whisper 那种 `vocabulary.txt` / `vocabulary.json` 永远不就绪。
+        self.assertEqual(record.state, STATE_READY)
+        self.assertEqual(refreshed, ["refresh"])
+
+        # 下载只落下一部分时要能报出还缺哪些文件（加载前会据此拦住，给出可读提示）
+        from dm_plugin.lib.model.ui.page import _missing_model_files
+
+        record.source = {"repo": "org/clip", "files": ["a.bin", "config.json"]}
+        record.files = ("a.bin",)
+        self.assertEqual(_missing_model_files(record), ("config.json",))
+        record.files = ("a.bin", "config.json")
+        self.assertEqual(_missing_model_files(record), ())
+
+        # 仓库清单里「还需要的必需文件」：配置 / 分词器 / 权重本体都要，README 之类不要
+        from dm_plugin.lib.model.ui.page import _sidecar_files
+
+        entries = [
+            {"path": "pytorch_model.bin", "size": 600},
+            {"path": "config.json", "size": 1},
+            {"path": "tokenizer.json", "size": 2},
+            {"path": "README.md", "size": 3},
+        ]
+        self.assertEqual(
+            _sidecar_files(entries, {"pytorch_model.bin"}),
+            [("config.json", 1), ("tokenizer.json", 2)],
+        )
+
+        # 列仓库文件要跟下载源一致：选镜像时不能去打官方 API（官方连不上就列不出文件）
+        from dm_plugin.lib.model.download import hub as hub_module
+
+        self.assertEqual(
+            hub_module._api_base(
+                types.SimpleNamespace(
+                    download_base="https://hf-mirror.com", base_url="https://huggingface.co"
+                )
+            ),
+            "https://hf-mirror.com",
+        )
+        self.assertEqual(hub_module._api_base(None), hub_module.HF_BASE_URL)
+
+        # 「目录型后端」才需要 config.json 一整套；自己的 gguf（llama_cpp）不需要
+        from dm_plugin.lib.model.ui.page import _needs_directory
+
+        self.assertTrue(_needs_directory(types.SimpleNamespace(runtime={"backend": "transformers"})))
+        self.assertFalse(_needs_directory(types.SimpleNamespace(runtime={"backend": "llama_cpp"})))
+
+    def test_templates_download_contract(self) -> None:
+        """预定义模板的下载清单要能「一次下全」，避免再出现下载不全的模板。
+
+        - 每个模板至少要有一个权重来源（`file` 或 `files`）；
+        - 目录型后端（transformers / faster_whisper / sentence_transformers / diffusers）
+          必须带 `config.json` 与至少一个权重后缀文件；
+        - 不允许清单里出现重复名（同一个落盘路径）——子目录同名文件要靠路径保真区分。
+        """
+        import json
+        from pathlib import Path as _Path
+
+        root = _Path(__file__).resolve().parents[1]
+        payload = json.loads(
+            (root / "plugins" / "lib.model" / "data" / "model_list.json").read_text("utf-8")
+        )
+        items = payload if isinstance(payload, list) else payload.get("models") or []
+        self.assertTrue(items, "模板清单读不到")
+        weights = (".bin", ".safetensors", ".gguf", ".onnx", ".pt", ".pth", ".msgpack", ".h5")
+        for item in items:
+            source = item.get("source") or {}
+            backend = str((item.get("runtime") or {}).get("backend") or "")
+            names = [str(name) for name in (source.get("files") or [])]
+            single = str(source.get("file") or "")
+            label = str(item.get("id") or "?")
+            self.assertTrue(single or names, f"{label}：既没有 file 也没有 files")
+            lowered = [name.replace("\\", "/").lstrip("./").lower() for name in names]
+            self.assertEqual(len(lowered), len(set(lowered)), f"{label}：清单里有重复文件名")
+            if backend in ("transformers", "faster_whisper", "sentence_transformers", "diffusers"):
+                self.assertIn("config.json", lowered, f"{label}：目录型后端必须带 config.json")
+                self.assertTrue(
+                    any(_Path(name).suffix.lower() in weights for name in lowered),
+                    f"{label}：目录型后端必须带权重文件",
+                )
+
 
 class ModelLogCase(IsolatedCase):
     """模型日志：一个模型一个文件（老版本的时间戳文件也认），删模型连日志一起清。"""
 
     def test_model_log_file_is_single(self) -> None:
-        from dm_plugin.builtin.lib.model import paths
+        from dm_plugin.lib.model import paths
 
         path = paths.model_log_file("local/demo")
         self.assertEqual(path.parent, paths.logs_dir())
@@ -464,7 +705,7 @@ class ModelLogCase(IsolatedCase):
         self.assertEqual(paths.model_log_files("local/demo"), [])
 
     def test_clear_model_logs_takes_new_and_legacy(self) -> None:
-        from dm_plugin.builtin.lib.model import paths
+        from dm_plugin.lib.model import paths
 
         stable = paths.model_log_file("local/demo")
         legacy = paths.logs_dir() / "local-demo-20260101-010101.log"

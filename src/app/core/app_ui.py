@@ -12,6 +12,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
+from loguru import logger
+
 #: 程序本体界面扩展接口的接口名
 APP_UI_EXTENSION = "app.ui"
 
@@ -40,6 +42,33 @@ class AppUiApi:
 
     def __init__(self) -> None:
         self._pages: dict[str, PageSpec] = {}
+        self._navigator: Callable[[str], None] | None = None
+
+    def set_navigator(self, callback: Callable[[str], None] | None) -> None:
+        """主窗口登记「切页面」回调；插件不直接用它，走 `app.sdk.ui.open_page()`。"""
+        self._navigator = callback
+
+    def routes(self) -> tuple[str, ...]:
+        """当前登记的全部页面路由（`plugin.<key>`）。"""
+        return tuple(spec.route for spec in self._pages.values())
+
+    def open_page(self, route: str) -> bool:
+        """切到某个已登记的页面，返回是否真的跳过去；路由可写 key 或 `plugin.<key>`。"""
+        spec = self._resolve(route)
+        if spec is None or self._navigator is None:
+            return False
+        try:
+            self._navigator(spec.route)
+        except Exception:
+            logger.exception("跳转插件页面失败：{}", spec.route)
+            return False
+        return True
+
+    def _resolve(self, route: str) -> PageSpec | None:
+        name = str(route or "").strip()
+        if name.startswith("plugin."):
+            name = name[len("plugin.") :]
+        return self._pages.get(name) if name else None
 
     def add_page(
         self,

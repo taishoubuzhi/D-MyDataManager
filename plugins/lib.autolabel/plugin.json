@@ -1,0 +1,50 @@
+{
+  "id": "lib.autolabel",
+  "name": "自动标注工具库",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "自动标注工具库：规则模型与匹配引擎、数据类型 ↔ 模型对齐表、批处理管线与共用控件；自动标签 / 自动关键词插件共用这里的规则文件与对齐表。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "class": "AutoLabelLibraryPlugin",
+  "depends": [
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "provides": [
+    "autolabel.open"
+  ],
+  "data": {
+    "rules": "data/rules.json",
+    "align": "data/align.json"
+  },
+  "libraries": [
+    {
+      "name": "autolabel",
+      "module": "plugin.py",
+      "description": "共享入口 AutoLabelLibraryPlugin 与读写门面 AutoLabelApi（规则 RuleSet、对齐表 AlignBook、批处理 plan/run/collect）"
+    },
+    {
+      "name": "rules",
+      "module": "rules.py",
+      "description": "规则模型 Rule、匹配引擎与「出厂 + 用户」合并视图 RuleSet"
+    },
+    {
+      "name": "align",
+      "module": "align.py",
+      "description": "数据类型 ↔ 模型对齐表 AlignRow / AlignTable / AlignBook"
+    },
+    {
+      "name": "pipeline",
+      "module": "pipeline.py",
+      "description": "批处理管线：条目 → 批量请求 → 结果 → 名字（parse_names / clamp / merge_names / plan / run / collect）"
+    },
+    {
+      "name": "controls",
+      "module": "ui/controls.py",
+      "description": "共用控件：进度面板 ProgressPanel、规则编辑弹窗 RuleDialog、对齐表编辑弹窗 AlignDialog 与表格填充助手"
+    }
+  ]
+}

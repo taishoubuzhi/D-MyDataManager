@@ -1,0 +1,44 @@
+{
+  "id": "auto_keyword",
+  "name": "自动关键词",
+  "version": "1.0.0",
+  "description": "按数据类型对齐模型，用模型给条目生成关键词；请求统一交给模型工具库批处理，带进度与取消。",
+  "author": "D-MyDataManager",
+  "api_version": ">=1.0 <2.0",
+  "builtin": false,
+  "enabled": false,
+  "entry": "plugin.py",
+  "class": "AutoKeywordPlugin",
+  "depends": [
+    { "id": "lib.autolabel" },
+    { "id": "lib.model", "optional": true },
+    { "id": "builtin.lib.ui" }
+  ],
+  "options": [
+    {
+      "key": "min_keywords",
+      "label": "最少生成几个关键词",
+      "description": "模型给得太少时整条作废，不勉强写。",
+      "kind": "int",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 50
+    },
+    {
+      "key": "max_keywords",
+      "label": "最多生成几个关键词",
+      "description": "超出的部分按模型给的顺序截断；关键词没有「全集」上限，写了就是新的。0 表示不限。",
+      "kind": "int",
+      "default": 8,
+      "minimum": 0,
+      "maximum": 50
+    }
+  ],
+  "libraries": [
+    {
+      "name": "runner",
+      "module": "runner.py",
+      "description": "关键词执行逻辑：按数据类型排请求、收结果、写库。"
+    }
+  ]
+}

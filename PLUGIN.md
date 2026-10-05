@@ -4,7 +4,7 @@
 
 - 清单字段、版本范围、依赖规则、载入阶段、状态文件等**规范**见 [`plugins/PLUGIN_PROTOCOL.md`](plugins/PLUGIN_PROTOCOL.md)。
 - 程序开放了哪些**扩展点**、会广播哪些**事件**见 [`plugins/EXTENSION_POINTS.md`](plugins/EXTENSION_POINTS.md)。
-- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/example.model_usage/`（消费 `model.open` 扩展接口）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/builtin.lib.model/`（模型库插件：下载 / 懒加载 / 运行环境）、`plugins/builtin.image/`（功能插件样板）。
+- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/example.model_usage/`（消费 `model.open` 扩展接口）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/lib.model/`（模型库插件：下载 / 懒加载 / 运行环境）、`plugins/builtin.viewer.image/`（功能插件样板）。
 
 ## 1. 插件是什么
 
@@ -257,7 +257,7 @@ class ImageViewerPlugin(ViewerPlugin):
 
 ```json
 {
-  "id": "builtin.image",
+  "id": "builtin.viewer.image",
   "depends": [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}],
   "data": {"viewer": "data/viewer.json"}
 }
@@ -287,7 +287,7 @@ class ImageViewerPlugin(ViewerPlugin):
 - 程序按依赖拓扑排序载入：被依赖的先载入；同层内「内置优先、其次按 id」。
 - `version` 是版本范围（`>=1.0 <2`、`^1.2`、`~1.2.3`、`1.2.*`、`A || B` 见协议文档第 3 节）；不满足会让插件标为异常并禁用。
 - `optional: true`：目标不存在也能载入。
-- `incompatible` 用来声明冲突；`load_after` 只调顺序（目标可以不存在）。
+- `conflicts` 用来声明冲突插件：两边都启用时按载入顺序靠前者胜出，另一个不能启用（不是载入失败）；载入顺序由 `depends` 决定，旧的 `load_after` / `incompatible` 字段已取消（写了当场报错并指明新写法）。
 - 循环依赖会被指出来：`插件依赖存在循环：a → b → a`。
 
 ## 6. 目录规范与「别重复声明」
@@ -336,7 +336,7 @@ plugins/<id>/
 
 - `plugins/example.ui_extension/`：往概览卡片、工具栏、右键菜单、详情、导入筛选、设置页各贡献一样东西，并订阅 5 个事件；它的 `PLUGIN.md` 是各插件说明文档的模板。
 - `plugins/example.model_usage/`：**消费别的插件提供的扩展接口**的样板——按能力向 `app.sdk.models` 取模型租约（`acquire` → `invoke` → `close`），没有模型可用时优雅降级；库插件一侧的契约见 `MODEL_PLUGIN.md`。
-- `plugins/builtin.image/`：功能插件的样板——`plugin.py` 只留一个 `create_view()`，扩展名 / 能力 / 宿主都在 `data/viewer.json`，用户可配置项在清单的 `options` 里。
+- `plugins/builtin.viewer.image/`：功能插件的样板——`plugin.py` 只留一个 `create_view()`，扩展名 / 能力 / 宿主都在 `data/viewer.json`，用户可配置项在清单的 `options` 里。
 
 ## 9. 速查
 

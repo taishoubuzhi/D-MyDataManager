@@ -27,12 +27,12 @@ from unittest import mock
 
 from tests.harness import ROOT, IsolatedCase
 
-PLUGIN_DIR = ROOT / "plugins" / "builtin.lib.model"
-PACKAGE = "dm_plugin.builtin.lib.model"
+PLUGIN_DIR = ROOT / "plugins" / "lib.model"
+PACKAGE = "dm_plugin.lib.model"
 
 
 def _register_namespace() -> None:
-    """把插件目录挂成 `dm_plugin.builtin.lib.model` 包（和 plugin_core 的机制一致）。"""
+    """把插件目录挂成 `dm_plugin.lib.model` 包（和 plugin_core 的机制一致）。"""
     names = ["dm_plugin", "dm_plugin.builtin", "dm_plugin.builtin.lib", PACKAGE]
     for index, name in enumerate(names):
         module = sys.modules.get(name)
@@ -183,7 +183,7 @@ class ModelRuntimeCase(IsolatedCase):
             self.assertEqual(runtime.profiles(), ())
             self.assertIsNone(runtime.profile_of("gpu"))
 
-        payload = ROOT / "plugins" / "builtin.lib.model" / "data" / "runtime_profiles.json"
+        payload = ROOT / "plugins" / "lib.model" / "data" / "runtime_profiles.json"
         if payload.exists():
             # 插件里已经带了清单：确保读得到、能按 id 取回
             items = runtime.profiles()
@@ -719,7 +719,7 @@ class RuntimeTwinCase(IsolatedCase):
             shutil.rmtree(runtime.venv_dir("llama-cpp-gpu").parent, ignore_errors=True)
 
     def test_slug_dir_name_keeps_empty(self) -> None:
-        from dm_plugin.builtin.lib.model.paths import local_dir, local_root, slug_dir_name
+        from dm_plugin.lib.model.paths import local_dir, local_root, slug_dir_name
 
         self.assertEqual(slug_dir_name(""), "")
         self.assertEqual(slug_dir_name(None), "")
@@ -1175,6 +1175,28 @@ class WorkerRequestShapeCase(unittest.TestCase):
             sys.stdout = saved
         return module
 
+    def test_model_class_prefers_declared_architecture(self) -> None:
+        """transformers 5.18 没有 AutoModelForVision2Seq：要用配置里写明的生成式类，别退成 AutoModel。
+
+        真事故：回退成 `AutoModel` 后 BLIP 变成没有 `generate` 的 `BlipModel`（用户 m42466）。
+        """
+        worker = self._worker_module()
+
+        class AutoModelCls: ...
+
+        class BlipGen: ...
+
+        class NewName: ...
+
+        fake = types.SimpleNamespace(AutoModel=AutoModelCls, BlipForConditionalGeneration=BlipGen)
+        self.assertIs(
+            worker._model_class(fake, "vision2seq", ["BlipForConditionalGeneration"]), BlipGen
+        )
+        self.assertIs(worker._model_class(fake, "vision2seq", []), AutoModelCls)
+        newer = types.SimpleNamespace(AutoModel=AutoModelCls, AutoModelForImageTextToText=NewName)
+        self.assertIs(worker._model_class(newer, "vision2seq", []), NewName)
+        self.assertIs(worker._model_class(fake, "base", []), AutoModelCls)
+
     def test_adapter_keeps_messages_out_of_params(self) -> None:
         adapter = importlib.import_module(PACKAGE + ".adapters.worker")
         messages = [{"role": "user", "content": "你好"}]
@@ -1239,6 +1261,93 @@ class DeviceChoiceCase(IsolatedCase):
         self.assertEqual(worker._torch_device(_FakeTorch(cuda=False, mps=False), "cuda"), "cpu")
         self.assertEqual(worker._torch_device(_FakeTorch(cuda=False, mps=False), "mps"), "cpu")
         self.assertEqual(worker._torch_device(_FakeTorch(cuda=False, mps=False), "weird"), "cpu")
+
+
+class TransformersCaptionCase(unittest.TestCase):
+    """图像描述不走 `pipeline()` 的任务名。
+
+    真事故：新版 transformers（5.18）已经没有 `image-to-text` 这个任务（只有
+    `image-text-to-text`），BLIP 的对齐请求一发起就抛
+    `KeyError: Unknown task image-to-text`。现在 `caption` / `ocr` 直接用手上的
+    `AutoProcessor` + 生成模型跑。
+    """
+
+    @staticmethod
+    def _worker_module():
+        """就地加载 `worker_main.py`：它 import 时会把 sys.stdout 换成 stderr，用完还原。"""
+        import importlib.util
+
+        saved = sys.stdout
+        try:
+            spec = importlib.util.spec_from_file_location("model_worker_main_caption", WORKER_SCRIPT)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        finally:
+            sys.stdout = saved
+        return module
+
+    def test_caption_and_ocr_are_not_pipeline_tasks(self) -> None:
+        backend = self._worker_module().TransformersBackend()
+        self.assertNotIn("caption", backend.PIPELINES)
+        self.assertNotIn("ocr", backend.PIPELINES)
+        self.assertIn("asr", backend.PIPELINES)
+
+    def test_caption_generates_text_with_processor(self) -> None:
+        worker = self._worker_module()
+
+        class _NoGrad:
+            def __enter__(self):
+                return None
+
+            def __exit__(self, *args):
+                return False
+
+        class _Image:
+            def convert(self, mode):
+                return self
+
+        class _ImageModule:
+            Image = _Image
+
+            @staticmethod
+            def open(path):
+                return _Image()
+
+        class _Inputs(dict):
+            def to(self, device):
+                return self
+
+        class _Processor:
+            def __call__(self, **kwargs):
+                return _Inputs()
+
+            def batch_decode(self, output, skip_special_tokens=True):
+                return ["一只橘猫"]
+
+        class _Model:
+            device = "cpu"
+
+            def __init__(self):
+                self.kwargs = {}
+
+            def generate(self, **kwargs):
+                self.kwargs = kwargs
+                return [[1, 2]]
+
+        model = _Model()
+        backend = worker.TransformersBackend()
+        backend._tokenizer = _Processor()
+        backend._model = model
+        backend._torch = types.SimpleNamespace(no_grad=_NoGrad)
+        with mock.patch.object(worker, "_require", return_value=_ImageModule):
+            result = backend._caption("C:/pic/x.png", {"max_new_tokens": 10, "temperature": 0.8})
+        self.assertEqual(result, {"result": "一只橘猫"})
+        self.assertEqual(model.kwargs["max_new_tokens"], 10)
+
+    def test_caption_without_model_raises(self) -> None:
+        backend = self._worker_module().TransformersBackend()
+        with self.assertRaises(ValueError):
+            backend._caption("C:/pic/x.png", {})
 
 
 class DeviceProbeCase(IsolatedCase):

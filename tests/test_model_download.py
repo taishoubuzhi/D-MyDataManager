@@ -20,17 +20,17 @@ from tests.harness import IsolatedCase
 
 
 def _register_plugin_namespace() -> None:
-    """把插件目录挂成 `dm_plugin.builtin.lib.model` 包。
+    """把插件目录挂成 `dm_plugin.lib.model` 包。
 
-    目录名本身带点，`import plugins.builtin.lib.model` 走不通，只能像
+    目录名本身带点，`import plugins.lib.model` 走不通，只能像
     `app.core.plugin_core._package` 那样手工注册命名空间包。
     """
-    root = Path(__file__).resolve().parents[1] / "plugins" / "builtin.lib.model"
+    root = Path(__file__).resolve().parents[1] / "plugins" / "lib.model"
     for name, folder in (
         ("dm_plugin", None),
         ("dm_plugin.builtin", None),
         ("dm_plugin.builtin.lib", None),
-        ("dm_plugin.builtin.lib.model", root),
+        ("dm_plugin.lib.model", root),
     ):
         if name in sys.modules:
             continue
@@ -41,14 +41,14 @@ def _register_plugin_namespace() -> None:
 
 _register_plugin_namespace()
 
-from dm_plugin.builtin.lib.model.download import (  # noqa: E402
+from dm_plugin.lib.model.download import (  # noqa: E402
     DownloadError,
     DownloadManager,
     guess_total_size,
     resolve_urls,
 )
-from dm_plugin.builtin.lib.model.download import downloader  # noqa: E402
-from dm_plugin.builtin.lib.model.settings import ModelSettings  # noqa: E402
+from dm_plugin.lib.model.download import downloader  # noqa: E402
+from dm_plugin.lib.model.settings import ModelSettings  # noqa: E402
 
 PART = downloader.part_path
 META = downloader.meta_path
@@ -172,6 +172,15 @@ class ModelDownloadCase(IsolatedCase):
         return self.root / "targets" / name
 
     # ------------------------------------------------------------- 用例
+    def test_enqueue_is_idempotent_for_the_same_target(self):
+        """同一个文件重复入队要复用已有任务：两条线程抢同一个 .part 会撞 WinError 32（用户 m42407）。"""
+        manager = self.make_manager()
+        target = self.target("same.gguf")
+        first = manager.enqueue("local/same", ["http://127.0.0.1:9/same.gguf"], target, total_bytes=8)
+        second = manager.enqueue("local/same", ["http://127.0.0.1:9/same.gguf"], target, total_bytes=8)
+        self.assertIs(second, first)
+        self.assertEqual(len(manager.jobs()), 1)
+
     def test_download_and_verify_sha256(self):
         payload = bytes(range(256)) * 4096
         server = self.start_server(payload)

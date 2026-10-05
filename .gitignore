@@ -16,6 +16,10 @@ _tmp/
 /.dsh/
 /.plugins/
 /.packages/
+/stubs/
+/plugins/example.model_usage/
+/plugins/example.ui_extension/
+/docs/
 .dsh-acl-recovery/
 CLAUDE.md
 TODO.md
@@ -45,7 +49,4 @@ _*.log
 _legacy_src/
 _backup_*/
 
-/stubs/
 
-/plugins/example.model_usage/
-/plugins/example.ui_extension/

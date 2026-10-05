@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from functools import partial
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -30,17 +31,24 @@ from ...core.signals import signalBus
 from ...db import database
 from ...db.models import guess_type
 from ...repositories import ItemRepository, TagRepository
+from ...sdk.items import ImportContext
+from ...sdk.points import ExtensionPoint
 from ...services import ArchiveService, ImportService, LibraryService, TaxonomyService, UserService
 from ...services.blob_store import sha256_of
 from ..components import FlowArea
 from ..components.import_worker import ImportWorker
 from ..framework import (
+    IconTextButton,
+    IconTextPrimaryButton,
     ScrollPage,
     elide,
     format_datetime,
     format_size,
+    icon_text_label,
+    release_widget,
     type_name,
 )
+from ..framework import contributions
 from ..framework.contributions import path_filters
 from ..components.data_table import fit_columns, prepare_table
 from ..components.drop_area import DropArea
@@ -82,6 +90,8 @@ class ImportPage(ScrollPage):
         signalBus.userChanged.connect(self._reload_users)
         signalBus.userChanged.connect(self._reload_tags)
         signalBus.userChanged.connect(self._reload_categories)
+        # 插件启用 / 禁用后，导入页的功能按钮跟着出现或消失
+        signalBus.pluginsChanged.connect(self._sync_plugin_actions)
 
     # ------------------------------------------------------------------ 界面
     def _build_mode_card(self) -> CardWidget:
@@ -189,9 +199,75 @@ class ImportPage(ScrollPage):
         import_button = IconTextPrimaryButton(FluentIcon.CLOUD, "开始导入", card)
         import_button.clicked.connect(self.import_now)
         actions.addWidget(import_button)
+        self._action_row = actions
+        self._action_buttons: list[QWidget] = []
         actions.addStretch(1)
+        self._sync_plugin_actions()
         outer.addLayout(actions)
         return card
+
+    # ------------------------------------------------------- 插件贡献的按钮
+    def _sync_plugin_actions(self) -> None:
+        """插件贡献的导入页按钮（`app.ui.import.action`）：只有载入插件后才出现。"""
+        for button in getattr(self, "_action_buttons", []):
+            release_widget(button)
+        self._action_buttons = []
+        row = getattr(self, "_action_row", None)
+        if row is None:
+            return
+        for item in contributions.items(ExtensionPoint.IMPORT_ACTION):
+            data = contributions.value_of(item)
+            callback = data.get("callback")
+            if not callable(callback):
+                continue
+            button = IconTextButton(
+                contributions.icon_of(data.get("icon")),
+                contributions.title_of(item, "text"),
+                self,
+            )
+            tip = str(data.get("tip") or "")
+            if tip:
+                button.setToolTip(tip)
+            button.clicked.connect(partial(self._run_plugin_action, callback))
+            # 排在「开始导入」之后、右侧伸缩之前
+            row.insertWidget(max(1, row.count() - 1), button)
+            self._action_buttons.append(button)
+
+    def _run_plugin_action(self, callback) -> None:
+        """把当前导入表单交给插件按钮，插件只能「补建议」（预填标签 / 关键词）。"""
+        contributions.resolve(callback, self._plugin_action_context())
+
+    def _plugin_action_context(self) -> ImportContext:
+        return ImportContext(
+            paths=tuple(path for path, _subdir in self._collect_sources()),
+            user_id=self.target_user_id(),
+            category_id=self.category_box.currentData(),
+            add_tags=self._fill_tags,
+            add_keywords=self._fill_keywords,
+            notify=lambda message: self.toast_info("插件", str(message)),
+            scan=self._plugin_action_paths,
+        )
+
+    def _plugin_action_paths(self) -> tuple[Path, ...]:
+        """给插件一份「当前待导入文件」的最新清单。"""
+        return tuple(path for path, _subdir in self._collect_sources())
+
+    def _fill_tags(self, names) -> int:
+        """把插件建议的标签并进标签框，返回新增个数。"""
+        merged = list(self.tag_input.keywords())
+        added = [str(name).strip() for name in names if str(name).strip()]
+        fresh = [name for name in added if name not in merged]
+        if fresh:
+            self.tag_input.set_keywords(merged + fresh)
+        return len(fresh)
+
+    def _fill_keywords(self, words) -> int:
+        merged = list(self.keyword_input.keywords())
+        added = [str(word).strip() for word in words if str(word).strip()]
+        fresh = [word for word in added if word not in merged]
+        if fresh:
+            self.keyword_input.set_keywords(merged + fresh)
+        return len(fresh)
 
     def _build_details_card(self) -> CardWidget:
         card, layout = self.add_section("待导入文件信息", "先做重复检查，已在库中的文件会标记为跳过")

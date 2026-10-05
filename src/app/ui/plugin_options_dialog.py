@@ -23,11 +23,12 @@ from qfluentwidgets import (
     LineEdit,
     MessageBoxBase,
     PushButton,
+    SpinBox,
     SubtitleLabel,
 )
 
 from ..core.extensions import extension_registry
-from ..core.plugin_options import OPTION_BOOL, OPTION_CHOICE
+from ..core.plugin_options import OPTION_BOOL, OPTION_CHOICE, OPTION_INT, coerce_option
 from ..services import PluginInfo
 from ..core.signals import signalBus
 from ..sdk import viewers as viewer_api
@@ -105,11 +106,21 @@ class PluginOptionsDialog(MessageBoxBase):
                 index = editor.findData(str(value))
                 editor.setCurrentIndex(index if index >= 0 else 0)
                 self._editors[spec.key] = editor.currentData
+            elif spec.kind == OPTION_INT:
+                editor = SpinBox(card)
+                editor.setRange(
+                    spec.minimum if spec.minimum is not None else -999999,
+                    spec.maximum if spec.maximum is not None else 999999,
+                )
+                editor.setSingleStep(spec.step)
+                editor.setValue(coerce_option(spec, value))
+                editor.setMinimumWidth(120)
+                self._editors[spec.key] = editor.value
             else:
                 editor = LineEdit(card)
                 editor.setText("" if value is None else str(value))
                 editor.setMinimumWidth(200)
-                self._editors[spec.key] = editor.text
+                self._editors[spec.key] = builtin.editor.text
             editor.setToolTip(spec.description or spec.text)
             row.addWidget(editor, 1)
             card_layout.addLayout(row)

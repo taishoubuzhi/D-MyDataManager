@@ -40,8 +40,7 @@ PROTOCOL_FIELDS = frozenset(
         "class",
         "manager_version",
         "depends",
-        "incompatible",
-        "load_after",
+        "conflicts",
         "provides",
         "options",
         "data",
@@ -58,6 +57,12 @@ REMOVED_TYPE_FIELDS = ("kind", "kinds", "kind_label", "kind_description", "kind_
 
 #: 已移出协议、改由 `data/` 承载的字段
 REMOVED_DATA_FIELDS = ("extensions", "capabilities")
+
+#: 已从协议里删掉的字段 → 现应改用的字段（写错时的提示）
+REMOVED_PROTOCOL_FIELDS: dict[str, str] = {
+    "incompatible": "conflicts",
+    "load_after": "depends（载入顺序由依赖决定）",
+}
 
 #: 载入阶段（诊断、插件页与自检共用）
 PHASES = ("manifest", "dependency", "import", "construct", "setup")
@@ -111,8 +116,7 @@ class PluginInfo:
     path: Path | None = None
     manifest: dict = field(default_factory=dict)
     depends: tuple[PluginDependency, ...] = ()
-    incompatible: tuple[str, ...] = ()
-    load_after: tuple[str, ...] = ()
+    conflicts: tuple[str, ...] = ()
     provides: tuple[str, ...] = ()
     libraries: tuple[LibrarySpec, ...] = ()
     data: dict[str, str] = field(default_factory=dict)
@@ -121,6 +125,7 @@ class PluginInfo:
     enabled: bool = True
     error: str = ""
     error_phase: str = ""
+    conflict_with: tuple[str, ...] = ()
     note: str = ""
     options_title: str = ""
     options: tuple[PluginOptionSpec, ...] = ()
@@ -141,6 +146,8 @@ class PluginInfo:
     def state_label(self) -> str:
         if self.error:
             return "载入失败" if self.error_phase else "异常"
+        if self.conflict_with:
+            return "与插件冲突"
         return "已启用" if self.enabled else "已禁用"
 
     @property
@@ -164,8 +171,12 @@ class PluginInfo:
         return "、".join(dep.text for dep in self.depends) if self.depends else "无"
 
     @property
-    def incompatible_text(self) -> str:
-        return "、".join(self.incompatible) if self.incompatible else "无"
+    def conflicts_text(self) -> str:
+        return "、".join(self.conflicts) if self.conflicts else "无"
+
+    @property
+    def conflict_with_text(self) -> str:
+        return "、".join(self.conflict_with)
 
     @property
     def libraries_text(self) -> str:
@@ -285,6 +296,9 @@ def _check_removed_fields(data: dict) -> None:
     for name in REMOVED_DATA_FIELDS:
         if data.get(name) not in (None, "", (), []):
             raise ManifestError(f"插件清单不再支持字段 {name}：请放进 data/ 由对应库插件读取")
+    for name, instead in REMOVED_PROTOCOL_FIELDS.items():
+        if data.get(name) not in (None, "", (), []):
+            raise ManifestError(f"插件清单已取消字段 {name}：请改用 {instead}")
 
 
 def _check_unknown_fields(data: dict) -> None:
@@ -351,6 +365,17 @@ def parse_dependencies(value: object, plugin_id: str) -> tuple[PluginDependency,
         seen.add(dep_id)
         result.append(PluginDependency(dep_id, spec, optional))
     return tuple(result)
+
+
+def parse_conflicts(value: object, plugin_id: str) -> tuple[str, ...]:
+    """解析 `conflicts`：声明与哪些插件不能同时启用（不再影响能否载入）。"""
+    result = _as_list(value)
+    for other in result:
+        if not PLUGIN_ID_PATTERN.match(other):
+            raise ManifestError(f"冲突插件 id 不合法：{other}")
+        if other == plugin_id:
+            raise ManifestError("插件不能与自己冲突")
+    return result
 
 
 def parse_libraries(value: object, plugin_id: str, path: Path | None) -> tuple[LibrarySpec, ...]:
@@ -450,8 +475,7 @@ def parse_manifest(data: dict, path: Path | None = None, builtin: bool = False) 
         path=folder,
         manifest=dict(data),
         depends=parse_dependencies(data.get("depends"), plugin_id),
-        incompatible=_as_list(data.get("incompatible")),
-        load_after=_as_list(data.get("load_after")),
+        conflicts=parse_conflicts(data.get("conflicts"), plugin_id),
         provides=provides,
         libraries=parse_libraries(data.get("libraries"), plugin_id, folder),
         data=parse_data(data.get("data"), folder),
@@ -486,10 +510,17 @@ def _order_key(info: PluginInfo) -> tuple[int, str]:
     return (0 if info.builtin else 1, info.id)
 
 
-def resolve_dependencies(infos: list[PluginInfo]) -> tuple[list[PluginInfo], dict[str, tuple[str, str]]]:
-    """依赖解析：返回 (载入顺序, 插件 id → (阶段, 原因))。
+def resolve_dependencies(
+    infos: list[PluginInfo], *, enabled_ids: set[str] | None = None
+) -> tuple[list[PluginInfo], dict[str, tuple[str, str]], dict[str, tuple[str, ...]]]:
+    """依赖解析：返回 (载入顺序, 插件 id → (阶段, 原因), 插件 id → 与之冲突的已启用插件)。
 
-    缺依赖、版本不满足、冲突、循环依赖的插件不进入顺序列表。
+    缺依赖、版本不满足、循环依赖的插件不进入顺序列表。冲突不影响载入：冲突的插件
+    照常进入顺序列表（照常能被载入、能提供库），只是**不能与对方同时启用**，所以它
+    出现在第三项里，由调用方决定把谁置为禁用。
+
+    `enabled_ids` 给出「最终会启用的插件」时，冲突只在双方都启用时才算，且载入顺序
+    靠前的那个胜出、由后者让位（不传则该判断对所有已发现的插件生效）。
     """
     errors: dict[str, tuple[str, str]] = {}
     index: dict[str, PluginInfo] = {}
@@ -498,6 +529,29 @@ def resolve_dependencies(infos: list[PluginInfo]) -> tuple[list[PluginInfo], dic
             errors[info.id] = (PHASES[0], f"插件 id 重复：{info.id}")
             continue
         index[info.id] = info
+
+    # 冲突是对称的：任意一方声明就算双方冲突
+    peers: dict[str, set[str]] = {plugin_id: set() for plugin_id in index}
+    for info in index.values():
+        for other in info.conflicts:
+            peer = index.get(other)
+            if peer is None or peer is info:
+                continue
+            peers[info.id].add(other)
+            peers[other].add(info.id)
+
+    yielded: dict[str, tuple[str, ...]] = {}
+    for info in index.values():
+        if enabled_ids is not None and info.id not in enabled_ids:
+            continue
+        blockers = sorted(
+            other
+            for other in peers.get(info.id, ())
+            if (enabled_ids is None or other in enabled_ids)
+            and _order_key(index[other]) < _order_key(info)
+        )
+        if blockers:  # 先出现的那个胜出，这一个让位
+            yielded[info.id] = tuple(blockers)
 
     edges: dict[str, set[str]] = {}
     for info in index.values():
@@ -515,13 +569,7 @@ def resolve_dependencies(infos: list[PluginInfo]) -> tuple[list[PluginInfo], dic
                 )
                 continue
             required.append(dep)
-        conflicts = [other for other in info.incompatible if other in index]
-        if conflicts:
-            errors[info.id] = (PHASES[1], "与插件不兼容：" + "、".join(conflicts))
         edges[info.id] = {dep.id for dep in required}
-        for dep in info.load_after:
-            if dep in index and dep not in errors:
-                edges[info.id].add(dep)
         edges[info.id].discard(info.id)
 
     remaining = {info.id: info for info in index.values() if info.id not in errors}
@@ -541,7 +589,7 @@ def resolve_dependencies(infos: list[PluginInfo]) -> tuple[list[PluginInfo], dic
     for info in sorted(remaining.values(), key=_order_key):
         path = [*sorted(edges.get(info.id, set())), info.id]
         errors[info.id] = (PHASES[1], "插件依赖存在循环：" + " → ".join(path))
-    return ordered, errors
+    return ordered, errors, yielded
 
 
 # ------------------------------------------------------------ dm_plugin 包

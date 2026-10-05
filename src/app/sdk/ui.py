@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
+
 __all__ = [
     "CARD_SPACING",
     "ClickCard",
@@ -24,6 +26,7 @@ __all__ = [
     "ask_open_with",
     "clear_scroll_background",
     "open_default",
+    "open_page",
     "open_with_program",
     "notify_items_changed",
     "reveal",
@@ -104,6 +107,27 @@ def reveal(path: str | Path) -> bool:
     from ..core import shell
 
     return bool(shell.reveal(path))
+
+
+def open_page(route: str) -> bool:
+    """跳到某个页面：插件页面路由用 `models.page_route()` 这类值，跳不过去返回 False。
+
+    本体没装界面（脚本、服务层自检）或页面不在时返回 False，插件据此提示用户手动打开。
+    """
+    try:
+        from ..core.app_ui import APP_UI_EXTENSION
+        from ..core.extensions import extension_registry
+    except Exception:
+        return False
+    api = extension_registry.provider(APP_UI_EXTENSION)
+    opener = getattr(api, "open_page", None)
+    if not callable(opener):
+        return False
+    try:
+        return bool(opener(route))
+    except Exception:
+        logger.exception("跳转页面失败：{}", route)
+        return False
 
 
 def notify_items_changed() -> None:

@@ -697,7 +697,7 @@ def plugin_display(case: Case) -> None:
                 problems.append(f"第 {row + 1} 行没有状态徽章数据")
             if not item.data(TITLE_ROLE) or not item.data(SUBTITLE_ROLE):
                 problems.append(f"第 {row + 1} 行没有两行文字数据：{item.text()!r}")
-            if "内置" not in item.text() or "·" not in item.text():
+            if "·" not in item.text() or ("内置" not in item.text() and "外部" not in item.text()):
                 problems.append(f"第 {row + 1} 行的文字丢了既有信息：{item.text()!r}")
         if listing.count():
             row_height = listing.visualItemRect(listing.item(0)).height()

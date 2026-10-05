@@ -50,7 +50,9 @@ from ...repositories import (
     TagRepository,
 )
 from ...sdk import ExtensionPoint
+from ...sdk.items import SelectionContext
 from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
+from ...services.item_api import to_ref
 from ..framework import (
     icon_label,
     PAGE_SPACING,
@@ -64,7 +66,7 @@ from ..framework import (
     tri_state,
     type_name,
 )
-from ..framework.contributions import icon_of, items, resolve, value_of
+from ..framework.contributions import icon_of, items, resolve, resolve_with, value_of
 from ..dialogs import (
     BatchRenameDialog,
     CategoryConflictDialog,
@@ -386,7 +388,11 @@ class ManagePage(Page):
         return scroll
 
     def _plugin_button_list(self, flow: FlowLayout, host: QWidget) -> list[PushButton]:
-        """按扩展点贡献建工具栏按钮（app.ui.manage.toolbar）。"""
+        """按扩展点贡献建工具栏按钮（app.ui.manage.toolbar）。
+
+        回调按签名调用：写 1 个参数就收到 `SelectionContext`（当前勾选的条目），
+        写 0 个参数按旧行为调用，插件不必为了兼容而改写。
+        """
         buttons: list[PushButton] = []
         for item in items(ExtensionPoint.MANAGE_TOOLBAR):
             data = value_of(item)
@@ -395,10 +401,21 @@ class ManagePage(Page):
             tip = str(data.get("tip") or item.description or "")
             if tip:
                 button.setToolTip(tip)
-            button.clicked.connect(lambda _checked=False, cb=data.get("callback"): resolve(cb))
+            button.clicked.connect(
+                lambda _checked=False, cb=data.get("callback"): resolve_with(cb, self.selection_context())
+            )
             flow.addWidget(button)
             buttons.append(button)
         return buttons
+
+    def selection_context(self) -> SelectionContext:
+        """给插件按钮一份「当前选中了什么」的只读上下文。"""
+        selected = self.selected_items()
+        return SelectionContext(
+            items=tuple(to_ref(item) for item in selected),
+            user_id=self.user_service.current_id(),
+            refresh=self.refresh,
+        )
 
     def _sync_plugin_buttons(self) -> None:
         """插件载入或卸载后重建工具栏上的插件按钮。"""

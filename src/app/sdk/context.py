@@ -28,6 +28,8 @@ class ContextServices(Protocol):
 
     def options(self, plugin_id: str) -> dict[str, Any]: ...
 
+    def set_option(self, plugin_id: str, key: str, value: Any) -> Any: ...
+
     def provide(self, plugin_id: str, name: str, obj: Any) -> None: ...
 
     def require(self, plugin_id: str, name: str) -> Any: ...
@@ -139,6 +141,10 @@ class PluginContext:
 
     def options(self) -> dict[str, Any]:
         return dict(self._services.options(self.plugin_id))
+
+    def set_option(self, key: str, value: Any) -> Any:
+        """写入一个选项：与插件页「插件设置」写的是同一份，改完立即生效。"""
+        return self._services.set_option(self.plugin_id, key, value)
 
     # ---- 运行期接口 -------------------------------------------------
 

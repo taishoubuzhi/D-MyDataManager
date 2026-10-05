@@ -21,10 +21,14 @@ class ExtensionPoint:
     - MODEL：模型工具库用 ctx.provide(MODEL_EXTENSION, ...) 暴露调度接口（见 app.sdk.models）；
     - HOME_KPI：{"title": str, "value": 回调或字符串, "sub": str, "icon": str}；
     - SETTINGS_CARD：{"title": str, "factory": 回调(parent) -> QWidget}；
-    - MANAGE_TOOLBAR：{"text": str, "callback": 回调(), "icon": str, "tip": str}；
+    - MANAGE_TOOLBAR：{"text": str, "callback": 回调(), "icon": str, "tip": str}
+      （回调写成 0 个参数时按旧行为调用；写成 1 个参数时收到当前选中条目，
+      见 `app.sdk.items.SelectionContext`）；
     - MANAGE_ITEM_MENU：{"text": str, "callback": 回调(item), "icon": str}；
     - DETAIL_PANEL：{"title": str, "lines": 回调(item) -> Iterable[str]}；
     - IMPORT_FILTER：{"name": str, "accept": 回调(path) -> bool}（返回 False 的文件不导入）；
+    - IMPORT_ACTION：{"text": str, "callback": 回调(ctx), "icon": str, "tip": str}
+      （数据导入页的动作按钮，ctx 见 `app.sdk.items.ImportContext`）；
     - IMPORT_HOOK / OPEN_RESOLVER：协议预留，程序侧尚未接线。
     """
 
@@ -36,6 +40,7 @@ class ExtensionPoint:
     MANAGE_ITEM_MENU = "app.ui.manage.item_menu"
     DETAIL_PANEL = "app.ui.detail.panel"
     IMPORT_FILTER = "app.ui.import.filter"
+    IMPORT_ACTION = "app.ui.import.action"
     HOME_KPI = "app.ui.home.kpi"
     SETTINGS_CARD = "app.ui.settings.card"
     IMPORT_HOOK = "app.data.import.hook"
@@ -50,6 +55,7 @@ class ExtensionPoint:
         MANAGE_ITEM_MENU: "条目菜单",
         DETAIL_PANEL: "详情面板",
         IMPORT_FILTER: "导入筛选",
+        IMPORT_ACTION: "导入页功能",
         HOME_KPI: "概览卡片",
         SETTINGS_CARD: "设置卡片",
         IMPORT_HOOK: "导入钩子",
@@ -72,6 +78,7 @@ class Events:
     LIBRARY_CHANGED = "library.changed"
     ITEM_IMPORTED = "item.imported"
     ITEM_DELETED = "item.deleted"
+    ITEM_CHANGED = "item.changed"
     USER_CHANGED = "user.changed"
     THEME_CHANGED = "theme.changed"
     PLUGIN_ENABLED = "plugin.enabled"
@@ -81,6 +88,7 @@ class Events:
         LIBRARY_CHANGED: "库目录变化",
         ITEM_IMPORTED: "条目导入",
         ITEM_DELETED: "条目删除",
+        ITEM_CHANGED: "条目变化",
         USER_CHANGED: "用户切换",
         THEME_CHANGED: "主题变化",
         PLUGIN_ENABLED: "插件启用",

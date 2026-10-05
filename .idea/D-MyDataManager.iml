@@ -28,6 +28,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.packages" />
       <excludeFolder url="file://$MODULE_DIR$/.plugins" />
       <excludeFolder url="file://$MODULE_DIR$/plugins/example.model_usage" />
+      <excludeFolder url="file://$MODULE_DIR$/docs" />
     </content>
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />

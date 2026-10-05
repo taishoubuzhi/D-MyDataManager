@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from . import console, data, editors, models, storage, ui, viewers
+from . import console, data, editors, items, models, storage, ui, viewers
 from .context import ContextServices, PluginContext
 from .errors import (
     DependencyError,
@@ -55,6 +55,7 @@ __all__ = [
     "data",
     "editors",
     "events",
+    "items",
     "library",
     "models",
     "parse_range",

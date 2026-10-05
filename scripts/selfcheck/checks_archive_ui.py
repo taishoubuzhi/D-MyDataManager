@@ -93,6 +93,19 @@ def _builtin_plugin_ids() -> list[str]:
     return ids
 
 
+def _source_plugin_ids(builtin: bool) -> list[str]:
+    """按清单声明的来源筛插件 id：插件页的「内置 / 外部」筛选要用它核对。"""
+    ids: list[str] = []
+    for source in sorted(BUILTIN_PLUGINS.iterdir()):
+        manifest = source / "plugin.json"
+        if not manifest.is_file():
+            continue
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if bool(data.get("builtin", False)) is builtin:
+            ids.append(str(data.get("id")))
+    return ids
+
+
 def _point_counts() -> dict[str, int]:
     """每个扩展点上登记了贡献的插件数（从服务层读回，供贡献筛选断言）。"""
     from app.sdk import ExtensionPoint
@@ -696,8 +709,8 @@ def viewer_config_page(case: Case) -> None:
         window.switchTo(page)
         page.reload()
         _expect(problems, "md" in registry.extensions(), "载入内置插件后注册表应包含 md 扩展名")
-        markdown = registry.viewer_by_id("builtin.markdown")
-        _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.markdown")
+        markdown = registry.viewer_by_id("builtin.viewer.markdown")
+        _expect(problems, markdown is not None, "内置 markdown 查看器应注册为 builtin.viewer.markdown")
         _expect(problems, markdown is not None and markdown.host == "dialog", "内置 markdown 查看器应交由界面工具库托管")
         _expect(problems, extension_registry.provider("dialog") is not None, "界面工具库应提供 dialog 扩展")
         _expect(
@@ -712,7 +725,7 @@ def viewer_config_page(case: Case) -> None:
         _select_suffix(page, "md")
         _expect(problems, page.detail_title.text() == ".md", f"详情标题应为 .md，实际 {page.detail_title.text()!r}")
         _expect(problems, "可用查看器" in page.detail_viewers.text(), "详情应列出可用查看器")
-        _expect(problems, "builtin.markdown" in page.detail_viewers.text(), "可用查看器里应含 builtin.markdown")
+        _expect(problems, "builtin.viewer.markdown" in page.detail_viewers.text(), "可用查看器里应含 builtin.viewer.markdown")
 
         custom_index = page.mode_box.findData(MODE_CUSTOM)
         builtin_index = page.mode_box.findData(MODE_BUILTIN)
@@ -728,16 +741,16 @@ def viewer_config_page(case: Case) -> None:
         _expect(problems, not page.program_edit.isEnabled(), "内置模式应禁用程序路径输入")
         _expect(problems, not page.browse_button.isEnabled(), "内置模式应禁用「浏览」按钮")
 
-        viewer_index = page.viewer_box.findData("builtin.markdown")
-        _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.markdown")
+        viewer_index = page.viewer_box.findData("builtin.viewer.markdown")
+        _expect(problems, viewer_index >= 0, "查看器下拉应列出 builtin.viewer.markdown")
         page.viewer_box.setCurrentIndex(viewer_index)
         page._on_save()
         rule = api.rule_for("md")
-        _expect(problems, rule is not None and rule.viewer_id == "builtin.markdown", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
+        _expect(problems, rule is not None and rule.viewer_id == "builtin.viewer.markdown", f"保存后 md 规则应指向选中的查看器，实际 {rule}")
         _expect(problems, [kind for kind, _title in seen if kind == "success"], "保存成功应给出提示")
         _select_other_suffix(page, "md")
         _select_suffix(page, "md")
-        _expect(problems, "builtin.markdown" in page.detail_meta.text(), f"保存后状态应显示使用的查看器，实际 {page.detail_meta.text()!r}")
+        _expect(problems, "builtin.viewer.markdown" in page.detail_meta.text(), f"保存后状态应显示使用的查看器，实际 {page.detail_meta.text()!r}")
 
         page._on_reset()
         reset_rule = api.rule_for("md")
@@ -831,7 +844,12 @@ def plugin_page_detail(case: Case) -> None:
             )
 
             page.source_box.setCurrentIndex(page.source_box.findData(SOURCE_BUILTIN))
-            _expect(problems, len(_listed_plugin_ids(page)) == expected_total, "按「内置」筛选应包含全部清单插件")
+            builtin_total = len(_source_plugin_ids(True))
+            _expect(
+                problems,
+                len(_listed_plugin_ids(page)) == builtin_total,
+                f"按「内置」筛选应列出全部内置插件，实际 {len(_listed_plugin_ids(page))} / {builtin_total}",
+            )
             _expect(
                 problems,
                 all("内置" in page.plugin_list.item(row).text() for row in range(page.plugin_list.count())),
@@ -839,8 +857,8 @@ def plugin_page_detail(case: Case) -> None:
             )
             page.source_box.setCurrentIndex(0)
 
-            _expect(problems, page._select_plugin("builtin.image"), "应能在列表里选中 builtin.image")
-            info = plugin_service.get("builtin.image")
+            _expect(problems, page._select_plugin("builtin.viewer.image"), "应能在列表里选中 builtin.viewer.image")
+            info = plugin_service.get("builtin.viewer.image")
             _expect(problems, info is not None and info.has_options, "内置图片插件应声明可配置选项")
             protocol = page.detail_protocol.text()
             for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适配 SDK", "适用管理器版本", "入口文件"):
@@ -854,11 +872,11 @@ def plugin_page_detail(case: Case) -> None:
             )
             _expect(
                 problems,
-                registry.viewer_by_id("builtin.image") is not None
-                and "png" in registry.viewer_by_id("builtin.image").extensions,
+                registry.viewer_by_id("builtin.viewer.image") is not None
+                and "png" in registry.viewer_by_id("builtin.viewer.image").extensions,
                 "内置图片插件应在清单数据里声明 png 扩展名",
             )
-            _expect(problems, page.detail_meta.text().startswith("builtin.image"), f"副标题应以插件 id 开头，实际 {page.detail_meta.text()!r}")
+            _expect(problems, page.detail_meta.text().startswith("builtin.viewer.image"), f"副标题应以插件 id 开头，实际 {page.detail_meta.text()!r}")
             _expect(problems, page.options_button.text() == "插件选项", "选项按钮文案应为「插件选项」")
             _expect(problems, not page.delete_button.isEnabled(), "内置插件不应可删除")
             _expect(problems, page.reveal_button.isEnabled(), "内置插件应可打开插件目录")
@@ -883,20 +901,20 @@ def plugin_page_detail(case: Case) -> None:
             page.reverse_button.setChecked(False)
             _expect(problems, page.reverse_button.text() == "正序", "取消排序开关应显示「正序」")
 
-            _expect(problems, page._select_plugin("builtin.markdown"), "应能选中 builtin.markdown")
-            enabled_before = plugin_service.get("builtin.markdown").enabled
+            _expect(problems, page._select_plugin("builtin.viewer.markdown"), "应能选中 builtin.viewer.markdown")
+            enabled_before = plugin_service.get("builtin.viewer.markdown").enabled
             page._on_toggle()
             _expect(
                 problems,
-                plugin_service.get("builtin.markdown").enabled is not enabled_before,
+                plugin_service.get("builtin.viewer.markdown").enabled is not enabled_before,
                 "点「禁用」后插件启用状态应翻转",
             )
             _expect(problems, toasts.titles("success"), "启停成功应给出提示")
-            page._select_plugin("builtin.markdown")
+            page._select_plugin("builtin.viewer.markdown")
             page._on_toggle()
             _expect(
                 problems,
-                plugin_service.get("builtin.markdown").enabled is enabled_before,
+                plugin_service.get("builtin.viewer.markdown").enabled is enabled_before,
                 "再点一次应恢复原来的启用状态",
             )
 
@@ -1003,17 +1021,17 @@ def image_viewer(case: Case) -> None:
     from app.services.plugin_service import plugin_service
     install_builtin_plugins()
     registry = open_api()
-    from dm_plugin.builtin.image.image_view import ZOOM_STEP, ImageViewer
+    from dm_plugin.builtin.viewer.image.image_view import ZOOM_STEP, ImageViewer
     _fixture, window = build_window(case)
     problems: list[str] = []
     viewer = None
     built = None
     try:
         _expect(problems, SAMPLE_IMAGE.is_file(), f"自检图片不存在：{SAMPLE_IMAGE}")
-        info = plugin_service.get("builtin.image")
+        info = plugin_service.get("builtin.viewer.image")
         _expect(problems, info is not None and info.enabled, "内置图片插件应已启用")
-        registered = registry.viewer_by_id("builtin.image")
-        _expect(problems, registered is not None, "内置图片查看器应注册为 builtin.image")
+        registered = registry.viewer_by_id("builtin.viewer.image")
+        _expect(problems, registered is not None, "内置图片查看器应注册为 builtin.viewer.image")
         _expect(problems, registered is not None and registered.host == "dialog", "内置图片查看器应交由弹窗插件托管")
         _expect(problems, "png" in registry.extensions(), "查看器注册表应包含 png")
 
@@ -1094,7 +1112,7 @@ def plugin_page_contributions(case: Case) -> None:
             _listed_plugin_ids(page)[index]: page.plugin_list.item(index).text()
             for index in range(page.plugin_list.count())
         }
-        row = rows.get("builtin.markdown", "")
+        row = rows.get("builtin.viewer.markdown", "")
         _expect(problems, label in row, f"插件行应显示贡献「{label}」，实际 {row!r}")
         page.apply_contribution("")
         _expect(problems, len(_listed_plugin_ids(page)) == len(_builtin_plugin_ids()), "回到「全部贡献」应列出全部插件")

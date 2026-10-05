@@ -33,6 +33,7 @@ from ...services.plugin_service import (
     SOURCE_FILTERS,
     STATE_FILTERS,
     PluginError,
+    PluginInfo,
     plugin_service,
 )
 from ..components import BADGES_ROLE, SUBTITLE_ROLE, TITLE_ROLE, FlowArea, PluginItemDelegate
@@ -436,6 +437,8 @@ class PluginPage(Page):
             f"{info.id} · {info.contributions_text} · {info.source_label} · 版本 {info.version_text} · 创建者 {info.author_text}"
         )
         state = f"状态：{info.state_label} · 目录：{info.path or '—'}"
+        if info.conflict_with:
+            state += f" · 与插件冲突：{info.conflict_with_text}（不能同时启用）"
         if info.note:
             state += f" · 备注：{info.note}"
         if info.error:
@@ -447,6 +450,7 @@ class PluginPage(Page):
                 [
                     f"贡献：{info.contributions_text}",
                     f"依赖插件：{info.depends_text}",
+                    f"冲突声明：{info.conflicts_text}",
                     f"扩展接口：{info.provides_text}",
                     f"提供库：{info.libraries_text}",
                     f"适配 SDK：{info.api_text}",
@@ -576,10 +580,18 @@ class PluginPage(Page):
         self._sync_selection()
 
     # ------------------------------------------------------------------ 操作
-    def _refresh_viewers(self) -> None:
-        self.service.load_viewers()
+    def _refresh_viewers(self, changed=()) -> None:
+        """按变更的插件增量重载；没给 id（重载 / 删除等整体性操作）时退回全量。"""
+        self.service.apply_changes(changed)
         signalBus.pluginsChanged.emit()
         signalBus.openWithChanged.emit()
+
+    def _refusal_text(self, info: PluginInfo) -> str:
+        """启用被拒时给一句能照做的说明：冲突优先，其次清单 / 依赖错误。"""
+        conflict = self.service.conflict_text(info.id)
+        if conflict:
+            return conflict
+        return info.error_text or "原因见控制台日志"
 
     def _on_toggle(self) -> None:
         if not self._require_admin("启用或禁用插件"):
@@ -587,9 +599,12 @@ class PluginPage(Page):
         info = self._selected_info()
         if info is None:
             return
-        self.service.set_enabled(info.id, not info.enabled)
-        self._refresh_viewers()
-        self.toast_success("已启用插件" if not info.enabled else "已禁用插件", info.name)
+        target = not info.enabled
+        if not self.service.set_enabled(info.id, target):
+            self.toast_error("无法启用插件" if target else "无法禁用插件", self._refusal_text(info))
+            return
+        self._refresh_viewers((info.id,))
+        self.toast_success("已启用插件" if target else "已禁用插件", info.name)
 
     def _on_batch_toggle(self, enabled: bool) -> None:
         """批量启用 / 批量禁用勾选的插件。"""
@@ -600,15 +615,30 @@ class PluginPage(Page):
             self.toast_warning("未选择插件", "请先勾选要批量操作的插件")
             return
         changed = [info for info in infos if bool(info.enabled) != enabled]
+        refused: list[str] = []
+        accepted: list[str] = []
+        done = 0
         for info in changed:
-            self.service.set_enabled(info.id, enabled)
-        if changed:
-            self._refresh_viewers()
+            if self.service.set_enabled(info.id, enabled):
+                accepted.append(info.id)
+                done += 1
+            else:
+                refused.append(f"{info.name}：{self._refusal_text(info)}")
+        if done:
+            self._refresh_viewers(accepted)
+        if refused:
+            head = "；".join(refused[:3])
+            more = f"；另有 {len(refused) - 3} 个同类问题" if len(refused) > 3 else ""
+            self.toast_error(
+                f"{len(refused)} 个插件没能{'启用' if enabled else '禁用'}",
+                head + more,
+            )
+        if done:
             self.toast_success(
                 "已批量启用插件" if enabled else "已批量禁用插件",
-                f"{len(changed)} 个插件已{'启用' if enabled else '禁用'}",
+                f"{done} 个插件已{'启用' if enabled else '禁用'}",
             )
-        else:
+        elif not refused:
             self.toast_warning(
                 "状态未变化",
                 f"勾选的 {len(infos)} 个插件都已经是{'启用' if enabled else '禁用'}状态",

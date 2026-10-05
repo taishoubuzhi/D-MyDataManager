@@ -2,7 +2,7 @@
 
 提供统一页面骨架、控件工厂与独立弹窗外壳，让插件不必各自手写 PyQt6 布局也能长得像同一个程序：
 插件页只写「绑回调 + 填数据」，控件与两栏结构都从这里取。
-本插件由原 builtin.lib.dialog 并入而来。
+本插件由原 lib.dialog 并入而来。
 
 ## 目录
 
@@ -63,5 +63,5 @@
 内置 7 个查看器插件的 data/viewer.json 里都写 host: "dialog"，查看器库据此 require 本插件：
 禁用本插件后，查看器会提示缺少界面工具库。
 
-音频 / 视频查看器用的播放控件就是本库的 `PlayerPanel`：`builtin.audio` 与 `builtin.video` 的视图分别是
+音频 / 视频查看器用的播放控件就是本库的 `PlayerPanel`：`builtin.viewer.audio` 与 `builtin.viewer.video` 的视图分别是
 `class AudioViewer(PlayerPanel)` 与 `class VideoViewer(PlayerPanel)`，只差一个 `shows_video` 开关。

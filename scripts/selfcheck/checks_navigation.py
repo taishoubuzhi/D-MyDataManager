@@ -323,6 +323,81 @@ def navigation_workbench(case: Case) -> None:
     assert not problems, "导航工作台检查未通过：" + "；".join(problems)
 
 
+@check("plugin_page_stack_alignment", "pages")
+def plugin_page_stack_alignment(case: Case) -> None:
+    """插件页面在堆叠区只能进一次：摘掉再装回来之后，动画栈记录仍与控件索引一一对应。
+
+    qfluentwidgets 的动画栈（`aniInfos`）在重复 add 同一个控件时只把控件挪到末尾、
+    不删旧记录，索引一旦错位，删页面时 `pop` 会命中错位项，留下指向已删除控件的记录，
+    点侧栏切页就会 `RuntimeError: wrapped C/C++ object … has been deleted`。
+    """
+    from PyQt6.QtWidgets import QLabel
+
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.extensions import extension_registry
+    from app.services.plugin_service import plugin_service
+
+    def factory():
+        return QLabel("插件页面", None)
+
+    plugin_id = "selfcheck.stackpage"
+    api = AppUiApi()
+    previous = extension_registry.provider(APP_UI_EXTENSION)
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
+    window = None
+    problems: list[str] = []
+    try:
+        api.add_page("stackpage1", "堆叠页一", factory, plugin_id=plugin_id)
+        api.add_page("stackpage2", "堆叠页二", factory, plugin_id=plugin_id)
+        _fixture, window = build_window(case)
+        view = window.stackedWidget.view
+
+        def check_aligned(stage: str) -> None:
+            _expect(
+                problems,
+                len(view.aniInfos) == view.count(),
+                f"{stage}：动画栈记录数应与页面数一致，实际 aniInfos={len(view.aniInfos)}、页面={view.count()}",
+            )
+            for index in range(min(view.count(), len(view.aniInfos))):
+                _expect(
+                    problems,
+                    view.aniInfos[index].widget is view.widget(index),
+                    f"{stage}：第 {index} 条动画记录与栈里的控件不是同一个（索引错位）",
+                )
+
+        check_aligned("首次装配")
+        api.remove_page("stackpage1")
+        window._sync_plugin_pages()
+        check_aligned("摘掉一个插件页面后")
+        api.add_page("stackpage1", "堆叠页一", factory, plugin_id=plugin_id)
+        window._sync_plugin_pages()
+        check_aligned("重新登记后")
+        for widget in window._plugin_pages.values():
+            window.switchTo(widget)  # 索引错位时这一句就抛 RuntimeError，页面永远打不开
+        # 侧栏点击走的是 `clicked(bool)` 信号，PyQt 按回调的形参个数投递这个布尔量：
+        # 回调必须写成 0 参（写成 `lambda page=widget: …` 就会把 True 当页码，switchTo 里
+        # `indexOf(True)` 直接 TypeError）。这里按真实点击路径发一次信号来验。
+        panel = window.navigationInterface.panel
+        for key, page in window._plugin_pages.items():
+            item = panel.items.get(page.objectName())
+            nav = getattr(item, "widget", None) if item is not None else None
+            _expect(problems, nav is not None, f"{key}：侧栏里找不到对应项，没法验证点击")
+            if nav is None:
+                continue
+            nav.clicked.emit(True)
+            _expect(
+                problems,
+                window.stackedWidget.currentWidget() is page,
+                f"{key}：发侧栏点击信号后没切到该页面（onClick 回调可能被 clicked(bool) 的布尔量顶掉）",
+            )
+    finally:
+        api.clear()
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous if previous is not None else api)
+        if window is not None:
+            dispose_window(window)
+    assert not problems, "插件页面堆叠检查未通过：" + "；".join(problems)
+
+
 @check("workbench_lists_builtin_pages", "pages")
 def workbench_lists_builtin_pages(case: Case) -> None:
     """「页面管理」启动时就列出全部内置页面：没有插件页面时也不能是空页。

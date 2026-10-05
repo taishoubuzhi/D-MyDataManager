@@ -553,6 +553,12 @@ def plugin_load_summary(case: Case) -> None:
     assert f"功能插件 {len(features)} 个" in summary, f"汇总没有报功能插件数量：{summary}"
     assert any("插件扫描完成：发现 " in text for text in records), "插件扫描结果没有写到控制台"
     assert any("插件载入：共 " in text for text in records), "插件载入汇总没有写到控制台"
+    # 不可用插件必须逐个报出 id 与原因（控制台一行一条 + 汇总句尾带原因）
+    for info in infos:
+        if not info.error:
+            continue
+        assert f"{info.id}（{info.error_text}）" in summary, f"汇总没有写清 {info.id} 的失败原因：{summary}"
+        assert any(f"插件不可用：{info.id}" in text for text in records), f"{info.id} 的失败原因没有写到控制台"
 
 
 @check("sdk_console_output", "services")
@@ -597,12 +603,64 @@ def sdk_console_output(case: Case) -> None:
 
         extension_registry.provide(console_api.CONSOLE_EXTENSION, _FakeOutput(), "console-selfcheck")
         assert console_api.available(), "提供实现后 available() 应为真"
-        console_api.console_for("builtin.lib.model").success("转发成功")
+        console_api.console_for("lib.model").success("转发成功")
         assert calls == [
-            {"level": "success", "message": "转发成功", "source": "builtin.lib.model", "stage": ""}
+            {"level": "success", "message": "转发成功", "source": "lib.model", "stage": ""}
         ], f"程序接口没收到转发：{calls}"
     finally:
         logger.remove(source_sink)
         logger.remove(sink)
         extension_registry.drop_plugin("console-selfcheck")
         extension_registry.provide(console_api.CONSOLE_EXTENSION, previous, owner)
+
+
+@check("plugin_incremental_toggle", "services")
+def plugin_incremental_toggle(case: Case) -> None:
+    """启停插件只动该插件（与依赖它的插件），不再把整仓插件重载一遍。"""
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.extensions import extension_registry
+    from app.services.plugin_service import plugin_service
+
+    install_builtin_plugins()
+    previous = extension_registry.provider(APP_UI_EXTENSION)
+    api = AppUiApi()
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
+    plugin_service.load()
+    target = "auto_keyword"
+    library = "lib.model"
+
+    def loaded() -> dict[str, int]:
+        """已载入插件 → 实例地址；地址没变就说明没被重建。"""
+        return {pid: id(plugin) for pid, plugin in plugin_service._plugins.items()}
+
+    try:
+        before = loaded()
+        assert target not in before, f"自检前提：{target} 默认不该启用，实际在 {sorted(before)}"
+
+        plugin_service.set_enabled(target, True)
+        plugin_service.apply_changes((target,))
+        after_enable = loaded()
+        assert target in after_enable, f"启用后应载入 {target}"
+        touched = {pid for pid in set(before) | set(after_enable) if before.get(pid) != after_enable.get(pid)}
+        assert touched == {target}, f"增量启用只该动 {target}，实际动了 {sorted(touched)}"
+
+        plugin_service.set_enabled(target, False)
+        plugin_service.apply_changes((target,))
+        after_disable = loaded()
+        assert target not in after_disable, f"禁用后应卸载 {target}"
+        touched = {pid for pid in set(after_enable) | set(after_disable) if after_enable.get(pid) != after_disable.get(pid)}
+        assert touched == {target}, f"增量禁用只该动 {target}，实际动了 {sorted(touched)}"
+
+        # 禁用被依赖的库：依赖它的插件要连带卸载
+        plugin_service.set_enabled(target, True)
+        plugin_service.apply_changes((target,))
+        plugin_service.set_enabled(library, False)
+        plugin_service.apply_changes((library,))
+        after_chain = loaded()
+        assert library not in after_chain, f"禁用后应卸载 {library}"
+        assert target not in after_chain, f"依赖 {library} 的 {target} 应被连带卸载"
+    finally:
+        plugin_service.set_enabled(target, False)
+        plugin_service.set_enabled(library, True)
+        plugin_service.load()
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous if previous is not None else api)

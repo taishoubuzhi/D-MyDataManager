@@ -1166,3 +1166,59 @@ def manage_tri_state_managers(case: Case) -> None:
         assert not problems, "标签/关键词管理：" + "；".join(problems[:12])
     finally:
         dispose_window(window)
+
+
+@check("manage_refresh_sees_plugin_writes", "pages")
+def manage_refresh_sees_plugin_writes(case: Case) -> None:
+    """插件用自己的会话写库后，管理页刷新必须能看到新标签。
+
+    插件走 `app.sdk.items`（每次调用自建会话并提交），宿主页面持有的是另一个会话：
+    不 `expire_all()` 的话，identity map 里的关系集合还是旧值，`refresh()` 重新查库也读不到，
+    用户就会看到「提示成功但列表里没有标签」。
+    """
+    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.extensions import extension_registry
+    from app.core.signals import signalBus
+    from app.sdk import items as items_sdk
+    from app.services.item_api import ItemsApi
+    from app.services.plugin_service import plugin_service
+
+    previous_ui = extension_registry.provider(APP_UI_EXTENSION)
+    previous_items = extension_registry.provider(items_sdk.ITEMS_EXTENSION)
+    api = AppUiApi()
+    plugin_service.bootstrap(APP_UI_EXTENSION, api)
+    extension_registry.provide(items_sdk.ITEMS_EXTENSION, ItemsApi(), "selfcheck-items")
+    window = None
+    problems: list[str] = []
+    try:
+        fixture, window = build_window(case)
+        page = window.manage_page
+        target = ImportService(case.session).import_text(
+            "插件写入可见性", "正文", category_id=fixture.category_child
+        )
+        case.session.commit()
+        page.refresh()
+        ensure_app().processEvents()
+
+        item_id = int(target.id)
+        written = items_sdk.tag_items([item_id], ["自检标签"])
+        if written != 1:
+            problems.append(f"插件写标签应改动 1 条，实际 {written}")
+        signalBus.itemsChanged.emit()  # 插件的 notify_changed() 发的就是这个信号
+        ensure_app().processEvents()
+
+        row = next((item for item in page._items if int(item.id) == item_id), None)
+        if row is None:
+            problems.append("刷新后列表里找不到刚写入标签的那条数据")
+        else:
+            tags = {str(tag.name) for tag in row.tags}
+            if "自检标签" not in tags:
+                problems.append(f"管理页刷新后仍看不到插件写的标签，实际 {sorted(tags)}")
+
+        assert not problems, "插件写入后的界面刷新：" + "；".join(problems[:8])
+    finally:
+        if previous_items is not None:
+            extension_registry.provide(items_sdk.ITEMS_EXTENSION, previous_items, "selfcheck-restore")
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous_ui if previous_ui is not None else api)
+        if window is not None:
+            dispose_window(window)

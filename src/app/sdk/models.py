@@ -4,7 +4,7 @@
 
 1. 没启用模型插件时，`list_models()` 返回空、`acquire()` / `invoke()` 直接抛 `SdkError`；
 2. 「有哪些模型、怎么下载、怎么加载、用哪个后端跑」全部由模型插件库
-   `builtin.lib.model` 实现，并通过扩展接口 `model.open` 暴露成 `ModelOpenApi`；
+   `lib.model` 实现，并通过扩展接口 `model.open` 暴露成 `ModelOpenApi`；
 3. 这里的函数都是门面：有插件就转调插件，没有插件就报错（模型不能凭空变出来）。
 
 插件之间对接模型统一走这里：按 `model_id` 或 `capability` 取用，模型由插件内部按需加载，
@@ -13,7 +13,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterable, Protocol
 
 from loguru import logger
 
@@ -51,6 +52,31 @@ class ModelLease(Protocol):
     ) -> Any: ...
 
     def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class BatchRequest:
+    """批量调用里的一条请求。
+
+    `task` / `payload` 和单条 `invoke()` 同义；`key` 由调用方随便填（常用条目 id），
+    结果里原样带回，方便把结果对回自己的数据。
+    """
+
+    task: str
+    payload: dict = field(default_factory=dict)
+    key: str = ""
+    model_id: str = ""
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    """批量调用里的一条结果：`ok` 为假时看 `error`。"""
+
+    key: str
+    ok: bool
+    value: Any = None
+    error: str = ""
+    model_id: str = ""
 
 
 #: 模型调度接口（模型插件库实现）：注册表查询 / 取租约 / 直接调用 / 已加载列表
@@ -164,16 +190,164 @@ def invoke(
             close()
 
 
+def supports_batch() -> bool:
+    """模型插件有没有实现批量调度（`run_batch`）；旧版插件没有。"""
+    api = provider()
+    return api is not None and callable(getattr(api, "run_batch", None))
+
+
+def run_batch(
+    requests: Iterable[BatchRequest],
+    *,
+    model_id: str = "",
+    capability: str = "",
+    on_progress: Callable[..., None] | None = None,
+    cancel: Callable[[], bool] | None = None,
+    max_workers: int | None = None,
+) -> tuple[BatchResult, ...]:
+    """把一批请求交给模型插件统一跑，一次返回全部结果（顺序与 `requests` 对应）。
+
+    同一个模型只加载一次、按类型分批，避免调用方为几千个条目反复取租约 / 切换模型：
+    这件事由模型插件内部实现（模型工具库负责批处理），调用方只管准备请求、收结果。
+
+    - `on_progress(done, total)`：每完成一条回调一次（在工作线程里）；
+    - `cancel()`：返回 True 表示调用方要求尽快停下（已跑完的不回滚）；
+    - `requests[i].model_id` 可以为空，表示按 `capability` 自动挑模型；
+    - 插件没实现批量接口时抛 `SdkError`；单条失败写在 `BatchResult.error` 里，不中断整批。
+    """
+    api = _api()
+    runner = getattr(api, "run_batch", None)
+    if not callable(runner):
+        raise SdkError("模型工具库不支持批量请求（请更新模型工具库插件）")
+    prepared = list(requests)
+    try:
+        results = runner(
+            prepared,
+            model_id=model_id,
+            capability=capability,
+            on_progress=on_progress,
+            cancel=cancel,
+            max_workers=max_workers,
+        )
+    except ModelError:
+        raise
+    except Exception as exc:
+        logger.exception("批量调用模型失败：{}", model_id or capability)
+        raise ModelError(f"批量调用失败：{exc}") from exc
+    return tuple(results)
+
+
+def templates(capability: str = "", lightweight_only: bool = False) -> tuple[dict, ...]:
+    """预定义方案（模型插件的出厂模板，每条带 `lightweight` 标识）；没有插件时为空。"""
+    api = provider()
+    lister = getattr(api, "templates", None) if api is not None else None
+    if not callable(lister):
+        return ()
+    try:
+        return tuple(dict(row) for row in lister(capability=capability, lightweight_only=lightweight_only))
+    except Exception:
+        logger.exception("读取模型模板失败：capability={}", capability)
+        return ()
+
+
+def create_from_template(key: str, name: str = "") -> dict:
+    """按预定义方案登记一个**草稿**：只写登记表，不下载权重、不装运行环境。
+
+    返回草稿的简要信息（`model_id` / `name` / `state` / `draft` 等）；挑不到模板抛 `ModelError`。
+    """
+    api = _api()
+    maker = getattr(api, "create_from_template", None)
+    if not callable(maker):
+        raise SdkError("模型工具库不支持预定义方案（请更新模型工具库插件）")
+    try:
+        record = maker(key, name=name)
+    except ModelError:
+        raise
+    except Exception as exc:
+        logger.exception("按预定义方案登记模型失败：{}", key)
+        raise ModelError(f"登记模型草稿失败：{exc}") from exc
+    return _record_brief(record)
+
+
+def download_model(model_id: str) -> dict:
+    """把某个本地模型缺的权重排进模型页的下载队列（**调用方负责先让用户确认**）。
+
+    返回 `{"ok": bool, "model_id": str, "queued": [...], "hint": str}`；
+    模型插件不支持这种方法时抛 `SdkError`（老版本插件没有这个入口）。
+    """
+    api = _api()
+    handler = getattr(api, "download", None)
+    if not callable(handler):
+        raise SdkError("模型工具库不支持一键下载（请更新模型工具库插件）")
+    try:
+        return dict(handler(model_id))
+    except SdkError:
+        raise
+    except Exception as exc:
+        logger.exception("一键下载权重失败：{}", model_id)
+        raise SdkError(f"一键下载失败：{exc}") from exc
+
+
+def page_route() -> str:
+    """模型管理页的路由（可直接喂给 `ui.open_page()`）；没有模型插件时为空串。"""
+    api = provider()
+    route = getattr(api, "page_route", None) if api is not None else None
+    if not callable(route):
+        return ""
+    try:
+        return str(route())
+    except Exception:
+        logger.exception("读取模型页路由失败")
+        return ""
+
+
+def requirements(model_id: str) -> dict:
+    """这个模型还缺什么才能跑：`{"ok": bool, "missing": [...], "hint": str}`。"""
+    api = provider()
+    checker = getattr(api, "requirements", None) if api is not None else None
+    if not callable(checker):
+        return {"ok": False, "missing": ["未启用模型工具库"], "hint": "未启用模型工具库"}
+    try:
+        return dict(checker(model_id))
+    except Exception as exc:
+        logger.exception("读取模型缺口失败：{}", model_id)
+        return {"ok": False, "missing": [str(exc)], "hint": f"读取模型缺口失败：{exc}"}
+
+
+def _record_brief(record: object) -> dict:
+    """把模型记录压成普通字典：插件不该依赖模型插件的记录类。"""
+    state = str(getattr(record, "state", "") or "")
+    capabilities = getattr(record, "capabilities", ()) or ()
+    return {
+        "backend": str(getattr(record, "backend", "") or ""),
+        "capabilities": [str(item) for item in capabilities],
+        "draft": state == "draft",
+        "kind": str(getattr(record, "kind", "") or ""),
+        "model_id": str(getattr(record, "id", "") or ""),
+        "name": str(getattr(record, "name", "") or ""),
+        "state": state,
+    }
+
+
 __all__ = [
     "MODEL_EXTENSION",
+    "BatchRequest",
+    "BatchResult",
     "ModelInfo",
     "ModelLease",
     "acquire",
     "available",
     "capabilities",
+    "create_from_template",
+    "download_model",
     "invoke",
     "list_models",
     "loaded",
     "model_by_id",
+    "page_route",
     "provider",
+    "requirements",
+    "run_batch",
+    "supports_batch",
+    "templates",
 ]

@@ -15,8 +15,12 @@
 
     "options": {"auto_fit": {"label": "打开时自适应", "kind": "bool", "default": true}}
 
-可选字段：`label`（显示名，缺省用 key）、`description`（说明）、`kind`（bool / text / choice）、
-`default`、`choices`（choice 必填，元素为 `[值, 显示名]` 或纯字符串）。
+可选字段：`label`（显示名，缺省用 key）、`description`（说明）、
+`kind`（bool / int / text / choice）、`default`、`choices`（choice 必填，元素为 `[值, 显示名]` 或纯字符串）、
+`minimum` / `maximum` / `step`（int 用，缺省不限范围、步长为 1）。
+
+    {"key": "max_tags", "label": "最多挂几个标签", "kind": "int",
+     "minimum": 1, "maximum": 50, "default": 5}
 """
 
 from __future__ import annotations
@@ -27,11 +31,13 @@ from dataclasses import dataclass
 OPTION_BOOL = "bool"
 OPTION_TEXT = "text"
 OPTION_CHOICE = "choice"
+OPTION_INT = "int"
 
-OPTION_KINDS = (OPTION_BOOL, OPTION_TEXT, OPTION_CHOICE)
+OPTION_KINDS = (OPTION_BOOL, OPTION_INT, OPTION_TEXT, OPTION_CHOICE)
 
 OPTION_KIND_LABELS = {
     OPTION_BOOL: "开关",
+    OPTION_INT: "整数",
     OPTION_TEXT: "文本",
     OPTION_CHOICE: "单选",
 }
@@ -56,6 +62,9 @@ class PluginOptionSpec:
     default: object = ""
     choices: tuple[tuple[str, str], ...] = ()
     description: str = ""
+    minimum: int | None = None
+    maximum: int | None = None
+    step: int = 1
 
     @property
     def name(self) -> str:
@@ -68,6 +77,17 @@ class PluginOptionSpec:
     @property
     def text(self) -> str:
         return f"{self.name}（{self.key}）"
+
+    @property
+    def range_text(self) -> str:
+        """int 选项的取值范围说明（文本里给用户看的提示）。"""
+        if self.kind != OPTION_INT:
+            return ""
+        low = "" if self.minimum is None else str(self.minimum)
+        high = "" if self.maximum is None else str(self.maximum)
+        if not low and not high:
+            return f"步长 {self.step}"
+        return f"{low or '-∞'} ~ {high or '+∞'}，步长 {self.step}"
 
     def label_of(self, value: object) -> str:
         """把选项值翻译成显示名（choice 用声明的显示名，bool 用「开 / 关」）。"""
@@ -111,6 +131,27 @@ def _choice_pairs(value: object, key: str) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _int_or_none(value: object) -> int | None:
+    """把清单里的数字写法转成 int；空值或写错时返回 None。"""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def _clamp(value: int, minimum: int | None, maximum: int | None) -> int:
+    if minimum is not None and value < minimum:
+        return minimum
+    if maximum is not None and value > maximum:
+        return maximum
+    return value
+
+
 def _spec_from(key: str, data: object) -> PluginOptionSpec:
     if not valid_option_key(key):
         raise PluginOptionError(f"插件选项 key 不合法：{key}（小写字母开头，可含数字、下划线、点和连字符）")
@@ -121,6 +162,9 @@ def _spec_from(key: str, data: object) -> PluginOptionSpec:
         raw_choices = data.get("choices")
         has_default = "default" in data
         raw_default = data.get("default")
+        raw_minimum = data.get("minimum")
+        raw_maximum = data.get("maximum")
+        raw_step = data.get("step")
     else:
         label = str(data or "").strip()
         kind = OPTION_TEXT
@@ -128,13 +172,23 @@ def _spec_from(key: str, data: object) -> PluginOptionSpec:
         raw_choices = None
         has_default = False
         raw_default = None
+        raw_minimum = raw_maximum = raw_step = None
     if kind not in OPTION_KINDS:
-        raise PluginOptionError(f"插件选项 kind 不合法：{kind}（可用：bool、text、choice）")
+        raise PluginOptionError(f"插件选项 kind 不合法：{kind}（可用：bool、int、text、choice）")
     choices = _choice_pairs(raw_choices, key) if kind == OPTION_CHOICE else ()
     if kind == OPTION_CHOICE and not choices:
         raise PluginOptionError(f"插件选项 {key} 是 choice 类型，至少要声明一个选项值：choices")
+    minimum = _int_or_none(raw_minimum) if kind == OPTION_INT else None
+    maximum = _int_or_none(raw_maximum) if kind == OPTION_INT else None
+    step = _int_or_none(raw_step) if kind == OPTION_INT else None
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise PluginOptionError(f"插件选项 {key} 的最小值大于最大值：{minimum} > {maximum}")
     if kind == OPTION_BOOL:
         default: object = bool(raw_default) if has_default else False
+    elif kind == OPTION_INT:
+        fallback = minimum if minimum is not None else 0
+        parsed = _int_or_none(raw_default) if has_default else None
+        default = _clamp(fallback if parsed is None else parsed, minimum, maximum)
     else:
         default = str(raw_default).strip() if has_default else (choices[0][0] if choices else "")
     spec = PluginOptionSpec(
@@ -144,6 +198,9 @@ def _spec_from(key: str, data: object) -> PluginOptionSpec:
         default=default,
         choices=choices,
         description=description,
+        minimum=minimum,
+        maximum=maximum,
+        step=max(1, step or 1) if kind == OPTION_INT else 1,
     )
     if spec.kind == OPTION_CHOICE and str(spec.default) not in {item_value for item_value, _ in spec.choices}:
         raise PluginOptionError(f"插件选项 {key} 的默认值不在选项里：{spec.default}")
@@ -188,6 +245,11 @@ def coerce_option(spec: PluginOptionSpec, value: object) -> object:
                 return False
             return bool(spec.default)
         return bool(value)
+    if spec.kind == OPTION_INT:
+        number = _int_or_none(value)
+        if number is None:
+            number = _int_or_none(spec.default) or 0
+        return _clamp(number, spec.minimum, spec.maximum)
     if spec.kind == OPTION_CHOICE:
         text = str(value).strip()
         for item_value, _ in spec.choices:
@@ -216,6 +278,7 @@ def settings_text(specs: tuple[PluginOptionSpec, ...], values: dict) -> str:
 __all__ = [
     "OPTION_BOOL",
     "OPTION_CHOICE",
+    "OPTION_INT",
     "OPTION_KIND_LABELS",
     "OPTION_KINDS",
     "OPTION_TEXT",

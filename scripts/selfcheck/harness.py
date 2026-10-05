@@ -25,7 +25,7 @@ LAYERS: tuple[str, ...] = ("data", "services", "pages", "flows")
 
 #: 每层可以拆成多个模块，按主题分工、便于并行维护。
 MODULES: dict[str, tuple[str, ...]] = {
-    "data": ("checks_data", "checks_model"),
+    "data": ("checks_data", "checks_model", "checks_autolabel"),
     "services": ("checks_services", "checks_plugins", "checks_editor_ui", "checks_model", "checks_logging"),
     "pages": (
         "checks_pages",
@@ -35,6 +35,7 @@ MODULES: dict[str, tuple[str, ...]] = {
         "checks_contributions",
         "checks_navigation",
         "checks_model",
+        "checks_autolabel",
     ),
     "flows": ("checks_flows", "checks_tags_ui"),
 }

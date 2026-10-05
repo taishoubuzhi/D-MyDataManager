@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,36 @@ def text_of(value: Any, *args: Any) -> str:
     """取值并转成文本：可调用就调用，拿不到就是空串。"""
     result = resolve(value, *args) if callable(value) else value
     return "" if result is None else str(result)
+
+
+def accepts_argument(callback: Any) -> bool:
+    """插件回调能不能收下一个位置参数。
+
+    工具栏这类扩展点旧写法是 0 参回调，新写法收一个上下文（选中条目）；取不到签名时
+    按旧写法处理，插件就不会因为签名奇怪而拿不到调用。
+    """
+    if not callable(callback):
+        return False
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+            return True
+        if parameter.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ):
+            return True
+    return False
+
+
+def resolve_with(callback: Any, argument: Any) -> Any:
+    """按回调签名调用：收参数就传 `argument`，不收就按旧写法空参调用。"""
+    if not callable(callback):
+        return None
+    return resolve(callback, argument) if accepts_argument(callback) else resolve(callback)
 
 
 def path_filters() -> tuple[Callable[[Path], bool], ...]:

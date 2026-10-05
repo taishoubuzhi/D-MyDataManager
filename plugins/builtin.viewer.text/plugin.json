@@ -1,0 +1,21 @@
+{
+  "id": "builtin.viewer.text",
+  "name": "内置文本查看器",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "查看纯文本与代码文件，支持编码探测、切换与大文件截断。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    {
+      "id": "builtin.lib.viewer"
+    },
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "data": {
+    "viewer": "data/viewer.json"
+  }
+}

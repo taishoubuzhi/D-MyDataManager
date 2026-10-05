@@ -3,7 +3,7 @@
   "name": "内置界面工具库",
   "version": "1.0.0",
   "api_version": ">=1.0 <2.0",
-  "description": "界面工具库：统一页面模板、分区卡片、工具条与提示条，并提供独立弹窗外壳（由原 builtin.lib.dialog 并入）。其他插件用它快速写出与主程序一致的界面。",
+  "description": "界面工具库：统一页面模板、分区卡片、工具条与提示条，并提供独立弹窗外壳（由原 lib.dialog 并入）。其他插件用它快速写出与主程序一致的界面。",
   "author": "D-MyDataManager",
   "builtin": true,
   "entry": "plugin.py",

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidgetItem,
@@ -583,19 +584,60 @@ def list_view(
     return view
 
 
-def read_only_table(parent: QWidget | None = None, *, headers: Sequence[str] = ()) -> TableWidget:
-    """只读表格控件（内容用 `fill_table()` 填）。"""
+def read_only_table(
+    parent: QWidget | None = None,
+    *,
+    headers: Sequence[str] = (),
+    wrap: bool = True,
+    fit_rows: bool = True,
+) -> TableWidget:
+    """只读表格控件（内容用 `fill_table()` 填）。
+
+    列宽按内容自适应（夹在 88～320 px 之间）、末列拉满剩余宽度；`wrap` 打开时单元格
+    自动换行且不省略，配合 `fit_rows` 让行高随内容长高；每格的完整文本还会挂 tooltip
+    （见 `fill_table()`）——这样长内容不会被无声截断。数据网格（如表格查看器）可以关掉
+    `wrap` / `fit_rows` 换回单行省略与固定行高。
+    （qfluentwidgets 的表格把原生滚动条换成自己的，原生策略固定 AlwaysOff 是它的
+    正常行为，超出可视区的行 / 列照常能滚。）
+    """
     table = TableWidget(parent)
     table.setBorderVisible(True)
     table.setBorderRadius(8)
-    table.setWordWrap(False)
+    table.setWordWrap(wrap)
+    table.setTextElideMode(Qt.TextElideMode.ElideNone if wrap else Qt.TextElideMode.ElideRight)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     table.verticalHeader().setVisible(False)
+    if fit_rows:
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    header.setMinimumSectionSize(88)
+    header.setMaximumSectionSize(320)
+    header.setStretchLastSection(True)
     if headers:
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels([str(item) for item in headers])
     return table
+
+
+def resize_table_height(table: TableWidget, *, max_height: int = 560) -> None:
+    """按当前内容重算只读表格高度（换行开关变了之后必须重算，否则多出来的行会被裁掉）。
+
+    先按每行的内容提示高度兜底（`sizeHintForRow()` 认换行后的高度），再让 Qt 自己
+    `resizeRowsToContents()`；最后把表格最小高度按总高设好，长内容才不会被裁在可视区外。
+    """
+    for index in range(table.rowCount()):
+        current = table.rowHeight(index)
+        hint = max(current, table.sizeHintForRow(index))
+        if hint > current:
+            table.setRowHeight(index, hint)
+    table.resizeRowsToContents()
+    content = table.horizontalHeader().height() + sum(
+        table.rowHeight(index) for index in range(table.rowCount())
+    )
+    table.setMinimumHeight(min(content + 8, int(max_height)))
+    table.updateGeometry()
 
 
 def fill_table(
@@ -603,15 +645,40 @@ def fill_table(
     rows: Sequence[Sequence[object]],
     *,
     headers: Sequence[str] = (),
+    max_height: int = 560,
 ) -> None:
-    """用二维数据填满只读表格（None 显示为空）。"""
+    """用二维数据填满只读表格（None 显示为空）。
+
+    每格挂上完整文本 tooltip，并按内容重算行高、把表格最小高度撑到能放下所有行
+    （超过 `max_height` 就交给滚动），避免表格默认高度只露几行。
+    """
     if headers:
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels([str(item) for item in headers])
     table.setRowCount(len(rows))
     for index, row in enumerate(rows):
         for column, value in enumerate(row):
-            table.setItem(index, column, QTableWidgetItem("" if value is None else str(value)))
+            text = "" if value is None else str(value)
+            item = QTableWidgetItem(text)
+            if text:
+                item.setToolTip(text)
+            table.setItem(index, column, item)
+    resize_table_height(table, max_height=max_height)
+
+
+def set_table_wrap(table: TableWidget, wrap: bool) -> None:
+    """运行期切换只读表格的「自动换行 / 单行省略」。
+
+    长内容（比如对齐表的「系统方案」列）默认单行省略、行高固定，表格不会被撑开；
+    需要看全文时切成自动换行 + 行高随内容，再长也完整显示。
+    """
+    table.setWordWrap(bool(wrap))
+    table.setTextElideMode(Qt.TextElideMode.ElideNone if wrap else Qt.TextElideMode.ElideRight)
+    table.verticalHeader().setSectionResizeMode(
+        QHeaderView.ResizeMode.ResizeToContents if wrap else QHeaderView.ResizeMode.Fixed
+    )
+    # 行高变了必须重算表格高度：不重算的话换行后多出来的行会被裁掉，看着还是「显示不全」。
+    resize_table_height(table)
 
 
 def tool_button(parent: QWidget | None, icon, tooltip: str = "", on_click=None) -> ToolButton:

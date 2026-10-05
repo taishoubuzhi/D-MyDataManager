@@ -26,7 +26,7 @@ def console_source_mapping(case: Case) -> None:
 
     problems = []
     cases = {
-        "dm_plugin.builtin.lib.model.registry": "builtin.lib.model.registry",
+        "dm_plugin.lib.model.registry": "lib.model.registry",
         "dm_plugin.builtin.lib.ui.plugin": "builtin.lib.ui.plugin",
         "__main__": "app",
         "app.sdk.data": "app.sdk.data",
@@ -92,7 +92,7 @@ def console_line_format(case: Case) -> None:
     if bound_match and plain_match:
         if bound_match.group("level") != "INFO":
             problems.append(f"级别列不对：{bound_match.group('level')}")
-        if bound_match.group("source") != "builtin.lib.model":
+        if bound_match.group("source") != "lib.model":
             problems.append(f"来源列不对：{bound_match.group('source')!r}")
         if bound_match.group("where") != "_emit_bound" or int(bound_match.group("line")) != bound_line:
             problems.append(f"调用点不对：{bound_match.group('where')}:{bound_match.group('line')}（应为 _emit_bound:{bound_line}）")
@@ -112,7 +112,7 @@ def console_line_format(case: Case) -> None:
 def _emit_bound(console_for) -> int:
     """记下这一行在文件里的行号，方便断言 `函数:行` 指到调用点。"""
     line = _here() + 1
-    console_for("builtin.lib.model").info("控制台自检：绑定来源")
+    console_for("lib.model").info("控制台自检：绑定来源")
     return line
 
 
@@ -144,6 +144,6 @@ def plugin_logging_via_sdk(case: Case) -> None:
             wired += 1
     if wired < 10:
         problems.append(f"只有 {wired} 个插件模块接上了 SDK 控制台，应该在 10 个以上")
-    if not (BUILTIN_PLUGINS / "builtin.lib.model" / "adapters" / "worker.py").exists():
+    if not (BUILTIN_PLUGINS / "lib.model" / "adapters" / "worker.py").exists():
         problems.append("找不到 worker 适配器")
     assert not problems, "插件日志没统一走 SDK 控制台：" + "；".join(problems[:8])

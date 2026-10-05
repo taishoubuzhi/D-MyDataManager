@@ -29,6 +29,7 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 | `app.ui.manage.item_menu` | 条目菜单 | `{"text", "callback", "icon"}` | 数据行右键菜单 | 稳定 |
 | `app.ui.detail.panel` | 详情面板 | `{"title", "lines"}` | 详情弹窗底部 | 稳定 |
 | `app.ui.import.filter` | 导入筛选 | `{"name", "accept"}` | 导入页扫描文件时 | 稳定 |
+| `app.ui.import.action` | 导入页功能 | `{"text", "callback", "icon", "tip"}` | 导入页「开始导入」旁 | 稳定 |
 | `app.ui.home.kpi` | 概览卡片 | `{"title", "value", "sub", "icon", "hint"}` | 概览页统计卡 | 稳定 |
 | `app.ui.settings.card` | 设置卡片 | `{"title", "factory"}` | 设置页「插件」分组 | 稳定 |
 | `app.data.import.hook` | 导入钩子 | 待定 | —— | **预留**（程序侧尚未接线） |
@@ -79,11 +80,21 @@ ctx.contribute(
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `text` | 字符串 | 按钮文字 |
-| `callback` | `() -> None` | 点击时调用，不带参数 |
+| `callback` | `() -> None` 或 `(selection) -> None` | 点击时调用；接受 1 个参数时收到 `app.sdk.items.SelectionContext`（当前选中的条目与刷新回调） |
 | `icon` | 字符串 | 可选 |
 | `tip` | 字符串 | 可选，悬停提示；缺省时用贡献的 `description` |
 
-按钮加在工具栏已有按钮之后（流式布局，窄窗口自动换行）。
+按钮加在工具栏已有按钮之后（流式布局，窄窗口自动换行）。回调是否收参数由 `contributions.accepts_argument()` 判断，
+因此**老插件的不带参数回调照常工作**；要拿选中条目就写成 `def _on_toolbar(self, selection)`：
+
+```python
+def _on_toolbar(self, selection):
+    ids = selection.item_ids          # tuple[int, ...]
+    if not selection.count:
+        return                        # 没选中就自己提示
+    app.sdk.items.tag_items(ids, ["待整理"])
+    selection.do_refresh()            # 让管理页重新加载
+```
 
 ### 2.3 `app.ui.manage.item_menu`：条目右键菜单项
 
@@ -142,7 +153,42 @@ def _accept(path):
 - 程序在导入页扫描文件时逐个询问（`import_page._collect_sources()`），**所有**筛选器都通过才会导入。
 - 多个筛选器之间是「与」；回调抛异常时按「通过」处理，避免插件把导入卡死。
 
-### 2.6 `app.ui.settings.card`：设置页卡片
+### 2.6 `app.ui.import.action`：导入页上的功能按钮
+
+```python
+ctx.contribute(
+    ExtensionPoint.IMPORT_ACTION,
+    {"text": "自动挂标签", "callback": self._on_import_action, "icon": "TAG", "tip": "按规则预填标签"},
+    key="demo.import.action",
+)
+
+def _on_import_action(self, context):
+    context.apply_tags(["待整理"])       # 写回导入页的标签输入框
+    context.toast(f"已预填 {context.apply_tags(['待整理'])} 个标签")
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `text` | 字符串 | 按钮文字 |
+| `callback` | `(ImportContext) -> None` | 点击时调用，收到 `app.sdk.items.ImportContext` |
+| `icon` | 字符串 | 可选 |
+| `tip` | 字符串 | 可选，悬停提示；缺省时用贡献的 `description` |
+
+按钮加在导入页「开始导入」右侧（`import_page._sync_plugin_actions()`，插件启用/禁用后自动增删）。
+`ImportContext` 的字段与方法：
+
+| 成员 | 说明 |
+| --- | --- |
+| `paths` | `tuple[Path, ...]`，导入页当前待导入的文件 |
+| `user_id` / `category_id` | 导入页当前选中的归属用户与分类（可能为 `None`） |
+| `apply_tags(names)` / `apply_keywords(words)` | 把建议并进导入页的标签框 / 关键词框，返回**新增**条数 |
+| `toast(message)` | 在导入页弹一条提示 |
+| `scan()` | 重新扫描待导入文件（返回 `tuple[Path, ...]`） |
+| `recent_paths()` | 等价于 `paths` |
+
+插件只负责**预填**，真正的导入动作仍然由用户点「开始导入」——这样插件永远不会在没有用户确认时改动库。
+
+### 2.7 `app.ui.settings.card`：设置页卡片
 
 ```python
 ctx.contribute(
@@ -239,7 +285,7 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 
 `model.open` 不是扩展点，而是**扩展接口**（插件用 `ctx.provide("model.open", ModelOpenApi(...))` 提供、消费方 `ctx.require("model.open")` 取用）：
 程序侧门面是 `app.sdk.models`（`list_models()` / `model_by_id()` / `capabilities()` / `loaded()` / `acquire()` / `invoke()`），
-由内置库插件 `builtin.lib.model` 实现，成员与用法见 [`builtin.lib.model/PLUGIN.md`](builtin.lib.model/PLUGIN.md)；
+由内置库插件 `lib.model` 实现，成员与用法见 [`lib.model/PLUGIN.md`](lib.model/PLUGIN.md)；
 完整的消费方写法（按能力取租约 → 调用 → 归还 + 没有模型时的降级）见示例插件 [`example.model_usage/PLUGIN.md`](example.model_usage/PLUGIN.md)。
 同类的运行期接口还有查看器的 `viewer.open` 与编辑器的 `editor.open`（分别见 `builtin.lib.viewer/PLUGIN.md` / `builtin.lib.editor/PLUGIN.md`）。
 
@@ -249,8 +295,8 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 `ctx.console` 就是已经绑好来源（插件 id）的 `Console`：
 
 ```python
-ctx.console.stage("下载权重", "第 2 片")     # … | INFO | builtin.lib.model | page.py:123 | [下载权重] 第 2 片
-ctx.console.progress(3, 10, "解压")          # … | INFO | builtin.lib.model | page.py:124 | 进度 解压 3/10
+ctx.console.stage("下载权重", "第 2 片")     # … | INFO | lib.model | page.py:123 | [下载权重] 第 2 片
+ctx.console.progress(3, 10, "解压")          # … | INFO | lib.model | page.py:124 | 进度 解压 3/10
 ctx.console.warning("模型没登记，走降级分支")
 ```
 
@@ -280,6 +326,36 @@ ctx.console.warning("模型没登记，走降级分支")
 - 加载某类数据、进到某个阶段时都建议播报一句（模型工具库的安装 / 卸载 / 设备探测已经这么做），
   方便用户和作者定位「卡在哪一步」。
 
+### 3.6 扩展接口：`items.open`（数据读写）
+
+`items.open` 是扩展接口：**程序本体实现、插件只消费**。插件侧门面是 `app.sdk.items`：
+
+```python
+from app.sdk import items
+
+refs = items.list_items(type="image", suffix="png", limit=50)   # 只读，拿不到实现时返回 ()
+items.tag_items([ref.id for ref in refs], ["待整理"])            # 写，返回真的改了几条
+items.notify_changed()                                          # 改完通知界面刷新
+```
+
+| 函数 | 说明 |
+| --- | --- |
+| `current_user_id()` | 当前用户 id（拿不到返回 `0`） |
+| `list_items(ids=None, user_id=None, suffix="", type="", include_hidden=False, include_deleted=False, exclude_tags=(), preview_bytes=0, limit=0)` | 按条件查条目，返回 `tuple[ItemRef, ...]`；`type` 用 `image` / `video` / `audio` / `document` / `spreadsheet` / `presentation` / `archive` / `code` / `text` / `other`（小写） |
+| `get_item(item_id, preview_bytes=0)` | 取单个 `ItemRef`，不存在返回 `None` |
+| `suffixes_in_use(user_id=None)` | `{"后缀": 条数}`，即「当前库里有哪些数据格式」，按后缀调规则时用它 |
+| `tag_names(user_id=None)` | 当前可用标签名 |
+| `ensure_tags(names, user_id=None)` | 只创建标签、不挂载，返回创建/命中的标签名 |
+| `tag_items(ids, names, user_id=None)` / `untag_items(ids, names, user_id=None)` | 批量挂 / 摘标签，返回**真实改动条数** |
+| `add_keywords(ids, words, user_id=None)` / `remove_keywords(ids, words, user_id=None)` | 批量加 / 删关键词，返回真实改动条数 |
+| `read_text(item_id, limit=4096)` | 读正文，返回 `(text, encoding, truncated)`（二进制条目返回空串） |
+| `notify_changed()` | 广播 `itemsChanged`，界面自动刷新 |
+
+- `ItemRef` 是只读快照：`id` / `name` / `type`（小写）/ `suffix`（小写、无点）/ `size` / `keywords` / `tags` / `file_path` / `category_id` / `user_id` / `preview`；
+- 写函数在程序没提供实现时抛 `app.sdk.errors.SdkError`；只读函数返回空值（插件不用判断运行环境）；
+- 批量写走的是仓储层的批量接口（一次查询 + 一次提交），因此**先 `list_items()` 筛出目标再整批写**，不要在循环里逐条调；
+- 插件**不要**直接开数据库会话或 `import` 程序内部模块（自检 `plugin_imports` 会拦）；同理，改动完成后调 `notify_changed()`（或 `app.sdk.ui.notify_items_changed()`），不要自己去碰界面。
+
 ## 4. 事件
 
 程序在状态变化后广播事件；插件用 `ctx.on(event, handler)` 订阅，处理函数必须能接住关键字参数：
@@ -294,6 +370,7 @@ def _on_imported(self, **payload) -> None:
 | --- | --- | --- | --- |
 | `item.imported` | 条目导入 | `item_id`, `name` | `import_service._announce_import()`：粘贴文本导入、文件导入、库扫描登记成功后 |
 | `item.deleted` | 条目删除 | `item_id`, `name` | `item_service.delete()` 逐项广播 |
+| `item.changed` | 条目变化 | 无 | `plugin_service._on_items_changed()`：界面广播 `itemsChanged` 时（标签 / 关键词 / 分类 / 隐藏 / 删除等任何改动之后） |
 | `user.changed` | 用户切换 | `user_id`, `name` | `user_service.set_current()` |
 | `library.changed` | 库目录变化 | `path` | `library_service.set_path()`（迁移库文件夹后） |
 | `theme.changed` | 主题变化 | `theme`（`light` / `dark` / `auto`） | 设置页切换主题时 |

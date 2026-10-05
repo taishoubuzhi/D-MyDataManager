@@ -1,0 +1,21 @@
+{
+  "id": "builtin.viewer.archive",
+  "name": "内置压缩包查看器",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "列出压缩包内的条目与大小，支持预览包内文本。",
+  "author": "D-MyDataManager",
+  "builtin": true,
+  "entry": "plugin.py",
+  "depends": [
+    {
+      "id": "builtin.lib.viewer"
+    },
+    {
+      "id": "builtin.lib.ui"
+    }
+  ],
+  "data": {
+    "viewer": "data/viewer.json"
+  }
+}

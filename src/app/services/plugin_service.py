@@ -252,6 +252,21 @@ class PluginService:
         self._loaded: list[PluginInfo] = []
         self._pages: AppUiApi | None = None
         self.host = PluginHost(self)
+        self._bridge_signals()
+
+    # ------------------------------------------------------------ 事件桥接
+    def _bridge_signals(self) -> None:
+        """把程序自己的 Qt 信号桥接成插件事件（插件看不到 signalBus，只能订阅事件）。"""
+        try:
+            from ..core.signals import signalBus
+
+            signalBus.itemsChanged.connect(self._on_items_changed)
+        except Exception:
+            logger.exception("桥接程序信号失败")
+
+    def _on_items_changed(self) -> None:
+        """条目被增删改后广播 `item.changed`（载荷为空，插件需要细节就自己查）。"""
+        self.publish(Events.ITEM_CHANGED)
 
     # ------------------------------------------------------------ 路径
     @property
@@ -317,11 +332,14 @@ class PluginService:
         """扫描 + 套用状态 + 依赖排序；缺依赖 / 循环 / 依赖未启用的插件带 error。"""
         raw = self.scan()
         state = self._read_state()
-        order, dep_errors = resolve_dependencies(raw)
         base_enabled: dict[str, bool] = {}
         for info in raw:
             entry = state.get(info.id) or {}
             base_enabled[info.id] = bool(entry.get("enabled", info.enabled)) and not info.error
+        # 冲突只在两个都启用时才算，且载入顺序靠前者胜出（冲突不影响载入，只影响启用）
+        order, dep_errors, conflicts = resolve_dependencies(
+            raw, enabled_ids={plugin_id for plugin_id, ok in base_enabled.items() if ok}
+        )
         # 依赖在前，逐级传播「依赖不可用」
         available: dict[str, bool] = {}
         blocked: dict[str, tuple[str, str]] = {}
@@ -331,7 +349,7 @@ class PluginService:
                 blocked[info.id] = (PHASES[1], "依赖插件未启用：" + "、".join(missing))
                 available[info.id] = False
             else:
-                available[info.id] = base_enabled[info.id]
+                available[info.id] = base_enabled[info.id] and info.id not in conflicts
         result: list[PluginInfo] = []
         for info in sorted(raw, key=lambda item: (0 if item.builtin else 1, item.id)):
             entry = state.get(info.id) or {}
@@ -352,7 +370,13 @@ class PluginService:
             if error:
                 fields["error"] = error
                 fields["error_phase"] = info.error_phase or phase
-            fields["enabled"] = base_enabled[info.id] and not error and available.get(info.id, True)
+            fields["enabled"] = (
+                base_enabled[info.id]
+                and not error
+                and info.id not in conflicts
+                and available.get(info.id, True)
+            )
+            fields["conflict_with"] = conflicts.get(info.id, ())
             fields["contributions"] = self._contribution_labels(info.id)
             result.append(info.clone(**fields))
         position = {info.id: index for index, info in enumerate(order)}
@@ -786,12 +810,15 @@ class PluginService:
         count = 0
         infos = self.discover()
         logger.info(
-            "插件扫描完成：发现 {} 个（启用 {}、未启用 {}、清单有误 {}）",
+            "插件扫描完成：发现 {} 个（启用 {}、未启用 {}、不可用 {}）",
             len(infos),
             sum(1 for info in infos if info.enabled and not info.error),
             sum(1 for info in infos if not info.enabled),
             sum(1 for info in infos if info.error),
         )
+        for info in infos:
+            if info.error:
+                logger.warning("插件不可用：{}（{}）", info.id, info.error_text)
         for info in infos:
             if info.error or not info.enabled:
                 continue
@@ -824,9 +851,9 @@ class PluginService:
             module = import_entry(info)
         except PluginError as exc:
             return self._fail(info, PHASES[2], str(exc), start)
-        except Exception:
+        except Exception as exc:
             logger.exception("插件入口导入异常：{}", info.id)
-            return self._fail(info, PHASES[2], "插件入口导入失败，详见日志", start)
+            return self._fail(info, PHASES[2], f"插件入口导入失败：{exc}", start)
         try:
             cls = plugin_class(info, module)
             plugin = cls()
@@ -842,9 +869,9 @@ class PluginService:
             self._plugins[info.id] = plugin
         except PluginError as exc:
             return self._fail(info, PHASES[3], str(exc), start)
-        except Exception:
+        except Exception as exc:
             logger.exception("插件构造异常：{}", info.id)
-            return self._fail(info, PHASES[3], "插件构造失败，详见日志", start)
+            return self._fail(info, PHASES[3], f"插件构造失败：{exc}", start)
         context = PluginContext(plugin, self)
         self._contexts[info.id] = context
         self._settings[info.id] = dict(info.settings)
@@ -852,13 +879,13 @@ class PluginService:
             plugin.setup(context)
         except PluginError as exc:
             return self._fail(info, PHASES[4], str(exc), start)
-        except Exception:
+        except Exception as exc:
             logger.exception("插件 setup 异常：{}", info.id)
-            return self._fail(info, PHASES[4], "插件初始化失败，详见日志", start)
+            return self._fail(info, PHASES[4], f"插件初始化失败：{exc}", start)
         seconds = time.perf_counter() - start
         self._errors.pop(info.id, None)
         self._report.append((info.id, PHASES[4], True, "", seconds))
-        logger.info("插件 {} 已载入", info.id)
+        logger.debug("插件 {} 已载入", info.id)
         return True
 
     def _fail(self, info: PluginInfo, phase: str, message: str, start: float) -> bool:
@@ -968,10 +995,48 @@ class PluginService:
         libraries = [info for info in infos if info.libraries]
         features = [info for info in infos if not info.libraries]
         text = f"插件载入：共 {part(infos)}；库插件 {part(libraries)}、功能插件 {part(features)}"
-        failures = sum(1 for info in infos if info.error)
-        if failures:
-            text += f"；{failures} 个插件载入失败（见插件页）"
+        unavailable = {info.id for info in infos if info.error}
+        unavailable.update(plugin_id for plugin_id, _phase, ok, _message, _s in self._report if not ok)
+        if unavailable:
+            text += f"；{len(unavailable)} 个插件不可用：{self._failure_text()}"
         return text
+
+    def _failure_text(self) -> str:
+        """把每个不可用插件连原因拼成一行（发现阶段的错误与载入阶段的失败都算）。"""
+        lines = [f"{info.id}（{info.error_text}）" for info in self._infos.values() if info.error]
+        seen = {line.split("（", 1)[0] for line in lines}
+        for plugin_id, phase, ok, message, _seconds in self._report:
+            if ok or plugin_id in seen:
+                continue
+            lines.append(f"{plugin_id}（[{phase}] {message}）")
+        return "；".join(lines) if lines else "原因见日志"
+
+    def _hint_for(self, info: PluginInfo) -> str:
+        """按错误内容给一句可操作的下一步提示（拼在控制台警告后面）。"""
+        if info.error.startswith("缺少依赖插件："):
+            return f"先安装并启用依赖插件（{info.error.split('：', 1)[1]}）再启用本插件"
+        if info.error.startswith("依赖插件未启用："):
+            return f"先启用依赖插件（{info.error.split('：', 1)[1]}）再启用本插件"
+        return "先按上面的原因修好清单或插件目录，再到「插件」页重试"
+
+    def conflict_peers(self, plugin_id: str) -> tuple[str, ...]:
+        """当前已启用、且与本插件声明冲突的插件 id（没有则空）。
+
+        注意用「实时」的启用集合而不是 `PluginInfo.conflict_with`：后者只说明「这个插件此刻被对方挡着」，
+        而启用前要判断的是「对方正启用着」——本插件此刻还是禁用状态时它自然是空的。
+        """
+        info = self.get(plugin_id)
+        if info is None or not info.conflicts:
+            return ()
+        enabled = {item.id for item in self.discover() if item.enabled}
+        return tuple(peer for peer in info.conflicts if peer in enabled)
+
+    def conflict_text(self, plugin_id: str) -> str:
+        """给界面用的一句话：为什么这个插件不能启用。"""
+        peers = "、".join(self.conflict_peers(plugin_id))
+        if not peers:
+            return ""
+        return f"与插件冲突：{peers}；请先禁用插件 {peers} 再启用本插件"
 
     def viewers_of(self, plugin_id: str) -> list[ViewerInfo]:
         """该插件注册的查看器（未载入时先按需载入）。"""
@@ -1000,13 +1065,90 @@ class PluginService:
     def set_enabled(self, plugin_id: str, enabled: bool) -> bool:
         info = self.get(plugin_id)
         if info is None:
+            logger.warning("插件不存在，无法启用：{}", plugin_id)
             return False
-        if enabled and info.error:
-            logger.warning("插件处于异常状态，无法启用：{}（{}）", plugin_id, info.error)
-            return False
+        if enabled:
+            if info.error:
+                logger.warning(
+                    "插件不可用，无法启用：{}（{}）；{}",
+                    plugin_id,
+                    info.error_text,
+                    self._hint_for(info),
+                )
+                return False
+            peers = self.conflict_peers(plugin_id)
+            if peers:
+                names = "、".join(peers)
+                logger.warning("插件启用失败：{}（与插件冲突：{}）；先禁用插件 {} 再启用本插件", plugin_id, names, names)
+                return False
+        if info.enabled == bool(enabled):
+            logger.info(
+                "插件保持{}：{}（{}）",
+                "启用" if enabled else "禁用",
+                plugin_id,
+                info.name,
+            )
+            # 状态没变也照常播报：调用方（界面 / 自检）拿它当「已到达目标状态」的信号。
+            self.publish(Events.PLUGIN_ENABLED if enabled else Events.PLUGIN_DISABLED, plugin_id=plugin_id)
+            return True
         self._save_state_for(plugin_id, enabled=bool(enabled))
+        logger.info(
+            "插件已{}：{}（{}）",
+            "启用" if enabled else "禁用",
+            plugin_id,
+            info.name,
+        )
         self.publish(Events.PLUGIN_ENABLED if enabled else Events.PLUGIN_DISABLED, plugin_id=plugin_id)
         return True
+
+    def _dependents(self, plugin_id: str) -> list[str]:
+        """依赖这个插件、并且已经载入的插件（倒序：先卸载依赖方）。"""
+        found: list[str] = []
+        frontier = [str(plugin_id)]
+        while frontier:
+            current = frontier.pop()
+            for info in list(self._loaded):
+                if info.id == plugin_id or info.id in found:
+                    continue
+                if current in info.depends_ids:
+                    found.append(info.id)
+                    frontier.append(info.id)
+        return list(reversed(found))
+
+    def apply_changes(self, plugin_ids: Sequence[str] = ()) -> None:
+        """按需重载：只处理刚变更过的插件，不再把整仓插件全部重载一遍。
+
+        没给 id（重载 / 安装 / 删除等整体性变动）时退回全量 `load()`；给了 id 就
+        「禁用只卸载该插件与依赖它的已载入插件、启用只载入该插件」，控制台只留
+        「插件变更：…」一行与最终汇总，不再逐条播报每个插件的载入。
+        """
+        ids = [str(item) for item in plugin_ids if str(item or "").strip()]
+        if not ids:
+            self.load()
+            return
+        changed: list[str] = []
+        for plugin_id in ids:
+            info = self.get(plugin_id)
+            if info is None:
+                changed.append(f"{plugin_id}（不在清单里）")
+                continue
+            if info.enabled:
+                if plugin_id in self._plugins:
+                    continue
+                if self._load_one(info):
+                    self._loaded.append(info)
+                    changed.append(f"载入 {info.id}（{info.name}）")
+                else:
+                    reason = str((self._errors.get(info.id) or ("", "原因见上文"))[1])
+                    changed.append(f"载入失败 {info.id}（{reason}）")
+            else:
+                for victim in self._dependents(plugin_id):
+                    if self.teardown(victim):
+                        changed.append(f"卸载 {victim}（依赖已禁用）")
+                if self.teardown(plugin_id):
+                    changed.append(f"卸载 {plugin_id}（{info.name}）")
+        logger.info("插件变更：{}", "；".join(changed) or "没有变化")
+        logger.info(self.loaded_summary())
 
     def update(
         self,
