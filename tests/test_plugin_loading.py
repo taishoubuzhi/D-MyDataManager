@@ -78,7 +78,23 @@ class ConflictCase(unittest.TestCase):
             self.assertEqual(yielded, {}, f"只启用 {enabled} 时不该让位：{yielded}")
             self.assertIn(next(iter(enabled)), [info.id for info in order])
 
+    def test_conflicting_manifests_leave_one_disabled(self) -> None:
+        """互斥机制：两个都启用时只有一个胜出（清单里互指 `conflicts`）。"""
+        left = PluginInfo(id="fake.left", name="左", conflicts=("fake.right",))
+        right = PluginInfo(id="fake.right", name="右")
+        order, errors, yielded = resolve_dependencies(
+            [left, right], enabled_ids={"fake.left", "fake.right"}
+        )
+        self.assertEqual(errors, {})
+        self.assertEqual(len(yielded), 1, "互斥的两个里只有一个让位")
+        loser = next(iter(yielded))
+        winner = "fake.right" if loser == "fake.left" else "fake.left"
+        self.assertEqual(yielded[loser], (winner,))
+        self.assertIn(loser, [info.id for info in order], "冲突的插件照常载入，只是不能启用")
+        self.assertIn(winner, [info.id for info in order])
+
     def test_real_manifests_conflict_only_for_the_later_one(self) -> None:
+        """真实清单：auto_tag 与 auto_tag.rule 不能同时启用（用户 m42668）。"""
         infos = _scan_real_plugins()
         order, errors, yielded = resolve_dependencies(infos, enabled_ids={RULE_ID, TAG_ID})
         self.assertEqual(errors, {})

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sys
 import types
+import ast
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,7 +112,7 @@ class OptionsCase(unittest.TestCase):
             return self.values.get(key, default)
 
     def test_defaults(self) -> None:
-        self.assertEqual(runner.option_values(self.Ctx()), (1, 5, False))
+        self.assertEqual(runner.option_values(self.Ctx()), (1, 5, True))
 
     def test_clamps_minimum(self) -> None:
         ctx = self.Ctx({"min_tags": 0, "max_tags": 5})
@@ -124,10 +125,6 @@ class OptionsCase(unittest.TestCase):
     def test_bad_values_fall_back(self) -> None:
         ctx = self.Ctx({"min_tags": "x", "max_tags": None})
         self.assertEqual(runner.option_values(ctx)[:2], (1, 0))
-
-    def test_merge_flag(self) -> None:
-        ctx = self.Ctx({"merge_rule_tags": True})
-        self.assertTrue(runner.option_values(ctx)[2])
 
 
 class EffectiveMaxCase(unittest.TestCase):
@@ -142,155 +139,6 @@ class EffectiveMaxCase(unittest.TestCase):
 
     def test_smaller_maximum_kept(self) -> None:
         self.assertEqual(runner.effective_max(3, DATATYPES), 3)
-
-
-class TextRulesCase(unittest.TestCase):
-    def test_any_kind_with_text_field(self) -> None:
-        rules = RuleSet(factory=(
-            _rule("text-match", field=FIELD_TEXT, op=OP_CONTAINS, pattern="合同", tags=("合同",)),
-            _rule(
-                "text-prompt",
-                kind=KIND_PROMPT,
-                field=FIELD_TEXT,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同",),
-                prompt="只挑合同相关的标签",
-            ),
-            _rule("suffix", pattern="pdf", tags=("PDF",)),
-            _rule(
-                "off",
-                field=FIELD_TEXT,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同",),
-                enabled=False,
-            ),
-        ))
-        self.assertEqual(
-            tuple(rule.key for rule in runner.text_rules(rules)),
-            ("text-match", "text-prompt"),
-        )
-
-    def test_prompt_rules(self) -> None:
-        rules = RuleSet(factory=(
-            _rule(
-                "p",
-                kind=KIND_PROMPT,
-                field=FIELD_NAME,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同",),
-                prompt="只挑合同相关的标签",
-            ),
-            _rule("m", pattern="pdf", tags=("PDF",)),
-        ))
-        self.assertEqual(tuple(rule.key for rule in runner.prompt_rules(rules)), ("p",))
-
-
-class ReadTextsCase(unittest.TestCase):
-    def test_without_text_rules_does_not_read(self) -> None:
-        reader = mock.Mock(return_value=("正文", "utf-8", False))
-        rules = RuleSet(factory=(_rule("suffix", tags=("PDF",)),))
-        self.assertEqual(runner.read_texts([FakeItem()], rules, reader=reader), {})
-        reader.assert_not_called()
-
-    def test_without_reader(self) -> None:
-        rules = RuleSet(factory=(_rule("t", field=FIELD_TEXT, op=OP_CONTAINS, pattern="合同", tags=("合同",)),))
-        self.assertEqual(runner.read_texts([FakeItem()], rules), {})
-
-    def test_reads_tuple_payload(self) -> None:
-        rules = RuleSet(factory=(_rule("t", field=FIELD_TEXT, op=OP_CONTAINS, pattern="合同", tags=("合同",)),))
-        reader = mock.Mock(return_value=("合同正文", "utf-8", False))
-        self.assertEqual(runner.read_texts([FakeItem(id=3)], rules, reader=reader), {"3": "合同正文"})
-        reader.assert_called_once_with("3", runner.TEXT_LIMIT)
-
-    def test_read_failure_is_ignored(self) -> None:
-        rules = RuleSet(factory=(_rule("t", field=FIELD_TEXT, op=OP_CONTAINS, pattern="合同", tags=("合同",)),))
-
-        def reader(key, limit):
-            raise OSError("读不了")
-
-        self.assertEqual(runner.read_texts([FakeItem(id=3)], rules, reader=reader), {})
-
-    def test_entries_without_id_are_skipped(self) -> None:
-        rules = RuleSet(factory=(_rule("t", field=FIELD_TEXT, op=OP_CONTAINS, pattern="合同", tags=("合同",)),))
-        reader = mock.Mock(return_value="正文")
-        self.assertEqual(runner.read_texts([FakeItem(id=None)], rules, reader=reader), {})
-        reader.assert_not_called()
-
-
-class RuleTagsCase(unittest.TestCase):
-    def test_hits_per_item(self) -> None:
-        rules = RuleSet(factory=(
-            _rule("pdf", pattern="pdf", tags=("PDF", "文档")),
-            _rule("doc", pattern="doc", tags=("Word",)),
-        ))
-        items = [FakeItem(id=1, suffix="pdf"), FakeItem(id=2, suffix="doc"), FakeItem(id=3, suffix="png")]
-        self.assertEqual(runner.rule_tags(items, rules), {"1": ("PDF", "文档"), "2": ("Word",)})
-
-    def test_prompt_rules_are_not_match_tags(self) -> None:
-        rules = RuleSet(factory=(
-            _rule("p", kind=KIND_PROMPT, field=FIELD_SUFFIX, op=OP_IS, pattern="pdf", tags=("合同",)),
-        ))
-        self.assertEqual(runner.rule_tags([FakeItem(id=1)], rules), {})
-
-
-class ImportFileCase(unittest.TestCase):
-    def test_path_fields(self) -> None:
-        ref = runner.ImportFile(file_path=r"C:\a\报表.PDF")
-        self.assertIsNone(ref.id)
-        self.assertEqual(ref.name, "报表.PDF")
-        self.assertEqual(ref.suffix, "pdf")
-        self.assertEqual(ref.type, "")
-
-    def test_tags_for_paths_dedupes(self) -> None:
-        rules = RuleSet(factory=(
-            _rule("pdf", pattern="pdf", tags=("PDF", "文档")),
-            _rule("img", pattern="png", tags=("PDF", "图片")),
-        ))
-        names = runner.tags_for_paths([r"C:\a\a.pdf", r"C:\a\b.png"], rules)
-        self.assertEqual(names, ("PDF", "文档", "图片"))
-
-
-class PromptTagsCase(unittest.TestCase):
-    def test_tags_from_matching_prompt_rule(self) -> None:
-        rules = RuleSet(factory=(
-            _rule(
-                "p",
-                kind=KIND_PROMPT,
-                field=FIELD_TEXT,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同", "法务"),
-                prompt="只挑合同相关的标签",
-            ),
-        ))
-        item = FakeItem(id=1)
-        self.assertEqual(runner.prompt_tags_of(item, rules, text="这是一份合同"), ("合同", "法务"))
-        self.assertEqual(runner.prompt_tags_of(item, rules, text="报销单"), ())
-        self.assertEqual(runner.prompt_tags([item], rules, texts={"1": "合同"}), {"1": ("合同", "法务")})
-
-    def test_extras_only_when_matched(self) -> None:
-        rules = RuleSet(factory=(
-            _rule(
-                "p",
-                kind=KIND_PROMPT,
-                field=FIELD_TEXT,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同",),
-                prompt="只挑合同相关的标签",
-            ),
-        ))
-        self.assertEqual(runner.prompt_extras(FakeItem(), rules, text="合同正文"), ("只挑合同相关的标签",))
-        self.assertEqual(runner.prompt_extras(FakeItem(), rules, text="别的"), ())
-
-    def test_prompt_rule_without_pattern_does_not_match(self) -> None:
-        rules = RuleSet(factory=(
-            _rule("p", kind=KIND_PROMPT, field=FIELD_SUFFIX, op=OP_IS, pattern="", tags=("合同",)),
-        ))
-        self.assertEqual(runner.prompt_tags_of(FakeItem(), rules), ())
 
 
 class PlanLabelsCase(unittest.TestCase):
@@ -318,29 +166,6 @@ class PlanLabelsCase(unittest.TestCase):
         self.assertEqual(plan.requests[0].task, "chat")
         self.assertIn("messages", plan.requests[0].payload)
 
-    def test_prompt_rule_extends_prompt_and_lifts_tags(self) -> None:
-        rules = RuleSet(factory=(
-            _rule(
-                "p",
-                kind=KIND_PROMPT,
-                field=FIELD_TEXT,
-                op=OP_CONTAINS,
-                pattern="合同",
-                tags=("合同",),
-                prompt="只挑合同相关的标签",
-            ),
-        ))
-        plan = runner.plan_labels(
-            [FakeItem(id=1)],
-            table=self.table,
-            registered=self.registered,
-            rule_set=rules,
-            reader=lambda key, limit: ("这是一份合同", "utf-8", False),
-        )
-        request = plan.requests[0]
-        self.assertIn("补充要求", request.payload["messages"][1]["content"])
-        self.assertIn("只挑合同相关的标签", request.payload["messages"][1]["content"])
-        self.assertEqual(plan.item_of("1").tags, ("合同",))
 
     def test_skips_items_without_model(self) -> None:
         plan = runner.plan_labels(
@@ -369,62 +194,35 @@ class PlanLabelsCase(unittest.TestCase):
         self.assertEqual(len(plan.skipped), 1)
 
 
-class PlanRuleOnlyCase(unittest.TestCase):
-    def test_no_requests_and_rule_tags(self) -> None:
-        rules = RuleSet(factory=(_rule("pdf", pattern="pdf", tags=("PDF",)),))
-        plan = runner.plan_rule_only([FakeItem(id=1), FakeItem(id=2, suffix="png")], rules)
-        self.assertEqual(plan.requests, ())
-        self.assertTrue(plan.merge)
-        self.assertEqual(plan.total, 2)
-        self.assertEqual(plan.rule_tags, {"1": ("PDF",)})
-
-
 class CollectLabelsCase(unittest.TestCase):
-    def _plan(self, *, merge: bool, minimum: int = 1, maximum: int = 0) -> runner.LabelPlan:
+    def _plan(self, *, minimum: int = 1, maximum: int = 0) -> runner.LabelPlan:
         table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
-        plan = runner.plan_labels(
+        return runner.plan_labels(
             [FakeItem(id=1)],
             table=table,
-            merge=merge,
             minimum=minimum,
             maximum=maximum,
         )
-        return plan
 
-    def test_model_results_only_when_not_merging(self) -> None:
-        plan = self._plan(merge=False)
+    def test_model_results_are_collected(self) -> None:
+        plan = self._plan()
         collected = runner.collect_labels(plan, [_result("1", '["甲","乙"]')])
         self.assertEqual(collected, {"1": ("甲", "乙")})
 
-    def test_merging_unions_rule_tags(self) -> None:
-        rules = RuleSet(factory=(_rule("pdf", pattern="pdf", tags=("PDF",)),))
-        table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
-        plan = runner.plan_labels([FakeItem(id=1)], table=table, rule_set=rules, merge=True)
-        collected = runner.collect_labels(plan, [_result("1", '["PDF","乙"]')])
-        self.assertEqual(collected, {"1": ("PDF", "乙")})
-
-    def test_maximum_clamps_merged_names(self) -> None:
-        rules = RuleSet(factory=(_rule("pdf", pattern="pdf", tags=("PDF", "文档")),))
-        table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
-        plan = runner.plan_labels([FakeItem(id=1)], table=table, rule_set=rules, merge=True, maximum=2)
-        collected = runner.collect_labels(plan, [_result("1", '["甲","乙"]')])
-        self.assertEqual(collected, {"1": ("PDF", "文档")})
-
     def test_minimum_drops_short_results(self) -> None:
-        plan = self._plan(merge=False, minimum=3)
+        plan = self._plan(minimum=3)
         self.assertEqual(runner.collect_labels(plan, [_result("1", '["甲"]')]), {})
 
     def test_known_filters_model_output_only(self) -> None:
-        rules = RuleSet(factory=(_rule("pdf", pattern="pdf", tags=("PDF",)),))
         table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
-        plan = runner.plan_labels([FakeItem(id=1)], table=table, rule_set=rules, merge=True)
+        plan = runner.plan_labels([FakeItem(id=1)], table=table)
         collected = runner.collect_labels(
             plan, [_result("1", '["新词","PDF"]')], known=("PDF",)
         )
         self.assertEqual(collected, {"1": ("PDF",)})
 
     def test_failed_results_are_ignored(self) -> None:
-        plan = self._plan(merge=False)
+        plan = self._plan()
         self.assertEqual(runner.collect_labels(plan, [_result("1", None, ok=False)]), {})
 
 
@@ -467,9 +265,9 @@ class WriteTagsCase(unittest.TestCase):
 
 
 class RunLabelsCase(unittest.TestCase):
-    def _plan(self, *, merge: bool = False) -> runner.LabelPlan:
+    def _plan(self) -> runner.LabelPlan:
         table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
-        return runner.plan_labels([FakeItem(id=1)], table=table, merge=merge)
+        return runner.plan_labels([FakeItem(id=1)], table=table)
 
     def test_requests_go_through_run_batch(self) -> None:
         plan = self._plan()
@@ -503,6 +301,21 @@ class RunLabelsCase(unittest.TestCase):
         self.assertEqual(report.written, 1)
         self.assertEqual(report.matched, ("1",))
         self.assertTrue(report.ok)
+
+    def test_new_tags_are_added_to_the_library(self) -> None:
+        """模型给出库里还没有的标签时要先建进标签库（用户 m42577）。"""
+        plan = self._plan()
+        api = mock.Mock()
+        api.tag_items.return_value = 1
+        with mock.patch.object(runner.pipeline, "run", return_value=(_result("1", '["新词","甲"]'),)):
+            runner.run_labels(plan, api=api)
+        api.ensure_tags.assert_called_once_with(["新词", "甲"])
+
+    def test_ensure_tags_survives_a_broken_api(self) -> None:
+        """建标签失败不能挡住挂标签。"""
+        api = mock.Mock()
+        api.ensure_tags.side_effect = RuntimeError("库写不进去")
+        self.assertEqual(runner.ensure_tags({"1": ("甲",)}, api=api), 1)
 
     def test_console_reports_what_happened(self) -> None:
         """控制台要能看出「命中多少、写没写进去」：只报成功不报事件与否就是修复前的坑。"""
@@ -563,6 +376,89 @@ class SummaryCase(unittest.TestCase):
         self.assertEqual(runner.preview_rows(report), ("没有条目命中。",))
 
 
+class PageWiringCase(unittest.TestCase):
+    """页面里调用的 `self._xxx()` 必须在类里有定义。
+
+    真事故（用户 m42728）：删掉规则视图时把 `_table()` 一起删了，页面一打开就
+    `AttributeError: 'AutoTagPage' object has no attribute '_table'`。
+    """
+
+    def test_every_self_call_has_a_definition(self) -> None:
+        tree = ast.parse((PLUGIN_DIR / "ui" / "page.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            defined = {item.name for item in node.body if isinstance(item, ast.FunctionDef)}
+            called = {
+                sub.func.attr
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and isinstance(sub.func.value, ast.Name)
+                and sub.func.value.id == "self"
+                and sub.func.attr.startswith("_")
+            }
+            self.assertEqual(
+                sorted(called - defined),
+                [],
+                f"{node.name} 调用了没有定义的方法",
+            )
+
+
+class MergeCase(unittest.TestCase):
+    """规则标签 ∪ 模型标签（用户 m42753）：可以同时按规则和模型挂，合并成一个集合。"""
+
+    def _rule_set(self, *, tags=("规则甲",), prompt=()):
+        rule_set = mock.Mock()
+        rule_set.enabled = ()
+        rule_set.match_tags.return_value = tuple(tags)
+        rule_set.prompt_rules.return_value = tuple(prompt)
+        return rule_set
+
+    def _plan(self, rule_set, *, merge: bool = True, minimum: int = 1, maximum: int = 0):
+        table = _table(AlignRow(datatype="DOCUMENT", model_id="local/qwen"))
+        return runner.plan_labels(
+            [FakeItem(id=1)],
+            table=table,
+            rule_set=rule_set,
+            merge=merge,
+            minimum=minimum,
+            maximum=maximum,
+        )
+
+    def test_merge_off_uses_model_only(self) -> None:
+        plan = self._plan(self._rule_set(), merge=False)
+        collected = runner.collect_labels(plan, [_result("1", '["模型乙"]')])
+        self.assertEqual(collected, {"1": ("模型乙",)})
+
+    def test_merge_on_unions_rule_and_model(self) -> None:
+        plan = self._plan(self._rule_set())
+        collected = runner.collect_labels(plan, [_result("1", '["模型乙"]')])
+        self.assertEqual(collected, {"1": ("规则甲", "模型乙")})
+
+    def test_merge_counts_rule_tags_towards_minimum(self) -> None:
+        """规则已经给足时，模型给得少也不该整条作废。"""
+        plan = self._plan(self._rule_set(tags=("规则甲", "规则乙")), minimum=3)
+        collected = runner.collect_labels(plan, [_result("1", '["丙"]')])
+        self.assertEqual(collected, {"1": ("规则甲", "规则乙", "丙")})
+
+    def test_prompt_rules_lift_tags_and_extend_the_prompt(self) -> None:
+        rule = mock.Mock(tags=("合同",), prompt="只挑合同相关的标签")
+        plan = self._plan(self._rule_set(tags=(), prompt=(rule,)))
+        self.assertEqual(plan.prompt_tags, {"1": ("合同",)})
+        content = plan.requests[0].payload["messages"][-1]["content"]
+        self.assertIn("补充要求：只挑合同相关的标签", content)
+
+    def test_rule_tags_are_added_to_the_library_too(self) -> None:
+        """规则给出的新标签也要先进标签库（用户 m42753）。"""
+        plan = self._plan(self._rule_set())
+        api = mock.Mock()
+        api.tag_items.return_value = 1
+        with mock.patch.object(runner.pipeline, "run", return_value=(_result("1", '["模型乙"]'),)):
+            runner.run_labels(plan, api=api)
+        api.ensure_tags.assert_called_once_with(["模型乙", "规则甲"])
+
+
 class ManifestCase(unittest.TestCase):
     def test_manifest(self) -> None:
         info = load_manifest(PLUGIN_DIR, builtin=False)
@@ -574,7 +470,7 @@ class ManifestCase(unittest.TestCase):
         self.assertEqual(
             info.depends_ids, ("lib.autolabel", "lib.model", "builtin.lib.ui")
         )
-        self.assertIn("auto_tag.rule", info.conflicts)
+        self.assertIn("auto_tag.rule", info.conflicts)  # 与规则插件不能同时启用（用户 m42668）
         self.assertEqual(
             sorted(spec.key for spec in info.options),
             ["max_tags", "merge_rule_tags", "min_tags"],
@@ -663,119 +559,57 @@ class PluginWiringCase(unittest.TestCase):
         self.assertIsInstance(page, self.page_class)
         self.assertIs(page.api, self.api)
 
-    def test_contributes_three_endpoints(self) -> None:
+    def test_contributes_two_endpoints(self) -> None:
+        """规则方案的导入页入口属于 auto_tag.rule；这里只管模型方案的两个入口。"""
         points = {point for point, _, _, _ in self.ctx.contributions}
         self.assertEqual(
             points,
-            {
-                "app.ui.import.action",
-                "app.ui.manage.toolbar",
-                "app.ui.manage.item_menu",
-            },
+            {"app.ui.manage.toolbar", "app.ui.manage.item_menu"},
         )
         keys = sorted(key for _, _, key, _ in self.ctx.contributions)
-        self.assertEqual(keys, ["auto_tag.import", "auto_tag.item", "auto_tag.manage"])
-
-    # ------------------------------------------------------------- 导入页
-
-    def _import_ctx(self, paths, *, added=1):
-        class Ctx:
-            def __init__(self) -> None:
-                self.applied = []
-                self.messages = []
-
-            def recent_paths(self):
-                return tuple(Path(p) for p in paths)
-
-            def apply_tags(self, names):
-                self.applied.append(tuple(names))
-                return added
-
-            def toast(self, message):
-                self.messages.append(message)
-
-        return Ctx()
-
-    def test_import_action_prefills_tags(self) -> None:
-        callback = self._points()["auto_tag.import"][1]["callback"]
-        ictx = self._import_ctx([r"C:\a\报表.pdf"])
-        callback(ictx)
-        self.assertEqual(ictx.applied, [("PDF",)])
-        self.assertIn("预填", ictx.messages[0])
-
-    def test_import_action_without_match(self) -> None:
-        callback = self._points()["auto_tag.import"][1]["callback"]
-        ictx = self._import_ctx([r"C:\a\笔记.xyz"])
-        callback(ictx)
-        self.assertEqual(ictx.applied, [])
-        self.assertIn("没有命中规则", ictx.messages[0])
-
-    def test_import_action_without_paths(self) -> None:
-        callback = self._points()["auto_tag.import"][1]["callback"]
-        ictx = self._import_ctx([])
-        callback(ictx)
-        self.assertIn("还没有待导入的文件", ictx.messages[0])
+        self.assertEqual(keys, ["auto_tag.item", "auto_tag.manage"])
 
     # --------------------------------------------------------- 管理页入口
 
-    def test_toolbar_action_without_selection(self) -> None:
-        callback = self._points()["auto_tag.manage"][1]["callback"]
-        callback(None)
-        self.assertIn("先选条目", self.ctx.host.toasts[0][0])
-
-    def test_toolbar_action_writes_tags_and_points_to_page(self) -> None:
+    def test_toolbar_action_starts_background_job(self) -> None:
+        """工具栏入口改成后台生成：只负责起任务与提示，写库在线程里做。"""
         callback = self._points()["auto_tag.manage"][1]["callback"]
 
         class Selection:
-            def __init__(self) -> None:
-                self.items = (FakeItem(id=1, suffix="pdf"),)
-                self.refreshed = 0
+            items = (FakeItem(id=1, suffix="pdf"),)
 
-            def do_refresh(self):
-                self.refreshed += 1
-
-        selection = Selection()
-        with mock.patch.object(plugin_module.items_sdk, "tag_items", return_value=1) as tag_items:
-            callback(selection)
-        self.assertEqual(selection.refreshed, 1)
-        self.assertEqual(tag_items.call_args[0][0], ["1"])
-        self.assertEqual(tag_items.call_args[0][1], ["PDF"])
-        self.assertIn("写入 1 个标签", self.ctx.host.toasts[0][1])
-        self.assertIn("自动标签", self.ctx.host.toasts[0][1])
-
-    def test_toolbar_action_without_match(self) -> None:
-        callback = self._points()["auto_tag.manage"][1]["callback"]
-
-        class Selection:
-            items = (FakeItem(id=1, suffix="xyz"),)
-
-        with mock.patch.object(plugin_module.items_sdk, "tag_items") as tag_items:
+        with mock.patch.object(plugin_module.threading, "Thread") as thread:
             callback(Selection())
-        tag_items.assert_not_called()
-        self.assertIn("没有条目命中规则", self.ctx.host.toasts[0][1])
+        thread.assert_called_once()
+        self.assertEqual(self.ctx.host.toasts[0][0], "已开始挂标签")
 
-    def test_item_menu_action_uses_item_id(self) -> None:
-        callback = self._points()["auto_tag.item"][1]["callback"]
-        with mock.patch.object(
-            plugin_module.items_sdk, "get_item", return_value=FakeItem(id=9, suffix="pdf")
-        ) as get_item, mock.patch.object(
-            plugin_module.items_sdk, "tag_items", return_value=1
-        ), mock.patch.object(plugin_module.items_sdk, "notify_changed") as notify:
-            callback(types.SimpleNamespace(id=9))
-        get_item.assert_called_once_with(9)
-        notify.assert_called_once()
+    def test_toolbar_action_without_selection_covers_all(self) -> None:
+        callback = self._points()["auto_tag.manage"][1]["callback"]
+        with mock.patch.object(plugin_module.threading, "Thread") as thread:
+            callback(None)
+        thread.assert_called_once()
+        self.assertIn("全部条目", self.ctx.host.toasts[0][1])
 
-    def test_item_menu_action_without_id(self) -> None:
+    def test_running_guard_blocks_a_second_job(self) -> None:
+        callback = self._points()["auto_tag.manage"][1]["callback"]
+        self.plugin._running = True
+        with mock.patch.object(plugin_module.threading, "Thread") as thread:
+            callback(None)
+        thread.assert_not_called()
+        self.assertIn("还在挂标签", self.ctx.host.toasts[0][0])
+
+    def test_item_menu_action_starts_background_job(self) -> None:
         callback = self._points()["auto_tag.item"][1]["callback"]
-        with mock.patch.object(plugin_module.items_sdk, "tag_items") as tag_items:
+        with mock.patch.object(plugin_module.threading, "Thread") as thread:
+            callback(types.SimpleNamespace(id=9, name="a.pdf"))
+        thread.assert_called_once()
+        self.assertEqual(self.ctx.host.toasts[0][0], "已开始挂标签")
+
+    def test_item_menu_action_without_id_covers_all(self) -> None:
+        callback = self._points()["auto_tag.item"][1]["callback"]
+        with mock.patch.object(plugin_module.threading, "Thread") as thread:
             callback(types.SimpleNamespace())
-        tag_items.assert_not_called()
-
-    def test_item_menu_action_when_item_is_gone(self) -> None:
-        callback = self._points()["auto_tag.item"][1]["callback"]
-        with mock.patch.object(plugin_module.items_sdk, "get_item", return_value=None):
-            callback(types.SimpleNamespace(id=9))
-        self.assertIn("找不到这个条目", self.ctx.host.toasts[0][0])
+        thread.assert_called_once()
 
 
 if __name__ == "__main__":

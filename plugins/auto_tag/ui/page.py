@@ -29,14 +29,11 @@ from dm_plugin.lib.autolabel.ui.controls import (
 from dm_plugin.builtin.lib.ui.plugin import (
     FormDialog,
     ScrollPageTemplate,
-    body_label,
     caption,
     check_box,
-    combo_box,
     confirm,
     line_edit,
     list_item,
-    list_view,
     primary_button,
     push_button,
     read_only_table,
@@ -48,37 +45,31 @@ from dm_plugin.builtin.lib.ui.plugin import (
     toast_info,
     toast_success,
     toast_warning,
-    view_stack,
-    widget_row,
 )
 
 from .. import runner
 
 PAGE_TITLE = "自动标签"
 PAGE_SUBTITLE = (
-    "用规则或模型给文件挂标签：规则方案不调用模型，模型方案按数据类型对齐模型、"
-    "整批交给模型工具库；标签数量上下限和「规则与模型标签合并」在插件设置里调。"
+    "用模型给文件挂标签：按数据类型对齐模型，整批交给模型工具库；"
+    "标签数量上下限在插件设置里调。"
 )
 
 #: 预览最多显示多少行
 PREVIEW_LIMIT = 200
 
-MODE_RULE = "rule"
-MODE_MODEL = "model"
-MODE_LABELS = {MODE_RULE: "规则（不调用模型）", MODE_MODEL: "模型（按数据类型）"}
 
 class AutoTagPage(ScrollPageTemplate):
-    """规则 / 模型两套自动标签方案的配置页。"""
+    """模型自动标签的配置页：数据类型对齐表 + 运行区。"""
 
     def __init__(self, ctx, api, parent: QWidget | None = None) -> None:
         super().__init__(PAGE_TITLE, PAGE_SUBTITLE, parent)
         self._ctx = ctx
         self._api = api
-        self._rule_set = api.rules()
         self._book = api.align()
+        self._rule_set = api.rules()
         self._registered: dict[str, str] = {}
         self._minimum, self._maximum, self._merge = runner.option_values(ctx)
-        self._mode = MODE_RULE
         self._running = False
         self._cancel = False
         self._done = 0
@@ -87,8 +78,9 @@ class AutoTagPage(ScrollPageTemplate):
         self._timer = QTimer(self)
         self._timer.setInterval(150)
         self._timer.timeout.connect(self._tick)
-        self._build_plan()
-        self._build_views()
+        self._build_options()
+        self._build_rules()
+        self._build_align()
         self._build_run()
         self.refresh()
 
@@ -103,69 +95,127 @@ class AutoTagPage(ScrollPageTemplate):
         row.addStretch(1)
         return bar
 
-    def _build_plan(self) -> None:
+    def _table(self):
+        return self._book.table(purpose=align_tools.PURPOSE_LABEL)
+
+    def _build_options(self) -> None:
         card, layout = self.add_section(
-            "方案",
-            "「规则」和任务 2 的规则表共用同一份数据（.configs/autolabel.rules.json）；"
-            "「模型」按下面的对齐表给每种数据类型挑模型，整批交给模型工具库跑。",
-        )
-        layout.addWidget(
-            widget_row(
-                card,
-                body_label(card, "用哪套："),
-                combo_box(
-                    card,
-                    items=tuple(MODE_LABELS[key] for key in (MODE_RULE, MODE_MODEL)),
-                    data=(MODE_RULE, MODE_MODEL),
-                    value=MODE_RULE,
-                    width=220,
-                    on_change=self._switch_mode,
-                ),
-            )
+            "数量",
+            "模型按下面的数据类型对齐表挑模型、整批交给模型工具库跑；打开「同时按规则挂标签」时，"
+            "先按规则算一份标签、再让模型算一份，两份合并去重后一起挂（这就是「规则标签 ∪ 模型标签」）。",
         )
         self._options_label = caption(card, "")
         layout.addWidget(self._options_label)
 
-    def _build_views(self) -> None:
+    # ============================================================ 规则
+    def _build_rules(self) -> None:
         card, layout = self.add_section(
-            "配置",
-            "规则方案看规则表；模型方案看数据类型对齐表与预定义方案。"
+            "规则",
+            "和「自动标签（规则）」插件共用同一份 .configs/autolabel.rules.json：这里改的就是那份规则。"
+            "规则标签在「挂标签」时与模型标签合并去重；两个标签插件在清单里互指冲突，不能同时启用。",
+        )
+        layout.addWidget(
+            self._toolbar(
+                card,
+                primary_button(card, FluentIcon.ADD, "新建规则", self._new_rule),
+                push_button(card, "编辑", self._edit_rule),
+                push_button(card, "删除", self._remove_rule),
+                push_button(card, "恢复出厂", self._restore_rule),
+            )
+        )
+        self._rule_table = read_only_table(
+            card, headers=("名称", "类型", "匹配", "要挂的标签", "状态")
+        )
+        self._rule_table.itemSelectionChanged.connect(self._sync_rule_hint)
+        layout.addWidget(self._rule_table)
+        self._rule_hint = caption(card, "")
+        layout.addWidget(self._rule_hint)
+
+    def _current_rule_key(self) -> str:
+        row = self._rule_table.currentRow()
+        rules = self._rule_set.rules
+        if 0 <= row < len(rules):
+            return rules[row].key
+        return ""
+
+    def _taken_keys(self) -> list[str]:
+        return [rule.key for rule in self._rule_set.rules]
+
+    def _sync_rule_hint(self) -> None:
+        key = self._current_rule_key()
+        rule = self._rule_set.by_key(key) if key else None
+        if rule is None:
+            self._rule_hint.setText("选中一条规则可以看它的匹配方式与状态。")
+        elif rule.problems:
+            self._rule_hint.setText(f"{rule.title}：{'；'.join(rule.problems)}")
+        else:
+            self._rule_hint.setText(
+                f"{rule.title}：{rule.field_text} → {'、'.join(rule.tags) or '交给模型'}"
+            )
+
+    def _apply_rule(self, rule) -> None:
+        self._rule_set = self._rule_set.with_rule(rule)
+        self._save_rules()
+
+    def _new_rule(self) -> None:
+        dialog = RuleDialog(self, title="新建规则", taken=self._taken_keys())
+        if dialog.exec():
+            self._apply_rule(dialog.rule())
+
+    def _edit_rule(self) -> None:
+        key = self._current_rule_key()
+        rule = self._rule_set.by_key(key) if key else None
+        if rule is None:
+            toast_info(self, "先选规则", "在表里点一条要改的规则。")
+            return
+        taken = [item for item in self._taken_keys() if item != rule.key]
+        dialog = RuleDialog(self, title="编辑规则", rule=rule, taken=taken)
+        if dialog.exec():
+            self._apply_rule(dialog.rule())
+
+    def _remove_rule(self) -> None:
+        key = self._current_rule_key()
+        rule = self._rule_set.by_key(key) if key else None
+        if rule is None:
+            toast_info(self, "先选规则", "在表里点一条要删的规则。")
+            return
+        if not confirm(self, "删除规则", f"确定不要「{rule.title}」了吗？"):
+            return
+        self._rule_set = self._rule_set.without_key(rule.key)
+        self._save_rules()
+
+    def _restore_rule(self) -> None:
+        key = self._current_rule_key()
+        if not key:
+            toast_info(self, "先选规则", "在表里点一条要恢复的规则。")
+            return
+        self._rule_set = self._rule_set.restore_key(key)
+        self._save_rules()
+
+    def _save_rules(self) -> None:
+        names = [name for rule in self._rule_set.rules for name in rule.tags]
+        try:
+            items_sdk.ensure_tags(names, user_id=items_sdk.current_user_id())
+        except Exception:
+            pass
+        if self._api.save_rules(self._rule_set):
+            toast_success(self, "已保存", "用户规则写进 .configs/autolabel.rules.json。")
+        else:
+            toast_error(self, "保存失败", "规则文件写不进去，看看 .configs 目录的权限。")
+        self.refresh()
+
+    def _build_align(self) -> None:
+        card, layout = self.add_section(
+            "数据类型对齐",
             "表里每一行都是这个数据类型自己的设置（方案 / 主模型 / 对齐模型 / 状态），可以各不相同，"
             "改完立刻生效并自动选中刚改的那一行（备注显示在下面这行提示里）；状态列按这一行的主模型"
             "与对齐模型有没有登记来显示。",
         )
-        self._stack = view_stack(card, self._build_rule_view(card), self._build_model_view(card))
-        layout.addWidget(self._stack)
-
-    def _build_rule_view(self, parent: QWidget) -> QWidget:
-        view = QWidget(parent)
-        layout = QVBoxLayout(view)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(
-            self._toolbar(
-                view,
-                primary_button(view, FluentIcon.ADD, "新建规则", self._new_rule),
-                push_button(view, "编辑", self._edit_rule),
-                push_button(view, "删除", self._remove_rule),
-                push_button(view, "恢复出厂", self._restore_rule),
-            )
-        )
-        self._rule_table = read_only_table(
-            view, headers=("名称", "类型", "匹配", "要挂的标签", "状态")
-        )
-        self._rule_table.itemSelectionChanged.connect(self._sync_hint)
-        layout.addWidget(self._rule_table)
-        self._rule_hint = caption(view, "")
-        layout.addWidget(self._rule_hint)
-        return view
-
-    def _build_model_view(self, parent: QWidget) -> QWidget:
-        view = QWidget(parent)
-        layout = QVBoxLayout(view)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(
+        view = QWidget(card)
+        view_layout = QVBoxLayout(view)
+        view_layout.setContentsMargins(0, 0, 0, 0)
+        view_layout.setSpacing(8)
+        view_layout.addWidget(
             strong_label(view, "数据类型对齐（点「设置对齐」，在编辑框里勾「启用系统方案」就跟随系统）")
         )
         layout.addWidget(
@@ -179,22 +229,19 @@ class AutoTagPage(ScrollPageTemplate):
                 push_button(view, "打开模型页", self._open_model_page),
             )
         )
-        # 表格默认自动换行、行高随内容：系统方案这类长内容直接完整显示（下面还有标识说这行是
-        # 「系统方案」还是「手动设置」，不再需要单独的显示模式切换）。
         self._align_table = read_only_table(
-            view, headers=("数据类型", "系统方案", "标签模型", "对齐模型", "状态")
+            view, headers=("数据类型", "方案", "主模型", "对齐模型", "状态")
         )
         self._align_table.itemSelectionChanged.connect(self._sync_hint)
-        layout.addWidget(self._align_table)
+        view_layout.addWidget(self._align_table)
         self._align_hint = caption(view, "")
-        layout.addWidget(self._align_hint)
-        return view
+        view_layout.addWidget(self._align_hint)
+        layout.addWidget(view)
 
     def _build_run(self) -> None:
         card, layout = self.add_section(
             "运行",
-            "对当前用户的全部条目跑一遍：规则方案只挂在规则里写明、条目上还没有的标签；"
-            "模型方案只对对齐表里配了模型的数据类型发请求，跳过的会在下面说明。",
+            "对当前用户的全部条目跑一遍：只对对齐表里配了模型的数据类型发请求，跳过的会在下面说明。",
         )
         layout.addWidget(
             self._toolbar(
@@ -236,12 +283,12 @@ class AutoTagPage(ScrollPageTemplate):
             self._save_align()
 
     def refresh(self) -> None:
-        self._rule_set = self._api.rules(reload=True)
         self._book = self._api.align(reload=True)
+        self._rule_set = self._api.rules(reload=True)
         self._registered = library.registered_models()
         self._drop_dead_rows()
-        fill_rule_table(self._rule_table, self._rule_set)
         self._minimum, self._maximum, self._merge = runner.option_values(self._ctx)
+        fill_rule_table(self._rule_table, self._rule_set)
         fill_align_table(
             self._align_table,
             self._book.table().rows,
@@ -252,11 +299,11 @@ class AutoTagPage(ScrollPageTemplate):
         limit = self._maximum or "不限"
         self._options_label.setText(
             f"标签数量：最少 {self._minimum} 个、最多 {limit} 个；"
-            f"规则与模型标签合并：{'开' if self._merge else '关'}"
-            "（点「设置数量」当场改）"
+            f"同时按规则挂标签：{'开' if self._merge else '关'}（点「设置数量」当场改）"
         )
         self._scope_label.setText(self._scope_text())
         self._sync_hint()
+        self._sync_rule_hint()
 
     def _scope_text(self) -> str:
         rows = len(items_sdk.list_items(user_id=items_sdk.current_user_id()))
@@ -268,18 +315,6 @@ class AutoTagPage(ScrollPageTemplate):
         )
 
     # ============================================================ 选择与提示
-    def _switch_mode(self, data) -> None:
-        self._mode = MODE_MODEL if str(data or "") == MODE_MODEL else MODE_RULE
-        self._stack.setCurrentIndex(1 if self._mode == MODE_MODEL else 0)
-        self._sync_hint()
-
-    def _current_rule_key(self) -> str:
-        row = self._rule_table.currentRow()
-        rules = self._rule_set.rules
-        if 0 <= row < len(rules):
-            return rules[row].key
-        return ""
-
     def _current_datatype(self) -> str:
         row = self._align_table.currentRow()
         rows = self._book.table().rows
@@ -287,19 +322,7 @@ class AutoTagPage(ScrollPageTemplate):
             return rows[row].datatype
         return ""
 
-    def _taken_keys(self) -> list[str]:
-        return [rule.key for rule in self._rule_set.rules]
-
     def _sync_hint(self) -> None:
-        key = self._current_rule_key()
-        rule = self._rule_set.by_key(key) if key else None
-        if rule is None:
-            self._rule_hint.setText("选中一条规则可以看它的匹配方式和状态。")
-        elif rule.problems:
-            self._rule_hint.setText(f"{rule.title}：{'；'.join(rule.problems)}")
-        else:
-            self._rule_hint.setText(f"{rule.title}：{rule.field_text} → {'、'.join(rule.tags) or '交给模型'}")
-
         datatype = self._current_datatype()
         row = self._book.table().row(datatype) if datatype else None
         if row is None:
@@ -312,45 +335,6 @@ class AutoTagPage(ScrollPageTemplate):
             source = "系统方案" if row.use_preset else "手动设置"
             note = f"　备注：{row.note}" if row.note else ""
             self._align_hint.setText(f"{row.datatype_label}：{target}{extra}（{source}，{state}）{note}")
-
-    # ============================================================ 规则
-    def _apply_rule(self, rule) -> None:
-        self._rule_set = self._rule_set.with_rule(rule)
-        self._save()
-
-    def _new_rule(self) -> None:
-        dialog = RuleDialog(self.window(), taken=self._taken_keys())
-        if dialog.exec():
-            self._apply_rule(dialog.rule())
-
-    def _edit_rule(self) -> None:
-        key = self._current_rule_key()
-        rule = self._rule_set.by_key(key) if key else None
-        if rule is None:
-            toast_info(self, "先选规则", "在表里点一条要改的规则。")
-            return
-        dialog = RuleDialog(self.window(), rule=rule, taken=[item for item in self._taken_keys() if item != rule.key])
-        if dialog.exec():
-            self._apply_rule(dialog.rule())
-
-    def _remove_rule(self) -> None:
-        key = self._current_rule_key()
-        rule = self._rule_set.by_key(key) if key else None
-        if rule is None:
-            toast_info(self, "先选规则", "在表里点一条要删的规则。")
-            return
-        if not confirm(self, "删除规则", f"确定不要「{rule.title}」了吗？"):
-            return
-        self._rule_set = self._rule_set.without_key(rule.key)
-        self._save()
-
-    def _restore_rule(self) -> None:
-        key = self._current_rule_key()
-        if not key:
-            toast_info(self, "先选规则", "在表里点一条要恢复的规则。")
-            return
-        self._rule_set = self._rule_set.restore_key(key)
-        self._save()
 
     # ============================================================ 对齐表
     def _edit_align(self) -> None:
@@ -565,15 +549,18 @@ class AutoTagPage(ScrollPageTemplate):
         self._report_gap(row, prefix="")
 
     def _edit_numbers(self) -> None:
-        """当场改标签数量与「规则 + 模型标签合并」（写进插件设置）。"""
+        """当场改标签数量（写进插件设置）。"""
         dialog = FormDialog(self.window(), title="标签数量", width=460)
         minimum_box = spin_box(dialog, value=self._minimum, minimum=1, maximum=50, suffix="个")
         maximum_box = spin_box(dialog, value=self._maximum, minimum=1, maximum=50, suffix="个")
         merge_box = check_box(dialog, text="规则命中的标签与模型标签合并", checked=self._merge)
         dialog.add_row("最少挂", minimum_box)
         dialog.add_row("最多挂", maximum_box)
-        dialog.add_row("合并", merge_box)
-        dialog.add_hint("模型给得比「最少」还少时整条作废；最多大于库里标签总数时以标签总数为准。")
+        dialog.add_row("规则 + 模型", merge_box)
+        dialog.add_hint(
+            "打开合并：先按规则算一份、再让模型算一份，两份去重后一起挂（上下限按合并后的集合算）；"
+            "关掉就只挂模型的标签。最多大于库里标签总数时以标签总数为准。"
+        )
         dialog.set_buttons(yes="保存", cancel="取消")
         if not dialog.exec():
             return
@@ -593,7 +580,7 @@ class AutoTagPage(ScrollPageTemplate):
         limit = self._maximum or "不限"
         self._options_label.setText(
             f"标签数量：最少 {self._minimum} 个、最多 {limit} 个；"
-            f"规则与模型标签合并：{'开' if self._merge else '关'}"
+            f"同时按规则挂标签：{'开' if self._merge else '关'}"
         )
         toast_success(self, "已保存", f"最少 {self._minimum} 个、最多 {limit} 个。")
 
@@ -603,19 +590,6 @@ class AutoTagPage(ScrollPageTemplate):
             toast_info(self, "已打开模型页", "在模型页里下载权重、装运行环境。")
             return
         toast_warning(self, "打不开模型页", "没启用模型工具库插件？")
-
-    # ============================================================ 保存规则
-    def _save(self) -> None:
-        names = [name for rule in self._rule_set.rules for name in rule.tags]
-        try:
-            items_sdk.ensure_tags(names, user_id=items_sdk.current_user_id())
-        except Exception:
-            pass
-        if self._api.save_rules(self._rule_set):
-            toast_success(self, "已保存", "用户规则写进 .configs/autolabel.rules.json。")
-        else:
-            toast_error(self, "保存失败", "规则文件写不进去，看看 .configs 目录的权限。")
-        self.refresh()
 
     # ============================================================ 运行
     def _rows(self) -> list:
@@ -635,13 +609,12 @@ class AutoTagPage(ScrollPageTemplate):
         if not rows:
             toast_warning(self, "没有条目", "当前用户下一个条目都没有，先导点数据进来。")
             return
-        mode = self._mode
-        rule_set = self._rule_set
         book = self._book
         registered = self._registered
+        rule_set = self._rule_set
         minimum, maximum, merge = self._minimum, self._maximum, self._merge
-        if mode == MODE_MODEL and not book.table().ready_rows(registered=registered):
-            toast_warning(self, "对齐表是空的", "先在「模型」方案里给数据类型配上模型。")
+        if not book.table().ready_rows(registered=registered):
+            toast_warning(self, "对齐表是空的", "先给数据类型配上模型。")
             return
         self._running = True
         self._cancel = False
@@ -653,20 +626,17 @@ class AutoTagPage(ScrollPageTemplate):
 
         def work() -> None:
             try:
-                if mode == MODE_MODEL:
-                    plan = runner.plan_labels(
-                        rows,
-                        table=book.table(),
-                        registered=registered,
-                        rule_set=rule_set,
-                        merge=merge,
-                        minimum=minimum,
-                        maximum=runner.effective_max(maximum, items_sdk.tag_names()),
-                        reader=items_sdk.read_text,
-                        on_problem=lambda message: self._ctx.log.info("对齐模型：{}", message),
-                    )
-                else:
-                    plan = runner.plan_rule_only(rows, rule_set, reader=items_sdk.read_text)
+                plan = runner.plan_labels(
+                    rows,
+                    table=book.table(),
+                    registered=registered,
+                    rule_set=rule_set,
+                    merge=merge,
+                    minimum=minimum,
+                    maximum=runner.effective_max(maximum, items_sdk.tag_names()),
+                    reader=items_sdk.read_text,
+                    on_problem=lambda message: self._ctx.log.info("对齐模型：{}", message),
+                )
                 if dry:
                     self._result = ("dry", plan, None)
                     return

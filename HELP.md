@@ -675,17 +675,17 @@ pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选
 
 ### 自动标签与自动关键词（三个外部插件）
 
-`auto_tag.rule`（规则化自动标签）、`auto_tag`（双方案自动标签）与 `auto_keyword`（自动关键词）是
+`auto_tag.rule`（规则自动标签）、`auto_tag`（模型自动标签）与 `auto_keyword`（自动关键词）是
 **外部功能插件**：清单里 `builtin: false` **且** `enabled: false`，默认不启用，未启用时程序本体一个控件都不多（页面、工具栏、
 导入页按钮全都不出现，`.configs/plugins.json` 里也不会多出条目）。它们共用共享库插件 `lib.autolabel`（规则模型 + 匹配引擎、
 数据类型→模型对齐表、批处理管线、共用控件），方案、逐条需求映射与全部偏差记录见 [`docs/AUTOLABEL_PLAN.md`](docs/AUTOLABEL_PLAN.md)。
 
 - 数据文件：用户规则写 `.configs/autolabel.rules.json`（出厂默认 `plugins/lib.autolabel/data/rules.json`，同名键用户覆盖，
   坏正则只标红不炸）、各数据类型的模型对齐写 `.configs/autolabel.align.json` 的 `label`（标签）与 `keyword`（关键词）两段，各存各的。
-  任务 2 与任务 3 的**规则同源**（同一份文件），因为两个插件冲突（清单里互相 `conflicts`），各存一份迟早会不一致。
+  `auto_tag.rule` 与 `auto_tag` 在清单里互指 `conflicts`：两者都能载入，但**不能同时启用**（用户 m42668）；`auto_tag` 自己也能按规则挂标签——页面上的「规则」卡共用同一份规则文件，`merge_rule_tags`（默认开）打开时规则标签与模型标签合并去重后一起挂，两边的新标签都会自动进标签库（用户 m42753）。
 - 页面：三个插件各有一个页面（`auto_tag_rule` / `auto_tag` / `auto_keyword`），一律用界面工具库 `builtin.lib.ui` 的构件
-  （自检 `autolabel_ui_via_tool_library` 拦 `qfluentwidgets` / `PyQt6` 直连，只放行 `FluentIcon`）。`auto_tag` 页面顶部切
-   「规则（不调用模型） / 模型（按数据类型）」两套方案；模型方案与关键词页面都有一张「数据类型对齐」表（5 列：数据类型 / 方案 / 主模型 / 对齐模型 / 状态）+
+  （自检 `autolabel_ui_via_tool_library` 拦 `qfluentwidgets` / `PyQt6` 直连，只放行 `FluentIcon`）。`auto_tag` 页面只有模型方案（规则方案在 `auto_tag.rule` 页）；
+   它与关键词页面都有一张「数据类型对齐」表（5 列：数据类型 / 方案 / 主模型 / 对齐模型 / 状态）+
   「方案」列三态 = `启用`（跟随系统）/ `自定义`（自己挑过）/ `已停用`（这一行被关掉）；「主模型 / 对齐模型」两列显示登记时起的名字
   （没登记才写「未登记：<方案 key>」）；保存后表格会自动选中刚改的那一行，该行的备注显示在表格下面的提示里。
   设置存在用户清单 `.configs/autolabel.align.json`（每个用途下全部数据类型一行，写全量），表格刷新时直接读清单，显示与设置不会脱节。
@@ -708,14 +708,14 @@ pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选
   或 `min_keywords` / `max_keywords`，写进 `.configs/plugins.json` 的插件设置，等价于在「插件」页改。
 - 批量统一走模型工具库：所有请求交 `models.run_batch()`（按模型分组、同组只加载一次模型、组间并行、单条失败隔离、带进度与取消）。
 - 入口与收敛（两处登记过的偏差）：`auto_tag.rule` 有导入页「按规则预填标签」+ 管理页工具栏 + 条目菜单三个入口；
-  `auto_tag` 的导入页只预填**规则**标签，工具栏与条目菜单只跑**规则**并提示「模型方案请到『自动标签』页跑（有进度和取消）」；
+  `auto_tag` 没有导入页入口，工具栏与条目菜单**直接起后台任务挂标签**（完成提示并刷新列表；页面里还有带进度与取消的整批运行）；
   `auto_keyword` 没有导入页入口，另外两个入口只跳转到关键词页。原因都是：导入时文件还没入库、没有条目 id，构造不出
   `BatchRequest`；页面外的入口又没有地方放进度与取消。
 - `auto_tag.rule` 页面只有「规则」与「运行」两区：它不调用模型，所以规则编辑弹窗里没有「交模型判断」类型，
   也没有提示词输入框；按后缀配默认标签就是建一条 `field=suffix` / `op=is` 的普通规则（不再另设一张「数据格式」表）。
   编辑到出厂自带、类型为「交模型判断」的规则时，页面会说明本页不跑模型并禁用保存。
 - 数量选项用清单的 `kind: "int"`（`min_tags` / `max_tags`、`min_keywords` / `max_keywords`），标签上限还不超过库里标签总数，
-  关键词只设上限（`0` = 不限）。关键词插件与两个标签插件**不冲突**：产物不同（关键词 vs 标签），数据也不冲突。
+  关键词只设上限（`0` = 不限）。`auto_keyword` 与两个标签插件**互不冲突**（产物不同）；`auto_tag.rule` 与 `auto_tag` 则**互斥**：清单里互指 `conflicts`，不能同时启用。
 
 ### 插件选项与「插件」页
 

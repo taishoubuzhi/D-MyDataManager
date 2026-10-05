@@ -92,7 +92,7 @@ class ManifestCase(unittest.TestCase):
     def test_manifest_declares_dependencies_and_conflict(self) -> None:
         info = load_manifest(PLUGIN_DIR, builtin=False)
         self.assertEqual(sorted(info.depends_ids), ["builtin.lib.ui", "lib.autolabel"])
-        self.assertIn("auto_tag", info.conflicts)
+        self.assertIn("auto_tag", info.conflicts)  # 与 auto_tag 不能同时启用（用户 m42668）
 
 
 class SuffixKeyCase(unittest.TestCase):
