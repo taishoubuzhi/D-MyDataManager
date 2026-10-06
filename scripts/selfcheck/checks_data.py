@@ -78,7 +78,7 @@ def fts_sync(case: Case) -> None:
 @check("library_layout", "data")
 def library_layout(case: Case) -> None:
     """文件项落到内容仓库：库内相对路径可解析，同一校验和只有一条 blob 记录。"""
-    from app.core import paths
+    from app.core.runtime import paths
     from app.services import ImportService, LibraryService
 
     session = case.session
@@ -118,7 +118,7 @@ def config_roundtrip(case: Case) -> None:
     """配置分组键齐全、写盘后能读回，且运行期目录都在临时根目录下（没有碰真实配置）。"""
     from qfluentwidgets import qconfig
 
-    from app.core import paths
+    from app.core.runtime import paths
     from app.core.config import config
 
     config.set(config.pruneMode, "count")

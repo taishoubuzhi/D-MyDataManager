@@ -14,7 +14,14 @@ _PAGE_KEY = "model_manager"
 
 
 def _data(name: str) -> dict:
-    return json.loads((_PLUGIN_DIR / "data" / name).read_text(encoding="utf-8"))
+    return json.loads((_PLUGIN_DIR / ".data" / name).read_text(encoding="utf-8"))
+
+
+def _items(name: str) -> list[dict]:
+    """模板文件都是统一清单格式，记录在 `items` 里。"""
+    items = _data(name).get("items")
+    assert isinstance(items, list), f"{name} 不是统一清单格式（缺 items）"
+    return [dict(item) for item in items]
 
 
 def _runtime_states(page) -> list[str]:
@@ -35,10 +42,15 @@ def _runtime_states(page) -> list[str]:
     return states
 
 
-def _registered_models() -> tuple:
-    from app.sdk import models
+def _model_api():
+    """模型工具库门面模块；每次现取，避免插件重载后手里还是旧模块对象。"""
+    from dm_plugin.lib.model import api
 
-    return tuple(models.list_models())
+    return api
+
+
+def _registered_models() -> tuple:
+    return tuple(_model_api().list_models())
 
 
 def _dispose(widget) -> None:
@@ -60,11 +72,11 @@ def model_manifest_and_templates(case: Case) -> None:
     manifest = json.loads((_PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
     assert manifest.get("id") == "lib.model", f"插件 id 不对：{manifest.get('id')}"
     assert "model.open" in (manifest.get("provides") or []), "清单没有提供 model.open"
-    declared = set(manifest.get("data") or {})
-    assert {"model_list", "api_templates", "runtime_profiles"} <= declared, f"清单 data 缺项：{sorted(declared)}"
+    found = {item.stem for item in (_PLUGIN_DIR / ".data").glob("*.json")}
+    assert {"model_list", "api_templates", "runtime_profiles"} <= found, f".data/ 缺模板：{sorted(found)}"
 
     problems: list[str] = []
-    models = _data("model_list.json").get("models") or []
+    models = _items("model_list.json")
     if not models:
         problems.append("model_list.json 没有本地模型模板")
     for item in models:
@@ -75,14 +87,14 @@ def model_manifest_and_templates(case: Case) -> None:
         if not runtime.get("backend"):
             problems.append(f"本地模板缺推理后端：{item.get('id') or item}")
 
-    templates = _data("api_templates.json").get("templates") or []
+    templates = _items("api_templates.json")
     if not templates:
         problems.append("api_templates.json 没有外部模型模板")
     for item in templates:
         if not {"id", "name", "base_url", "model"} <= set(item):
             problems.append(f"外部模板字段不全：{item.get('id') or item}")
 
-    profiles = _data("runtime_profiles.json").get("profiles") or []
+    profiles = _items("runtime_profiles.json")
     if not profiles:
         problems.append("runtime_profiles.json 没有运行环境")
     for item in profiles:
@@ -95,10 +107,10 @@ def model_manifest_and_templates(case: Case) -> None:
 @check("model_extension_api", "services")
 def model_extension_api(case: Case) -> None:
     """载入内置插件后 model.open 接口可用：登记外部模型、按能力查询、落盘到隔离目录。"""
-    from app.sdk import models
-    from app.sdk.errors import ModelError
-
     install_builtin_plugins()
+    from dm_plugin.lib.model import api as models
+    from dm_plugin.lib.model.errors import ModelError
+
     api = models.provider()
     assert api is not None, "载入内置插件后 model.open 接口不可用"
     assert models.available() is True, "available() 应为 True"
@@ -146,11 +158,11 @@ def model_extension_api(case: Case) -> None:
 @check("model_templates_and_constants", "services")
 def model_templates_and_constants(case: Case) -> None:
     """模板里的后端名、能力名与插件常量表对得上，页面按能力选后端才不会落空。"""
+    install_builtin_plugins()
     from dm_plugin.lib.model import constants
 
-    install_builtin_plugins()
     problems: list[str] = []
-    for item in _data("model_list.json").get("models") or []:
+    for item in _items("model_list.json"):
         backend = str((item.get("runtime") or {}).get("backend") or "")
         if backend not in constants.BACKENDS:
             problems.append(f"{item.get('id')} 的后端不在 BACKENDS：{backend}")
@@ -176,14 +188,18 @@ def model_templates_and_constants(case: Case) -> None:
     assert not problems, "模型常量表：" + "；".join(problems[:12])
 
 
-@check("model_sdk_without_plugin", "services")
-def model_sdk_without_plugin(case: Case) -> None:
+@check("model_api_without_plugin", "services")
+def model_api_without_plugin(case: Case) -> None:
     """没有模型插件时门面完全退化成空/报错，调用方不该被吊死。"""
-    from app.sdk import models
-    from app.sdk.errors import SdkError
     from app.services.plugin_service import plugin_service
 
+    install_builtin_plugins()  # 只为把 dm_plugin.lib.model 挂上并载入
+    from dm_plugin.lib.model import api as models
+    from dm_plugin.lib.model.errors import ModelError
+
     plugin_service.load()
+    plugin_service.teardown_all()  # 再模拟「一个模型插件都没有」：模块对象留着、注入被清空
+
     problems: list[str] = []
     if models.provider() is not None:
         problems.append("隔离目录里不该有 model.open 接口")
@@ -195,11 +211,11 @@ def model_sdk_without_plugin(case: Case) -> None:
         problems.append("没有插件时 model_by_id 应返回 None")
     try:
         models.acquire(model_id="local/任意")
-    except SdkError as exc:
-        if "app.model" not in str(exc):
-            problems.append(f"报错应点明 app.model：{exc}")
+    except ModelError as exc:
+        if "lib.model" not in str(exc):
+            problems.append(f"报错应点明要启用哪个库：{exc}")
     else:
-        problems.append("没有插件时 acquire 应抛 SdkError")
+        problems.append("没有插件时 acquire 应抛 ModelError")
     assert not problems, "无模型插件退路：" + "；".join(problems[:12])
 
 
@@ -251,8 +267,7 @@ def model_settings_roundtrip_and_secret(case: Case) -> None:
 @check("model_page_build_and_cards", "pages")
 def model_page_build_and_cards(case: Case) -> None:
     """模型页注册进主窗口：空态可见，登记外部模型后出现卡片并带对应动作按钮。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.sdk import models
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -287,7 +302,7 @@ def model_page_build_and_cards(case: Case) -> None:
         if not profiles or not all(item.get("id") for item in profiles):
             problems.append(f"运行环境清单不完整：{profiles}")
 
-        record = models.provider().add_external(
+        record = _model_api().provider().add_external(
             "自检云端",
             base_url="http://127.0.0.1:9/v1",
             model="demo",
@@ -346,7 +361,7 @@ def model_logs_latest_and_cleanup(case: Case) -> None:
     """模型日志：卡片上能看最新一份、最新的排最后、删模型连日志一起删。"""
     import importlib
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -456,7 +471,7 @@ def model_ui_via_tool_library(case: Case) -> None:
 @check("model_page_settings_form", "pages")
 def model_page_settings_form(case: Case) -> None:
     """页面每项设置即改即用（没有「保存设置」），落到 .configs/models.json，重载表单能读回。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -591,7 +606,7 @@ def model_page_settings_form(case: Case) -> None:
 @check("model_page_github_source", "pages")
 def model_page_github_source(case: Case) -> None:
     """GitHub 下载源：三类选项、只有自定义能填前缀、改一下立刻存盘、提示写出取址顺序。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -665,7 +680,7 @@ def model_runtime_probe_batch(case: Case) -> None:
     from PyQt6.QtWidgets import QLabel
     from qfluentwidgets import StrongBodyLabel
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -787,7 +802,7 @@ def _row_problems(page, expected: dict) -> list[str]:
 @check("model_runtime_buttons", "pages")
 def model_runtime_buttons(case: Case) -> None:
     """行内按钮跟着安装状态走，且卸载要落在当前模式的落点上（程序环境 / profile 目录）。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -875,7 +890,7 @@ def model_runtime_buttons(case: Case) -> None:
 @check("model_p4_system_install", "pages")
 def model_p4_system_install(case: Case) -> None:
     """P4 程序环境安装模式：先弹两次确认，确认后才用 `ensure_system` 装进程序解释器。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -991,7 +1006,7 @@ def model_dialog_form_scroll(case: Case) -> None:
     from PyQt6.QtWidgets import QApplication
     from qfluentwidgets import CheckBox, SingleDirectionScrollArea
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1010,8 +1025,8 @@ def model_dialog_form_scroll(case: Case) -> None:
         window.show()
         QApplication.processEvents()
         dialogs = [
-            ("本地", LocalModelDialog(window, templates=page._template_list("model_list", "models"), profiles=page._runtime_profiles())),
-            ("外部", ExternalModelDialog(window, templates=page._template_list("api_templates", "templates"))),
+            ("本地", LocalModelDialog(window, templates=page._template_list("model_list"), profiles=page._runtime_profiles())),
+            ("外部", ExternalModelDialog(window, templates=page._template_list("api_templates"))),
         ]
         for label, dialog in dialogs:
             try:
@@ -1045,7 +1060,7 @@ def model_dialog_template_reset(case: Case) -> None:
     """选了模板再改字段：模板下拉要自动回到「（不使用模板）」；程序化填表不能被自己打断。"""
     from PyQt6.QtWidgets import QApplication
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1061,8 +1076,8 @@ def model_dialog_template_reset(case: Case) -> None:
         page = window._plugin_pages.get(_PAGE_KEY)
         assert page is not None, f"模型插件应把管理页注册成插件页面 {_PAGE_KEY}"
         dialogs = [
-            ("本地", LocalModelDialog(window, templates=page._template_list("model_list", "models"), profiles=page._runtime_profiles())),
-            ("外部", ExternalModelDialog(window, templates=page._template_list("api_templates", "templates"))),
+            ("本地", LocalModelDialog(window, templates=page._template_list("model_list"), profiles=page._runtime_profiles())),
+            ("外部", ExternalModelDialog(window, templates=page._template_list("api_templates"))),
         ]
         for label, dialog in dialogs:
             try:
@@ -1093,7 +1108,7 @@ def model_dialog_template_reset(case: Case) -> None:
 @check("model_page_card_cleanup", "pages")
 def model_page_card_cleanup(case: Case) -> None:
     """删掉模型后卡片必须从网格上收走，不能留下点不动的僵尸卡。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1135,7 +1150,7 @@ def model_page_card_cleanup(case: Case) -> None:
 @check("model_page_queue_rows", "pages")
 def model_page_queue_rows(case: Case) -> None:
     """下载行：全名给悬停提示、显示具体进度与阶段、忙等条、终态才能移除、失败只播报一次。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1273,7 +1288,7 @@ def model_page_runtime_installing(case: Case) -> None:
     from PyQt6.QtWidgets import QPushButton
     from qfluentwidgets import IndeterminateProgressBar
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1385,7 +1400,7 @@ def model_page_runtime_installing(case: Case) -> None:
 @check("model_runtime_parallel_install", "pages")
 def model_runtime_parallel_install(case: Case) -> None:
     """一键补全的调度：默认并发一次全开；选「挨个装」则一次一个、收尾再补下一个；同一环境不重复开线程。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1492,7 +1507,7 @@ def model_runtime_parallel_install(case: Case) -> None:
 @check("model_local_wheels_source", "pages")
 def model_local_wheels_source(case: Case) -> None:
     """本地 whl 安装：界面与日志里的「来源」写的是那些本地文件，不能拿 pip 源冒充。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1820,7 +1835,7 @@ def model_page_mirror_and_delete_dialog(case: Case) -> None:
     """安装源下拉（只有自定义才可编辑）与删除弹窗（默认只删登记，外部目录连勾都点不动）。"""
     import types
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app
@@ -1900,7 +1915,7 @@ def model_weight_replace_and_cleanup(case: Case) -> None:
     import shutil
     import types
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services.plugin_service import plugin_service
 
     from .harness import build_window, dispose_window, ensure_app

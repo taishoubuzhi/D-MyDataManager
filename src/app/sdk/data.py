@@ -2,12 +2,13 @@
 
 插件只用它：`from app.sdk import data`、`from app.sdk.data import human_size`。
 这里不导入 Qt，单元测试可以脱离界面直接跑，插件控件只负责显示这些函数的结果。
-支持的扩展名由各插件的 `data/viewer.json` 决定，这里不保存扩展名表。
+支持的扩展名由各插件的 `.data/viewer.json` 决定，这里不保存扩展名表。
 """
 
 from __future__ import annotations
 
 import bz2
+import codecs
 import csv
 import gzip
 import lzma
@@ -19,7 +20,13 @@ from xml.etree import ElementTree
 
 from loguru import logger
 
+try:  # 编码嗅探（比「按顺序硬试」准得多，尤其对 gb18030 / shift_jis）；缺依赖时退回固定顺序
+    from charset_normalizer import from_bytes as _detect_bytes
+except ImportError:  # pragma: no cover - 取决于运行环境
+    _detect_bytes = None
+
 __all__ = [
+    "DETECT_LIMIT",
     "ENCODINGS",
     "TEXT_LIMIT",
     "ArchiveMember",
@@ -28,6 +35,7 @@ __all__ = [
     "archive_read",
     "csv_rows",
     "decode_text",
+    "detect_encoding",
     "human_size",
     "image_data_url",
     "image_info",
@@ -36,8 +44,11 @@ __all__ = [
     "suffix_of",
     "xlsx_sheets",
 ]
-#: 编码探测顺序：UTF-8 系优先，然后中文常见编码，最后必定成功的 latin-1
+#: 编码探测顺序：UTF-8 系优先，然后中文常见编码，最后必定成功的 latin-1（嗅探猜不出时用）
 ENCODINGS: tuple[str, ...] = ("utf-8-sig", "utf-8", "gb18030", "big5", "utf-16", "latin-1")
+
+#: 交给 charset-normalizer 的样本上限：再长收益很小，耗时却线性涨
+DETECT_LIMIT = 64 * 1024
 
 #: 文本预览的最大字节数：再大就只显示开头
 TEXT_LIMIT = 512 * 1024
@@ -62,13 +73,51 @@ def human_size(value: float) -> str:
 
 
 # --------------------------------------------------------------------- 文本
+def detect_encoding(raw: bytes) -> str:
+    """用 charset-normalizer 猜编码；没装依赖 / 猜不出 / 名字不认得都返回空串。
+
+    规范名统一走 `codecs.lookup()`（`utf_8` → `utf-8`）；纯 ASCII 报成 `utf-8`
+    （ASCII 是 UTF-8 的子集，报一个界面上认得的名字更实用）；带 UTF-8 BOM 的直接
+    报 `utf-8-sig`，否则 BOM 会以 `\\ufeff` 留在正文开头。
+    """
+    if not raw:
+        return ""
+    if raw.startswith(codecs.BOM_UTF8):
+        return "utf-8-sig"
+    if _detect_bytes is None:
+        return ""
+    try:
+        best = _detect_bytes(raw[:DETECT_LIMIT]).best()
+    except Exception as exc:  # noqa: BLE001 - 探测失败不该影响读文件
+        logger.debug("编码探测失败：{}", exc)
+        return ""
+    name = str(getattr(best, "encoding", "") or "")
+    if not name:
+        return ""
+    try:
+        canonical = codecs.lookup(name).name
+    except LookupError:
+        return ""
+    return "utf-8" if canonical == "ascii" else canonical
+
+
 def decode_text(raw: bytes, encoding: str = "") -> tuple[str, str]:
-    """解码字节串，返回 (文本, 实际使用的编码)。"""
+    """解码字节串，返回 (文本, 实际使用的编码)。
+
+    显式给了编码就照它解；没给先用 charset-normalizer 猜一次（能正确认 gb18030 /
+    shift_jis 这类），猜不出再按 `ENCODINGS` 顺序硬试，最后必定成功。
+    """
     if encoding:
         try:
             return raw.decode(encoding), encoding
         except (UnicodeDecodeError, LookupError):
             logger.debug("按 {} 解码失败，改为自动探测", encoding)
+    guessed = detect_encoding(raw)
+    if guessed:
+        try:
+            return raw.decode(guessed), guessed
+        except (UnicodeDecodeError, LookupError):
+            logger.debug("按探测出的 {} 解码失败，改按固定顺序试", guessed)
     for candidate in ENCODINGS:
         try:
             return raw.decode(candidate), candidate

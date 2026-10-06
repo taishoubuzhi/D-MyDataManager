@@ -1,6 +1,6 @@
 """插件服务：插件目录的发现、状态、载入与诊断。
 
-协议与校验在 `app.core.plugin_core`，插件作者用的接口在 `app.sdk`：
+协议与校验在 `app.core.plugins.plugin_core`，插件作者用的接口在 `app.sdk`：
 插件就是继承 `app.sdk.Plugin` 的一个类，核心负责清单解析、依赖排序、
 命名空间注册与按阶段载入（manifest → dependency → import → construct → setup）。
 本服务只做「发现 + 状态 + 编排 + 诊断」四件事，插件失败只标记该插件。
@@ -8,9 +8,7 @@
 
 from __future__ import annotations
 
-import json
 import shutil
-import sys
 import time
 import uuid
 import zipfile
@@ -19,17 +17,18 @@ from typing import Any, Callable, Iterable, Sequence
 
 from loguru import logger
 
-from ..core import paths
-from ..core.app_ui import APP_UI_EXTENSION, AppUiApi
-from ..core.extensions import ExtensionRegistry, extension_registry
-from ..core.plugin_core import (
-    DM_PACKAGE,
+from ..core.manifest import ManifestError, manifest_kit
+from ..core.runtime import jsonio, paths
+from ..core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+from ..core.plugins.extensions import ExtensionRegistry, extension_registry
+from ..core.plugins.plugin_core import (
     MANIFEST_NAME,
     PHASES,
     SOURCE_BUILTIN,
     SOURCE_EXTERNAL,
     PluginError,
     PluginInfo,
+    drop_namespace,
     import_entry,
     import_library,
     load_manifest,
@@ -38,7 +37,7 @@ from ..core.plugin_core import (
     reset_namespace,
     resolve_dependencies,
 )
-from ..core.plugin_options import coerce_option, defaults
+from ..core.plugins.plugin_options import coerce_option, defaults
 from ..sdk import (
     Contribution,
     Events,
@@ -49,10 +48,13 @@ from ..sdk import (
     register_dependency_lookup,
     register_library_resolver,
 )
-from ..sdk.editors import EDITOR_EXTENSION, EditorFactory, EditorInfo, EditorOpener, editor_api
-from ..sdk.viewers import OPEN_EXTENSION, ViewerFactory, ViewerInfo, ViewerOpener, open_api
+from .editor_service import EditorFactory, EditorInfo, EditorOpener, editor_api
+from .viewer_service import ViewerFactory, ViewerInfo, ViewerOpener, open_api
 
 STATE_VERSION = 1
+
+#: 插件状态文件在清单登记表里的 id（`legacy` 格式：只做读取 / 备份 / 重置）
+STATE_MANIFEST_ID = "core.plugin_state"
 
 #: 清单声明了扩展接口却没注册时写进备注的前缀（便于识别并清理自己写的那条）。
 PROVIDES_NOTE_PREFIX = "清单声明的扩展接口没有注册："
@@ -121,7 +123,7 @@ class PluginHost:
         except Exception:
             logger.exception("刷新库内文件失败：{}", target)
         if count:
-            from ..core.signals import signalBus
+            from ..core.runtime.signals import signalBus
 
             signalBus.itemsChanged.emit()
         logger.info("编辑器保存后刷新库内文件：{}（命中 {} 项）", target.name, count)
@@ -191,13 +193,13 @@ class PluginHost:
 
     def open_path(self, path: str | Path) -> bool:
         """用系统默认程序打开文件。"""
-        from ..core.shell import open_default
+        from ..core.runtime.shell import open_default
 
         return open_default(Path(path))
 
     def reveal_path(self, path: str | Path) -> bool:
         """在系统文件管理器里定位文件。"""
-        from ..core.shell import reveal
+        from ..core.runtime.shell import reveal
 
         return reveal(Path(path))
 
@@ -258,7 +260,7 @@ class PluginService:
     def _bridge_signals(self) -> None:
         """把程序自己的 Qt 信号桥接成插件事件（插件看不到 signalBus，只能订阅事件）。"""
         try:
-            from ..core.signals import signalBus
+            from ..core.runtime.signals import signalBus
 
             signalBus.itemsChanged.connect(self._on_items_changed)
         except Exception:
@@ -279,20 +281,29 @@ class PluginService:
 
     # ------------------------------------------------------------ 状态
     def _read_state(self) -> dict:
-        try:
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        data = jsonio.read_json(self.state_file, {})
+        if not isinstance(data, dict):
             return {}
         plugins = data.get("plugins")
         return plugins if isinstance(plugins, dict) else {}
 
     def _write_state(self, plugins: dict) -> None:
         payload = {"version": STATE_VERSION, "plugins": plugins}
+        self.backup_state()
+        jsonio.write_json(self.state_file, payload)
+
+    def backup_state(self) -> None:
+        """把当前插件状态文件留一份备份（最近 `BACKUP_KEEP` 份），失败只记日志。"""
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError as exc:
-            logger.warning("写入插件状态失败：{}", exc)
+            manifest_kit.backup(STATE_MANIFEST_ID)
+        except (ManifestError, OSError) as exc:  # 备份不该挡住状态写入
+            logger.debug("备份插件状态跳过：{}", exc)
+
+    def reset_state(self) -> int:
+        """把插件状态回退到最近一次备份并重新载入插件，返回载入的查看器数量。"""
+        manifest_kit.reset(STATE_MANIFEST_ID)
+        logger.info("插件状态已重置：{}", self.state_file)
+        return self.load()
 
     def _save_state_for(self, plugin_id: str, **values: object) -> None:
         plugins = self._read_state()
@@ -937,9 +948,7 @@ class PluginService:
         if self._pages is not None:
             for key in [item.key for item in self._pages.pages() if item.plugin_id == plugin_id]:
                 self._pages.remove_page(key)
-        prefix = f"{DM_PACKAGE}.{plugin_id}"
-        for name in [name for name in sys.modules if name == prefix or name.startswith(prefix + ".")]:
-            sys.modules.pop(name, None)
+        drop_namespace(plugin_id)
 
     def teardown(self, plugin_id: str) -> bool:
         """卸载一个插件（调用它的 `teardown()` 并撤销全部贡献）。"""
@@ -952,6 +961,7 @@ class PluginService:
             logger.exception("插件退出异常：{}", plugin_id)
         self._drop_plugin_state(plugin_id)
         self._loaded = [info for info in self._loaded if info.id != plugin_id]
+        self._sync_bootstrap()
         return True
 
     def teardown_all(self) -> None:
@@ -973,6 +983,7 @@ class PluginService:
         self._settings.clear()
         self._loaded = []
         reset_namespace()
+        self._sync_bootstrap()
 
     def loaded_plugins(self) -> list[PluginInfo]:
         """上一次载入成功的插件（按依赖顺序）。"""
@@ -1149,6 +1160,35 @@ class PluginService:
                     changed.append(f"卸载 {plugin_id}（{info.name}）")
         logger.info("插件变更：{}", "；".join(changed) or "没有变化")
         logger.info(self.loaded_summary())
+        self._sync_bootstrap()
+
+    def reload(self, plugin_id: str = "") -> int:
+        """重载插件代码：丢掉 `dm_plugin.<id>` 模块后重新导入。
+
+        不给 id 时重载全部（等价于 `load()`）；给了 id 时连依赖它的已载入插件
+        一起重载，免得依赖方还拿着旧模块。返回实际重载的插件数。
+        """
+        target = str(plugin_id or "").strip()
+        if not target:
+            self.load()
+            return len(self._plugins)
+        if self.get(target) is None:
+            return 0
+        victims = [*self._dependents(target), target]
+        for victim in victims:
+            self.teardown(victim)  # 卸载时会连命名空间一起丢掉
+            drop_namespace(victim)  # 载入中途失败留下的模块也一并清掉
+        done = 0
+        for victim in reversed(victims):  # 反过来就是依赖顺序：先被依赖的
+            info = self.get(victim)
+            if info is None or not info.enabled or victim in self._plugins:
+                continue
+            if self._load_one(info):
+                self._loaded.append(info)
+                done += 1
+        self._sync_bootstrap()
+        logger.info("插件重载：{}（{} 个）", "、".join(reversed(victims)), done)
+        return done
 
     def update(
         self,
@@ -1215,13 +1255,10 @@ class PluginService:
     def _mark_external(folder: Path) -> None:
         """导入进来的插件一律算外部插件，避免伪造内置标志。"""
         manifest = folder / MANIFEST_NAME
-        try:
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if data.get("builtin"):
+        data = jsonio.read_json(manifest, None)
+        if isinstance(data, dict) and data.get("builtin"):
             data["builtin"] = False
-            manifest.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            jsonio.write_json(manifest, data)
 
     @staticmethod
     def _find_plugin_root(root: Path) -> Path:

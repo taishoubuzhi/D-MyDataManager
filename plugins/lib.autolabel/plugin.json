@@ -16,10 +16,6 @@
   "provides": [
     "autolabel.open"
   ],
-  "data": {
-    "rules": "data/rules.json",
-    "align": "data/align.json"
-  },
   "libraries": [
     {
       "name": "autolabel",
@@ -28,22 +24,22 @@
     },
     {
       "name": "rules",
-      "module": "rules.py",
+      "module": ".plugin/rules.py",
       "description": "规则模型 Rule、匹配引擎与「出厂 + 用户」合并视图 RuleSet"
     },
     {
       "name": "align",
-      "module": "align.py",
+      "module": ".plugin/align.py",
       "description": "数据类型 ↔ 模型对齐表 AlignRow / AlignTable / AlignBook"
     },
     {
       "name": "pipeline",
-      "module": "pipeline.py",
+      "module": ".plugin/pipeline.py",
       "description": "批处理管线：条目 → 批量请求 → 结果 → 名字（parse_names / clamp / merge_names / plan / run / collect）"
     },
     {
       "name": "controls",
-      "module": "ui/controls.py",
+      "module": ".plugin/ui/controls.py",
       "description": "共用控件：进度面板 ProgressPanel、规则编辑弹窗 RuleDialog、对齐表编辑弹窗 AlignDialog 与表格填充助手"
     }
   ]

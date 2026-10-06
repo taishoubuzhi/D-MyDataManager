@@ -31,15 +31,15 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
-from ...core.signals import signalBus
-from ...sdk.viewers import ViewerInfo, open_path, open_system, open_viewer_with, viewers_for
-from ...sdk.editors import (
+from ...core.runtime.signals import signalBus
+from ...services.editor_service import (
     EditorInfo,
     edit_path as edit_path_with,
     edit_with,
     editors_for,
     open_system as edit_open_system,
 )
+from ...services.viewer_service import ViewerInfo, open_path, open_system, open_viewer_with, viewers_for
 from ...db import database
 from ...db.models import DataItem, DataType
 from ...db.seed import UNCATEGORIZED_NAME

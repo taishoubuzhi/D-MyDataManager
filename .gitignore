@@ -1,52 +1,36 @@
-# 运行期数据（不随代码分发）
+# —— 运行期数据（真实数据 / 本地设置，不随代码分发）
 /.logs/
 /.resources/
 /.configs/
-/data/
-/cache/
 /exports/
-_tmp_export/
-_tmp/
 
-# 本地环境与 IDE 配置
+# —— 本地环境与 IDE
 /.venv/
 /.idea/
-/.trae/
 /.vscode/
 /.dsh/
-/.plugins/
-/.packages/
-/stubs/
-/plugins/example.model_usage/
-/plugins/example.ui_extension/
-/docs/
 .dsh-acl-recovery/
-CLAUDE.md
-TODO.md
-
-# Python
-__pycache__/
-*.py[cod]
-
-# 上游参考仓库：仅本地对照 qfluentwidgets 官方示例，不随代码分发
+/stubs/
 /PyQt-Fluent-Widgets/
 
-# PyAppify 打包产物
+# —— 不随发布分发的本地样板插件
+/plugins/example.model_usage/
+/plugins/example.ui_extension/
+
+# —— 打包产物
 /pyappify_dist/
 pyappify.exe
 /build/
 /dist/
 *.spec
 
-# 测试临时目录
-tests/_tmp/
-tests/_scratch/
+# —— Python 缓存
+__pycache__/
+*.py[cod]
 
-# 开发脚本重定向产生的日志
+# —— 脚本与测试留下的临时物（各目录下自己的 .tmp/，进程退出自动清除）
+.tmp/
 _*.log
 
-# 历史残留
-_legacy_src/
-_backup_*/
-
-
+# —— 本地任务清单
+TODO.md

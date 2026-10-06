@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "统一清单",
+  "description": "顶层必须项 + items 数组；每项必须有 key，其余字段随 kind 自定义。",
+  "type": "object",
+  "required": ["manifest", "id", "version", "kind", "items"],
+  "properties": {
+    "manifest": {
+      "type": "string",
+      "description": "清单协议版本"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "description": "清单 id，与插件 id 同一套规则"
+    },
+    "version": {
+      "type": "string",
+      "description": "清单内容版本（semver）"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["module-data", "registry", "profiles", "catalog"],
+      "description": "清单类型"
+    },
+    "title": {
+      "type": "string",
+      "description": "可选的展示名"
+    },
+    "description": {
+      "type": "string",
+      "description": "可选的说明"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["key"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

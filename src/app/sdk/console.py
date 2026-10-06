@@ -7,7 +7,7 @@
     ctx.console.progress(3, 10, "解压分片")
     ctx.console.exception("加载失败")      # 带当前异常栈
 
-统一格式（见 `app.core.logging_setup.DEFAULT_FORMAT`）：
+统一格式（见 `app.core.runtime.logging_setup.DEFAULT_FORMAT`）：
 
     时间 | 级别 | 来源 | 函数:行 | 消息
 
@@ -70,7 +70,7 @@ def _caller() -> tuple[int, str]:
 def _provider() -> Any:
     """取程序本体注册的控制台实现；没有（脚本、测试）就返回 None。"""
     try:
-        from ..core.extensions import extension_registry
+        from ..core.plugins.extensions import extension_registry
     except Exception:
         return None
     return extension_registry.provider(CONSOLE_EXTENSION)
@@ -89,7 +89,7 @@ def _source_for(source: str, module: str) -> str:
     if not module:
         return ""
     try:
-        from ..core.logging_setup import source_of
+        from ..core.runtime.logging_setup import source_of
     except Exception:  # 插件库代码可能在没有 app 包的子进程里跑
         return "" if module == "__main__" else module
     return source_of(module)

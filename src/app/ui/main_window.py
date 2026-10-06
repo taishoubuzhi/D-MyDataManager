@@ -15,11 +15,11 @@ from qfluentwidgets import (
     NavigationItemPosition,
 )
 
-from ..core import paths
-from ..core.app_ui import APP_UI_EXTENSION, PageSpec
+from ..core.runtime import paths
+from ..core.plugins.app_ui import APP_UI_EXTENSION, PageSpec
 from ..core.config import config
-from ..core.extensions import extension_registry
-from ..core.signals import signalBus
+from ..core.plugins.extensions import extension_registry
+from ..core.runtime.signals import signalBus
 from ..db.database import new_session
 from .pages.archive_page import ArchivePage
 from .pages.home_page import HomePage
@@ -315,6 +315,7 @@ class MainWindow(FluentWindow):
             session = getattr(page, "session", None)
             if session is not None:
                 session.close()
+        self.library_watcher.shutdown()
         self._watch_session.close()
         shutdown_cover_loader()
         super().closeEvent(event)

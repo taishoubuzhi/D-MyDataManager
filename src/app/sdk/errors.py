@@ -4,10 +4,8 @@ from __future__ import annotations
 
 __all__ = [
     "DependencyError",
-    "ManifestError",
-    "ModelBusyError",
-    "ModelError",
     "PluginError",
+    "PluginManifestError",
     "SdkError",
     "VersionError",
 ]
@@ -17,8 +15,12 @@ class PluginError(Exception):
     """插件清单、依赖或载入过程中可以预期的错误。"""
 
 
-class ManifestError(PluginError):
-    """plugin.json 缺失、格式错误或字段不合法。"""
+class PluginManifestError(PluginError):
+    """plugin.json 缺失、格式错误或字段不合法。
+
+    注意与 `app.core.manifest.errors.ManifestError`（清单机制的通用错误）区分：
+    这个只表示插件清单（`plugins/<id>/plugin.json`）本身有问题。
+    """
 
 
 class DependencyError(PluginError):
@@ -32,10 +34,3 @@ class VersionError(PluginError):
 class SdkError(PluginError):
     """插件使用 SDK 的方式不正确（缺接口、依赖未声明等）。"""
 
-
-class ModelError(Exception):
-    """模型加载或调用失败（下载未完成、后端崩了、参数不对等）。"""
-
-
-class ModelBusyError(ModelError):
-    """模型忙或等不到：超时、被占用、常驻上限已满。"""

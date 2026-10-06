@@ -16,7 +16,7 @@ def _text_file(case: Case, name: str, text: str) -> Path:
 @check("editor_registry_query", "services")
 def editor_registry_query(case: Case) -> None:
     """编辑器工具库载入后，注册表能按 id / 后缀查询内置编辑器。"""
-    from app.sdk.editors import editor_api
+    from app.services.editor_service import editor_api
 
     install_builtin_plugins()
     api = editor_api()
@@ -49,7 +49,7 @@ def editor_extension_contribution(case: Case) -> None:
 @check("editor_system_fallback", "services")
 def editor_system_fallback(case: Case) -> None:
     """没有编辑器插件时，edit_path 退回系统默认编辑器。"""
-    from app.sdk import editors
+    from app.services import editor_service as editors
     from app.sdk import ui as sdk_ui
     from app.services.plugin_service import plugin_service
 
@@ -71,7 +71,7 @@ def editor_system_fallback(case: Case) -> None:
 @check("editor_text_open_save", "services")
 def editor_text_open_save(case: Case) -> None:
     """内置文本编辑器能打开文件、编辑并保存回磁盘。"""
-    from app.sdk.editors import editor_api
+    from app.services.editor_service import editor_api
 
     from .harness import ensure_app
 
@@ -123,7 +123,7 @@ def editor_save_sync(case: Case) -> None:
 @check("editor_config_format_list", "pages")
 def editor_config_format_list(case: Case) -> None:
     """编辑器配置页左侧格式列表带标注：打开方式 + 库中数量，且能按关键词过滤。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
     from app.services import ImportService
     from app.services.plugin_service import plugin_service
 

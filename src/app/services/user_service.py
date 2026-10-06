@@ -19,7 +19,7 @@ from ..repositories import (
     TagRepository,
     UserRepository,
 )
-from ..core.security import hash_password, verify_hash
+from ..core.runtime.security import hash_password, needs_rehash, verify_hash
 
 DEFAULT_USER_NAME = "默认用户"
 
@@ -147,7 +147,13 @@ class UserService:
         self.session.flush()
 
     def verify(self, user: User, password: str) -> bool:
-        return verify_hash(user.password_hash, password)
+        """校验口令；通过后顺手把老散列升级成当前算法（惰性 rehash，不必迁移全库）。"""
+        if not verify_hash(user.password_hash, password):
+            return False
+        if needs_rehash(user.password_hash):
+            user.password_hash = hash_password(password)
+            self.session.flush()
+        return True
 
     def data_count(self, user: User) -> int:
         """该用户的数据项数量。"""

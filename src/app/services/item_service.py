@@ -8,7 +8,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..core import paths, shell
+from ..core.runtime import paths, shell
 from ..db.models import ArchiveEntry, DataItem, DataType, Library
 from ..repositories import BlobRepository, ItemRepository, TagRepository
 from . import feature_service

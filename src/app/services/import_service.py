@@ -15,7 +15,7 @@ from pathlib import Path
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import config
 from ..db.models import Category, DataItem, DataType, Library, Version, guess_type
 from ..db.seed import UNCATEGORIZED_NAME
@@ -199,7 +199,7 @@ class ImportService:
             logger.info("内容重复，按策略跳过：{}", path.name)
             return None
 
-        mime = feature_service.guess_mime(path.name)
+        mime = feature_service.guess_mime(path.name, path)
         data_type = guess_type(path.name)
         content = ""
         if data_type is DataType.TEXT and size <= _TEXT_LIMIT:
@@ -392,7 +392,7 @@ class ImportService:
         path = Path(path)
         checksum = sha256_of(path)
         size = path.stat().st_size
-        mime = feature_service.guess_mime(path.name)
+        mime = feature_service.guess_mime(path.name, path)
         data_type = guess_type(path.name)
         content = ""
         if data_type is DataType.TEXT and size <= _TEXT_LIMIT:

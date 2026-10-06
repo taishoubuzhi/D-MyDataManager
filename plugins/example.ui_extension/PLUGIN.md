@@ -9,7 +9,7 @@
 | --- | --- |
 | `plugin.json` | 清单：id、名称、入口、`data` 声明的数据文件 |
 | `plugin.py` | 插件类 `UiExtensionSamplePlugin`，只调用 `app.sdk` |
-| `data/info.json` | 插件自己的数据（设置卡片的说明文字与用到的扩展点清单） |
+| `.data/info.json` | 插件自己的数据（设置卡片的说明文字与用到的扩展点清单） |
 
 ## 用到的扩展点
 

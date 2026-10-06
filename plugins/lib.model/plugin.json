@@ -16,16 +16,21 @@
   "provides": [
     "model.open"
   ],
-  "data": {
-    "model_list": "data/model_list.json",
-    "api_templates": "data/api_templates.json",
-    "runtime_profiles": "data/runtime_profiles.json"
-  },
   "libraries": [
     {
       "name": "model",
       "module": "plugin.py",
       "description": "模型记录 ModelRecord、注册表 ModelRegistry、调度接口 ModelOpenApi、管理器 ModelManager、适配器与「模型」页面 ModelPage"
+    },
+    {
+      "name": "api",
+      "module": ".plugin/api.py",
+      "description": "模型调度门面：BatchRequest / BatchResult / run_batch / acquire / invoke / list_models / templates / requirements（依赖方静态导入它）"
+    },
+    {
+      "name": "errors",
+      "module": ".plugin/errors.py",
+      "description": "模型错误类型 ModelError / ModelBusyError"
     }
   ]
 }

@@ -1,0 +1,6 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "历史清单",
+  "description": "迁移前的自定义 JSON（每个插件长什么样都不同）：只要求顶层是对象或数组。",
+  "type": ["object", "array"]
+}

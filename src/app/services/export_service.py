@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ..core.runtime import jsonio
 from ..db.models import DataItem, DataType
 from ..repositories import ItemRepository
 from .content_store import ContentStore
@@ -73,7 +73,7 @@ class ExportService:
     def write_manifest(self, rows: list[dict], path: Path, fmt: str = "csv") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         if fmt == "json":
-            path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+            jsonio.write_json(path, rows)
         else:
             with path.open("w", encoding="utf-8-sig", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=MANIFEST_FIELDS)

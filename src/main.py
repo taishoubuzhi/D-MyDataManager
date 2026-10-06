@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import atexit
 import datetime as dt
-import json
 import os
 import runpy
 import sys
@@ -21,14 +20,17 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from loguru import logger  # noqa: E402
 from qfluentwidgets import FluentTranslator, Theme, setTheme  # noqa: E402
 
-from app.core import paths  # noqa: E402
-from app.core.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
+from app.core.runtime import jsonio, paths # noqa: E402
+from app.core.manifest import manifest_kit  # noqa: E402
+from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
 from app.core.config import Language, config  # noqa: E402
-from app.core.logging_setup import setup_logging  # noqa: E402
+from app.core import capabilities  # noqa: E402
+from app.core.runtime.logging_setup import setup_logging  # noqa: E402
 from app.db.database import dispose_engine, init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.sdk.console import CONSOLE_EXTENSION  # noqa: E402
 from app.sdk.items import ITEMS_EXTENSION  # noqa: E402
+from app.sdk.manifest import MANIFEST_EXTENSION  # noqa: E402
 from app.services.console_service import ConsoleOutput  # noqa: E402
 from app.services.item_api import ItemsApi  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
@@ -97,7 +99,7 @@ def _previous_session_marker() -> dict:
         logger.warning("读取会话标记失败：{}", exc)
         return {}
     try:
-        data = json.loads(raw)
+        data = jsonio.loads(raw)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
@@ -113,7 +115,7 @@ def _write_session_marker() -> None:
     }
     try:
         paths.make_dir(paths.SESSION_FILE.parent)
-        paths.SESSION_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        jsonio.write_json(paths.SESSION_FILE, payload)
     except OSError as exc:
         logger.warning("写入会话标记失败：{}", exc)
 
@@ -148,6 +150,17 @@ def _bootstrap_data() -> None:
         migrate_uncategorized(session)
 
 
+def _configure_optional_tools() -> None:
+    """把外部解包器指给需要的库（当前只有 rarfile → 系统 bsdtar）；缺依赖就跳过。"""
+    try:
+        changed = capabilities.configure_tools()
+    except Exception as exc:  # noqa: BLE001 - 能力配置失败不影响启动
+        logger.debug("可选能力配置失败：{}", exc)
+        return
+    for item in changed:
+        logger.info("已配置可选能力：{}", item)
+
+
 def _degrade_protection(exc: Exception) -> None:
     """放行失败时的兜底：关掉保护开关并强制放行——宁可少一层保护，也不能让程序打不开。"""
     logger.error("资源文件夹保护影响了启动（{}）：已关闭保护开关并强制放行", exc)
@@ -177,10 +190,10 @@ def _lock_on_exit() -> None:
 
 
 def _run_selfcheck() -> int | None:
-    """`--self-check`：源码仓库里存在新自检套件时交给它运行，返回它的退出码。
+    """`--self-check`：存在自检套件 `scripts/selfcheck.py` 时交给它运行，返回它的退出码。
 
     套件自带隔离（临时库、临时配置），所以这里在启动流程之前就返回，不碰真实数据；
-    打包后没有 `scripts/` 目录，返回 None 让调用方退回「建好界面就退出」的冒烟测试。
+    没有该脚本（例如只拷了程序本体）时返回 None，让调用方退回「建好界面就退出」的冒烟测试。
     """
     script = Path(__file__).resolve().parents[1] / "scripts" / "selfcheck.py"
     if not script.is_file():
@@ -206,6 +219,7 @@ def main() -> int:
     _report_previous_session()
     _write_session_marker()
     _stage(3, "会话检查完成，已写下本次会话标记")
+    _configure_optional_tools()
     # 启动自愈第一步：无论上次是正常退出还是崩溃，先放行资源文件夹；静态保护下运行期一直放行
     privacy.begin_session()
     _stage(4, "隐私保护已放行受保护目录")
@@ -242,6 +256,8 @@ def main() -> int:
     plugin_service.bootstrap(CONSOLE_EXTENSION, ConsoleOutput())
     # 数据接口：插件用 app.sdk.items 读条目、读写标签与关键词（改完自动刷新界面）
     plugin_service.bootstrap(ITEMS_EXTENSION, ItemsApi())
+    # 清单机制：插件用 app.sdk.manifest 读 / 查 / 改 / 备份受管理的 JSON 清单
+    plugin_service.bootstrap(MANIFEST_EXTENSION, manifest_kit)
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     plugin_service.load_viewers()
     _stage(7, "插件系统已就绪")

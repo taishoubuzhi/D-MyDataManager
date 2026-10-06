@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖与 data 声明 |
 | plugin.py | 插件类 SheetViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据（kind=spreadsheet、扩展名、能力） |
+| .data/viewer.json | 查看器元数据（kind=spreadsheet、扩展名、能力） |
 
 ## 依赖
 
@@ -22,4 +22,4 @@
 
 ## 数据文件
 
-- data/viewer.json：元数据；解析逻辑用程序侧的 SheetData / xlsx_sheets / csv_rows 纯函数。
+- .data/viewer.json：元数据；解析逻辑用程序侧的 SheetData / xlsx_sheets / csv_rows 纯函数。

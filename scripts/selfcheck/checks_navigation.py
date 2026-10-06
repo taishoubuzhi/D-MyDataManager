@@ -114,9 +114,9 @@ def navigation_workbench(case: Case) -> None:
     """侧栏只读：内置固定顺序、设置恒底部、插件页追加、溢出的只在页面管理里打开。"""
     from PyQt6.QtWidgets import QWidget
 
-    from app.core import paths
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
+    from app.core.runtime import paths
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
     from app.ui.framework.sections import PageHeader
     from app.ui.main_window import BUILTIN_PAGES, PLUGIN_SIDEBAR_LIMIT
@@ -333,8 +333,8 @@ def plugin_page_stack_alignment(case: Case) -> None:
     """
     from PyQt6.QtWidgets import QLabel
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
 
     def factory():
@@ -405,8 +405,8 @@ def workbench_lists_builtin_pages(case: Case) -> None:
     `PageBase.auto_refresh` 只连信号、不会立刻刷新，而插件又是在主窗口之前载入的，
     所以这里不借助自检基座的逐个刷新，直接构造主窗口看页面自己有没有填一次。
     """
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
     from app.ui.main_window import BUILTIN_PAGES, MainWindow
 

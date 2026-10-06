@@ -22,7 +22,7 @@ from qfluentwidgets import (
     TreeWidget,
 )
 
-from ..core.naming import NUMBER_STYLES, RENAME_MODES, RenameRule, build_plan, split_suffix
+from ..core.runtime.naming import NUMBER_STYLES, RENAME_MODES, RenameRule, build_plan, split_suffix
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
 from .framework import IconTextButton, clear_scroll_background, format_size

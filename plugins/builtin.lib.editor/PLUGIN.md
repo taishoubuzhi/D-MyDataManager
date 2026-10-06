@@ -1,8 +1,8 @@
 # 编辑器库（builtin.lib.editor）
 
 编辑器插件的公共工具箱：编辑器基类、窗口外壳、编辑器注册表，外加「按规则决定用哪个编辑器编辑」的调度实现与「编辑器」配置页。
-编辑行为整体由本插件提供（扩展接口 `editor.open`）；程序本体只剩调度门面与类型别名（`app.sdk.editors`），注册表、规则、界面都在这里。
-数据管理页右键的「编辑器 ▸」子菜单由程序本体搭出来（`ManagePage.editor_menu_items()` / `_build_editor_menu()` 读 `app.sdk.editors.editors_for()`），
+编辑行为整体由本插件提供（扩展接口 `editor.open`）；程序本体只剩调度门面与类型别名（`app.services.editor_service`），注册表、规则、界面都在这里。
+数据管理页右键的「编辑器 ▸」子菜单由程序本体搭出来（`ManagePage.editor_menu_items()` / `_build_editor_menu()` 读 `app.services.editor_service.editors_for()`），
 本插件不贡献菜单项——禁用后子菜单仍在，只是只剩「系统默认程序 / 交给系统选择…」；
 「设置 → 外观 → 左键双击」的配置项 `Layout/Double-Click-Action` 默认是「打开查看器」，改成「打开编辑器」后条目左键双击也走 `edit_path()`。
 
@@ -23,13 +23,13 @@
 
 ## 暴露的库
 
-库模块固定写成入口 `plugin.py`（协议规定：一个插件对其他插件的公开面只有 plugin.py）。两种取法：
+本插件的库模块是入口 `plugin.py`，导入名 `dm_plugin.builtin.lib.editor.plugin`。两种取法：
 
     from dm_plugin.builtin.lib.editor.plugin import EditorPlugin, EditorWindow   # 推荐：静态导入（要先 depends）
     library("builtin.lib.editor", "plugin")                                       # 兜底：运行时取
 
 本插件同时声明两种对外面：`libraries` 给的是**类**（要继承 / 实例化），`provides: editor.open` 给的是**运行期那一个实例**
-（消费方 `ctx.require("editor.open")`）。分工见 `plugins/PLUGIN_PROTOCOL.md` 2.7。
+（消费方 `ctx.require("editor.open")`）。分工见 `../../docs/PLUGIN_PROTOCOL.md` 2.7。
 
 EditorPlugin 提供：
 
@@ -47,7 +47,7 @@ EditorPlugin 提供：
 
 入口类 EditorLibraryPlugin 在 setup() 里：
 
-- `ctx.provide(EDITOR_EXTENSION, EditorOpenApi(ctx))` —— `EDITOR_EXTENSION = "editor.open"` 定义在 `app.sdk.editors`；
+- `ctx.provide(EDITOR_EXTENSION, EditorOpenApi(ctx))` —— `EDITOR_EXTENSION = "editor.open"` 定义在 `app.services.editor_service`；
 - `ctx.add_page(CONFIG_PAGE_KEY, "编辑器", lambda: EditorConfigPage(ctx, ctx.require(EDITOR_EXTENSION)), icon="EDIT", order=200)`
   —— 宿主没有提供界面接口（`app.ui`）时只记一条 warning，编辑器照常可用；
 - `teardown()` 里 `reset_registry()` —— 本插件卸载时注册表跟着清空，重新载入时各编辑器插件再登记。
@@ -61,7 +61,7 @@ EditorPlugin 提供：
 
 ## 扩展接口 editor.open
 
-程序侧 `app.sdk.editors` 的 `edit_path()` / `edit_with()` / `open_system()` 都先取
+程序侧 `app.services.editor_service` 的 `edit_path()` / `edit_with()` / `open_system()` 都先取
 `extension_registry.provider("editor.open")`：拿不到接口时退回系统默认编辑器（`rules_available()` 可用来判断）。EditorOpenApi 的成员：
 
 | 分组 | 成员 |

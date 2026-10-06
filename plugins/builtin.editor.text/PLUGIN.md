@@ -6,10 +6,10 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| plugin.json | 清单：id、名称、depends `builtin.lib.editor` + `builtin.lib.ui`，`data: {"editor": "data/editor.json"}` |
+| plugin.json | 清单：id、名称、depends `builtin.lib.editor` + `builtin.lib.ui`，`data: {"editor": ".data/editor.json"}` |
 | plugin.py | 入口：`TextEditorPlugin(EditorPlugin)`，只实现 `create_editor()` |
 | text_editor.py | 编辑控件 `TextEditor(QWidget)`：编码下拉、自动换行、复制全文、行数 / 编码状态，`is_dirty()` / `save()` |
-| data/editor.json | 显示名、`kind="internal"`、宿主 `dialog`、扩展名清单、能力、排序 |
+| .data/editor.json | 显示名、`kind="internal"`、宿主 `dialog`、扩展名清单、能力、排序 |
 
 ## 扩展名
 

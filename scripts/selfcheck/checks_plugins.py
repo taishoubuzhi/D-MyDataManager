@@ -1,7 +1,7 @@
 """插件协议检查：清单白名单、数据引用、导入边界、插件类契约、多库与载入诊断。
 
 方案见 .logs/_rewrite/plugin_refactor_plan.md 第 12 节；只走公开契约（清单文件、
-app.core.plugin_core 的解析函数、app.services.plugin_service 的服务层 API）。
+app.core.plugins.plugin_core 的解析函数、app.services.plugin_service 的服务层 API）。
 需要「坏插件 / 多库插件」这类样本时，一律写进用例自己的隔离插件目录。
 """
 
@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 
 from .harness import ROOT, Case, check, install_builtin_plugins
+
+from app.sdk.manifest import record_of
 
 #: 仓库里的内置插件目录（自检环境的插件目录是另一个临时目录）。
 BUILTIN_PLUGINS = ROOT / "plugins"
@@ -41,21 +43,25 @@ def _plugin_sources(folder: Path) -> list[Path]:
     return [item for item in sorted(folder.rglob("*.py")) if "__pycache__" not in item.parts]
 
 
-def _imports(source: Path) -> list[tuple[int, str]]:
-    """用 AST 取源码里的绝对 import 目标（文档字符串与注释里的示例不算）。"""
+def _imports(source: Path) -> list[tuple[int, str, bool]]:
+    """用 AST 取源码里的绝对 import 目标（文档字符串与注释里的示例不算）。
+
+    第三个值是「是否在模块顶层」：顶层导入＝硬依赖，必须写进 `depends`；
+    函数里的延迟导入（`pipeline.py` 那种「没启用模型库也能导入本模块」的写法）不强制声明。
+    """
     tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    found: list[tuple[int, str]] = []
+    found: list[tuple[int, str, bool]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            found.extend((node.lineno, alias.name) for alias in node.names)
+            found.extend((node.lineno, alias.name, node.col_offset == 0) for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            found.append((node.lineno, node.module))
+            found.append((node.lineno, node.module, node.col_offset == 0))
     return found
 
 
 def _manifest_error(data: dict) -> str:
     """返回清单被拒绝的原因；清单合法时返回空串。"""
-    from app.core.plugin_core import PluginError, parse_manifest
+    from app.core.plugins.plugin_core import PluginError, parse_manifest
 
     try:
         parse_manifest(data)
@@ -101,7 +107,7 @@ def _library_plugin(plugin_id: str, name: str, module: str, body: str) -> tuple[
 @check("plugin_manifest_whitelist", "services")
 def plugin_manifest_whitelist(case: Case) -> None:
     """内置插件清单：字段全在白名单内，类型字段 / 旧数据字段 / 未知字段都被拒绝。"""
-    from app.core.plugin_core import PLUGIN_ID_PATTERN, PROTOCOL_FIELDS, load_manifest
+    from app.core.plugins.plugin_core import PLUGIN_ID_PATTERN, PROTOCOL_FIELDS, load_manifest
 
     folders = _manifest_dirs()
     assert len(folders) >= 9, f"内置插件清单数量不对：{len(folders)}"
@@ -122,7 +128,7 @@ def plugin_manifest_whitelist(case: Case) -> None:
     removed_type = _manifest_error({**base, "kind": "viewer"})
     assert removed_type and "类型" in removed_type, f"声明 kind 的清单应被拒绝：{removed_type!r}"
     removed_data = _manifest_error({**base, "capabilities": ["x"]})
-    assert removed_data and "data/" in removed_data, f"声明 capabilities 的清单应被拒绝：{removed_data!r}"
+    assert removed_data and "扩展接口" in removed_data, f"声明 capabilities 的清单应被拒绝：{removed_data!r}"
     unknown_field = _manifest_error({**base, "nonsense": 1})
     assert unknown_field and "未知字段" in unknown_field, f"未知字段应被拒绝：{unknown_field!r}"
     bad_id = _manifest_error({**base, "id": "Demo.Probe"})
@@ -136,7 +142,7 @@ def plugin_manifest_whitelist(case: Case) -> None:
 @check("plugin_data_refs", "services")
 def plugin_data_refs(case: Case) -> None:
     """清单的数据引用与库模块：键非空、文件存在且非空，查看器数据可解析。"""
-    from app.core.plugin_core import load_manifest
+    from app.core.plugins.plugin_core import load_manifest
 
     infos = [load_manifest(folder, builtin=True) for folder in _manifest_dirs()]
     for info in infos:
@@ -155,15 +161,17 @@ def plugin_data_refs(case: Case) -> None:
     for info in viewer_infos:
         payload = json.loads((info.path / info.data["viewer"]).read_text(encoding="utf-8"))
         assert isinstance(payload, dict), f"{info.id} 的查看器数据必须是对象"
-        assert payload.get("extensions"), f"{info.id} 的查看器数据缺少 extensions"
-        assert payload.get("kind"), f"{info.id} 的查看器数据缺少 kind"
-        assert str(payload.get("name") or "").strip(), f"{info.id} 的查看器数据缺少 name"
+        record = record_of(payload, info.id)
+        assert record, f"{info.id} 的查看器数据缺少 key = {info.id} 的记录"
+        assert record.get("extensions"), f"{info.id} 的查看器数据缺少 extensions"
+        assert record.get("kind"), f"{info.id} 的查看器数据缺少 kind"
+        assert str(record.get("name") or "").strip(), f"{info.id} 的查看器数据缺少 name"
 
 
 @check("plugin_imports", "services")
 def plugin_imports(case: Case) -> None:
     """插件源码的 import 边界：只用 app.sdk / 已声明的库插件 / 三方包。"""
-    from app.core.plugin_core import DM_PACKAGE, load_manifest
+    from app.core.plugins.plugin_core import DM_PACKAGE, load_manifest
     from app.services.plugin_service import plugin_service
 
     infos = [load_manifest(folder, builtin=True) for folder in _manifest_dirs()]
@@ -172,7 +180,7 @@ def plugin_imports(case: Case) -> None:
     for info in infos:
         allowed = set(info.depends_ids)
         for source in _plugin_sources(info.path):
-            for lineno, name in _imports(source):
+            for lineno, name, top_level in _imports(source):
                 if any(name == item or name.startswith(item + ".") for item in FORBIDDEN_IMPORTS):
                     problems.append(f"{info.id}/{source.name}:{lineno} 不该 import 程序内部模块 {name}")
                 if (name == "app" or name.startswith("app.")) and not (name == "app.sdk" or name.startswith("app.sdk.")):
@@ -183,8 +191,8 @@ def plugin_imports(case: Case) -> None:
                     target = max(matches, key=len) if matches else ""
                     if not target:
                         problems.append(f"{info.id}/{source.name}:{lineno} 引用了未知插件库：{name}")
-                    elif target != info.id and target not in allowed:
-                        problems.append(f"{info.id}/{source.name}:{lineno} 引用了未声明的依赖：{target}")
+                    elif top_level and target != info.id and target not in allowed:
+                        problems.append(f"{info.id}/{source.name}:{lineno} 顶层引用了未声明的依赖：{target}")
     assert not problems, "插件 import 边界检查未通过：" + "；".join(problems)
 
 
@@ -204,7 +212,7 @@ def plugin_stubs_current(case: Case) -> None:
 @check("plugin_class_contract", "services")
 def plugin_class_contract(case: Case) -> None:
     """每个插件类都继承 app.sdk.Plugin，元信息可注入，describe() 返回 (标题, 内容) 列表。"""
-    from app.core.plugin_core import import_entry, load_manifest, plugin_class, register_plugin_namespace
+    from app.core.plugins.plugin_core import import_entry, load_manifest, plugin_class, register_plugin_namespace
     from app.sdk import Plugin
 
     infos = [load_manifest(folder, builtin=True) for folder in _manifest_dirs()]
@@ -233,7 +241,7 @@ def plugin_class_contract(case: Case) -> None:
 @check("plugin_multi_library", "services")
 def plugin_multi_library(case: Case) -> None:
     """一个插件同时依赖并继承两个库插件仍能载入（库=插件，没有类型限制）。"""
-    from app.core import paths
+    from app.core.runtime import paths
     from app.sdk import ExtensionPoint
     from app.services.plugin_service import plugin_service
 
@@ -298,8 +306,8 @@ def plugin_multi_library(case: Case) -> None:
 @check("plugin_load_report", "services")
 def plugin_load_report(case: Case) -> None:
     """坏插件分别落在 manifest / import / setup 阶段，且不会影响别的插件。"""
-    from app.core import paths
-    from app.core.extensions import extension_registry
+    from app.core.runtime import paths
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
 
     root = Path(paths.PLUGIN_DIR)
@@ -367,7 +375,7 @@ def plugin_load_report(case: Case) -> None:
 @check("provides_note_recorded", "services")
 def provides_note_recorded(case: Case) -> None:
     """清单声明了扩展接口却没注册：只记一条备注，不算载入失败；补上注册后自动清掉。"""
-    from app.core import paths
+    from app.core.runtime import paths
     from app.services.plugin_service import PROVIDES_NOTE_PREFIX, plugin_service
 
     root = Path(paths.PLUGIN_DIR)
@@ -437,10 +445,10 @@ LEGACY_EXTENSION_TABLES = (
 
 @check("plugin_viewer_extensions", "services")
 def plugin_viewer_extensions(case: Case) -> None:
-    """扩展名只由插件 data/viewer.json 声明：注册表与清单一致，程序里不再写死扩展名表。"""
+    """扩展名只由插件 .data/viewer.json 声明：注册表与清单一致，程序里不再写死扩展名表。"""
     from app.sdk import data as viewer_data
-    from app.core.plugin_core import load_manifest
-    from app.sdk.viewers import open_api
+    from app.core.plugins.plugin_core import load_manifest
+    from app.services.viewer_service import open_api
 
     for legacy in LEGACY_EXTENSION_TABLES:
         assert not hasattr(viewer_data, legacy), f"扩展名表不应再写死在数据解析模块里：{legacy}"
@@ -455,7 +463,9 @@ def plugin_viewer_extensions(case: Case) -> None:
     declared: dict[str, list[str]] = {}
     for info in viewer_infos:
         payload = json.loads((info.path / info.data["viewer"]).read_text(encoding="utf-8"))
-        expected = {str(item).lower().lstrip(".") for item in payload["extensions"]}
+        record = record_of(payload, info.id)
+        assert record, f"{info.id} 的查看器数据缺少 key = {info.id} 的记录"
+        expected = {str(item).lower().lstrip(".") for item in record["extensions"]}
         registered = registry.viewer_by_id(info.id)
         assert registered is not None, f"{info.id} 没有注册查看器"
         assert set(registered.extensions) == expected, (
@@ -566,7 +576,7 @@ def sdk_console_output(case: Case) -> None:
     """控制台输出接口：默认落 loguru，程序提供实现时转发，插件侧用 ctx.console 播报。"""
     from loguru import logger
 
-    from app.core.extensions import extension_registry
+    from app.core.plugins.extensions import extension_registry
     from app.sdk import console as console_api
     from app.sdk.context import PluginContext
 
@@ -617,8 +627,8 @@ def sdk_console_output(case: Case) -> None:
 @check("plugin_incremental_toggle", "services")
 def plugin_incremental_toggle(case: Case) -> None:
     """启停插件只动该插件（与依赖它的插件），不再把整仓插件重载一遍。"""
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
 
     install_builtin_plugins()
@@ -664,3 +674,69 @@ def plugin_incremental_toggle(case: Case) -> None:
         plugin_service.set_enabled(library, True)
         plugin_service.load()
         plugin_service.bootstrap(APP_UI_EXTENSION, previous if previous is not None else api)
+
+
+@check("plugin_change_paths", "services")
+def plugin_change_paths(case: Case) -> None:
+    """变更路径（增量启停 / 卸载 / 重载 / 状态重置）都要重新对齐程序本体接口并真正重导插件代码。"""
+    import sys
+    from typing import Sequence
+
+    from app.core.manifest import manifest_kit
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
+    from app.services.plugin_service import STATE_MANIFEST_ID, plugin_service
+
+    class RecordingUi(AppUiApi):
+        """记录每次 `sync_plugins()` 调用，用来验证「载入插件后都会被调用一次」。"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.synced: list[tuple[str, ...]] = []
+
+        def sync_plugins(self, plugin_ids: Sequence[str]) -> tuple[str, ...]:
+            self.synced.append(tuple(plugin_ids))
+            return super().sync_plugins(plugin_ids)
+
+    install_builtin_plugins()
+    previous = extension_registry.provider(APP_UI_EXTENSION)
+    ui = RecordingUi()
+    plugin_service.bootstrap(APP_UI_EXTENSION, ui)
+    plugin_service.load()
+    target = "auto_keyword"
+    state_file = plugin_service.state_file
+    raw_state = state_file.read_text(encoding="utf-8") if state_file.is_file() else None
+    try:
+        assert ui.synced, "整体载入后应调用一次 sync_plugins()"
+
+        before = len(ui.synced)
+        plugin_service.set_enabled(target, True)
+        plugin_service.apply_changes((target,))
+        assert len(ui.synced) > before, "增量启用后应重新同步程序本体接口"
+        assert target in plugin_service._plugins, f"启用后应载入 {target}"
+
+        module_name = f"dm_plugin.{target}.plugin"
+        old_module = sys.modules.get(module_name)
+        old_plugin = plugin_service._plugins[target]
+        assert old_module is not None, f"{module_name} 应当在 sys.modules 里"
+        assert plugin_service.reload(target) == 1, f"重载 {target} 应返回 1"
+        assert sys.modules.get(module_name) is not None, "重载后插件模块应重新挂上"
+        assert sys.modules[module_name] is not old_module, "重载后插件模块应是重新导入的对象"
+        assert plugin_service._plugins[target] is not old_plugin, "重载后插件实例应被重建"
+
+        plugin_service.teardown(target)
+        assert module_name not in sys.modules, "卸载后插件模块应被丢掉"
+
+        plugin_service.set_enabled(target, True)
+        plugin_service.set_enabled(target, False)  # 这一写会把「已启用」那份状态备份下来
+        assert manifest_kit.backups(STATE_MANIFEST_ID), "写插件状态时应自动留一份备份"
+        plugin_service.reset_state()
+        assert plugin_service.get(target).enabled, "重置后应回到备份里的那份状态（已启用）"
+    finally:
+        if raw_state is None:
+            state_file.unlink(missing_ok=True)
+        else:
+            state_file.write_text(raw_state, encoding="utf-8")
+        plugin_service.set_enabled(target, False)
+        plugin_service.load()
+        plugin_service.bootstrap(APP_UI_EXTENSION, previous if previous is not None else ui)

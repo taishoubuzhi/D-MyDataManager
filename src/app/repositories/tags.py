@@ -62,8 +62,21 @@ class TagRepository(Repository[Tag]):
         """默认用户（管理员）可以管理任意标签，其他用户只能管理自己创建的标签。"""
         return bool(is_admin) or self.is_creator(tag, user_id)
 
+    def others_use(self, tag: Tag) -> int:
+        """有多少条**别人的**数据项还挂着它（用于阻止把共享标签转回个人）。"""
+        owner = tag.created_by if tag.created_by is not None else tag.user_id
+        stmt = (
+            select(func.count())
+            .select_from(item_tags)
+            .join(DataItem, DataItem.id == item_tags.c.item_id)
+            .where(item_tags.c.tag_id == tag.id)
+        )
+        if owner is not None:
+            stmt = stmt.where(func.coalesce(DataItem.user_id, -1) != int(owner))
+        return int(self.session.scalar(stmt) or 0)
+
     def set_global(self, tag: Tag, is_global: bool) -> bool:
-        """切换全局 / 个人归属；转为全局前检查是否已有同名全局标签。"""
+        """切换全局 / 个人归属：转全局前查同名全局标签，转个人前查别人是否还在用。"""
         if bool(tag.is_global) == bool(is_global):
             return True
         if is_global:
@@ -74,6 +87,8 @@ class TagRepository(Repository[Tag]):
                 return False
             tag.user_id = None
         else:
+            if self.others_use(tag):
+                return False
             # 转回个人标签要挂在创建者名下，否则 user_id 为空会被当成全局标签。
             tag.user_id = tag.created_by or tag.user_id
         tag.is_global = bool(is_global)

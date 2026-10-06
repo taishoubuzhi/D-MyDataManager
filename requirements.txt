@@ -1,5 +1,29 @@
+# 程序依赖：打包（pyappify.yml 的 requirements）与用户端 venv 都按这份装，
+# 装完即可用，不需要再手动补包；缺了也只降级、不影响启动（说明见 docs/DEPENDENCIES.md）。
+#
+# 它们的当前状态、缺失后果与一键安装命令用能力探测查看（探测实现：
+# src/app/core/capabilities.py；清单与说明：docs/DEPENDENCIES.md）。
+
+# —— 界面与基础
 PyQt6==6.11.0
 PyQt6-Fluent-Widgets==1.11.3
 SQLAlchemy==2.0.52
 loguru==0.7.3
 Pillow==12.3.0
+
+# —— 加速 / 容错（缺了自动退回标准库或内置实现，只是慢一点 / 松一点）
+orjson>=3.10            # 清单与配置 JSON 读写；缺失退回标准库 json
+fastjsonschema>=2.19    # 清单按 schema 严格校验；缺失只做最小结构校验
+argon2-cffi>=23.1       # 口令散列用 argon2id；缺失退回 PBKDF2-HMAC
+watchdog>=4.0           # 库文件夹递归监听；缺失退回 Qt 的 QFileSystemWatcher
+puremagic>=2.0          # 按文件内容嗅探 MIME；缺失只按扩展名
+charset-normalizer>=3.3 # 文本编码探测；缺失按固定顺序硬试
+
+# —— 对应功能用得到（装了才有这类文件 / 检索能力）
+pymupdf>=1.24           # PDF 正文抽取与页面渲染
+jieba>=0.42             # 中文分词（自动关键词质量更高）
+usearch>=2.9            # 本地向量索引（相似图片 / 语义检索）
+sqlite-vec>=0.1         # 把向量检索下推到 SQLite
+py7zr>=0.21             # 7z 压缩包列举与解包
+pyzipper>=0.3           # 加密 zip 读取
+rarfile>=4.1            # rar 压缩包列举（配合系统 bsdtar，见 docs/DEPENDENCIES.md）

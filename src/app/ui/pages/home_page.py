@@ -24,8 +24,8 @@ from qfluentwidgets import (
 )
 
 from ...core.config import resources_root
-from ...core.shell import reveal
-from ...core.signals import signalBus
+from ...core.runtime.shell import reveal
+from ...core.runtime.signals import signalBus
 from ...db import database
 from ...repositories import ArchiveRepository
 from ...sdk import ExtensionPoint

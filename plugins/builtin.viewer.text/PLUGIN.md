@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖与 data 声明 |
 | plugin.py | 插件类 TextViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据（名称、kind=text、宿主、扩展名、能力） |
+| .data/viewer.json | 查看器元数据（名称、kind=text、宿主、扩展名、能力） |
 
 ## 依赖
 
@@ -19,11 +19,11 @@
 
 - 查看器（app.viewer）：kind = text，认领 60 多个常见文本与代码扩展名
   （txt / log / json / xml / yaml / toml / ini / py / js / ts / java / c / cpp / go / rs / sh / ps1 / sql / html / css …），
-  能力：编码探测 / 编码切换 / 大文件截断 / 行号统计。完整清单见 data/viewer.json。
+  能力：编码探测 / 编码切换 / 大文件截断 / 行号统计。完整清单见 .data/viewer.json。
 
 ## 数据文件
 
-- data/viewer.json：想多认领一种后缀（比如 .md2 之外的），只改这里的 extensions。
+- .data/viewer.json：想多认领一种后缀（比如 .md2 之外的），只改这里的 extensions。
 
 ## 说明
 

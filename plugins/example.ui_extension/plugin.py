@@ -10,6 +10,7 @@ from pathlib import Path
 from qfluentwidgets import FluentIcon, SettingCard
 
 from app.sdk import Events, ExtensionPoint, Plugin, PluginContext
+from app.sdk.manifest import value_of
 
 
 def _accept(path: Path) -> bool:
@@ -81,8 +82,7 @@ class UiExtensionSamplePlugin(Plugin):
         return ["来自示例插件", f"文件名：{getattr(item, 'name', '') or '（未选中）'}"]
 
     def _settings_card(self, parent) -> SettingCard:
-        data = self._ctx.data("info")
-        about = str(data.get("about") if isinstance(data, dict) else "") or "示例插件贡献的设置卡片"
+        about = str(value_of(self._ctx.data("info", {}), "about", "")) or "示例插件贡献的设置卡片"
         return SettingCard(FluentIcon.HEART, "示例设置", about, parent)
 
     # ---- 贡献的动作回调 --------------------------------------------------

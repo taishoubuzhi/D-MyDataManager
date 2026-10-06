@@ -10,22 +10,52 @@
     storage.write_json(path, payload)
 
 写失败只记日志并返回 False：插件不该因为一次落盘失败就崩掉主界面。
+底层 JSON 走 `app.core.runtime.jsonio`（优先 orjson，缺依赖自动退回标准库）。
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-__all__ = ["config_dir", "config_file", "data_dir", "read_json", "resources_dir", "write_json"]
+__all__ = [
+    "config_dir",
+    "config_file",
+    "data_dir",
+    "dumps",
+    "loads",
+    "read_json",
+    "resources_dir",
+    "write_json",
+]
+
+
+def _jsonio():
+    """底层 JSON 实现（延迟导入，避免 SDK 在 import 期就依赖 core）。"""
+    from ..core.runtime import jsonio
+
+    return jsonio
+
+
+def loads(payload: str | bytes) -> Any:
+    """解析 JSON 文本 / 字节（优先 orjson）。"""
+    return _jsonio().loads(payload)
+
+
+def dumps(payload: Any, *, indent: int | None = None) -> str:
+    """序列化成 JSON 文本（默认紧凑单行；写文件才需要缩进）。
+
+    进程间协议（worker 的 JSON-Lines、SSE 分段）必须单行，所以这里默认不缩进——
+    需要好看的文件内容请用 `write_json()`。
+    """
+    return _jsonio().dumps(payload, indent=indent)
 
 
 def config_dir() -> Path:
     """程序配置目录（.configs）。"""
-    from ..core import paths
+    from ..core.runtime import paths
 
     return paths.CONFIG_DIR
 
@@ -41,7 +71,7 @@ def resources_dir() -> Path:
     插件需要放大文件（模型权重、缓存等）时用它，别写进插件自己的目录：
     插件目录在覆盖安装时会被整个删掉重建。
     """
-    from ..core import paths
+    from ..core.runtime import paths
 
     return paths.DATA_DIR
 
@@ -55,19 +85,12 @@ def data_dir(name: str) -> Path:
 
 def read_json(path: str | Path, default: Any = None) -> Any:
     """读一个 JSON 文件；不存在或损坏时返回 default。"""
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return default
+    return _jsonio().read_json(path, default)
 
 
 def write_json(path: str | Path, payload: Any) -> bool:
     """把 payload 写成 JSON 文件；成功返回 True。"""
-    target = Path(path)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except (OSError, TypeError, ValueError) as exc:
-        logger.warning("写入配置失败 {}：{}", target, exc)
-        return False
+    ok = _jsonio().write_json(path, payload)
+    if not ok:
+        logger.warning("写入配置失败：{}", path)
+    return ok

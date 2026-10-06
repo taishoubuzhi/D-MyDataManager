@@ -6,9 +6,9 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| plugin.json | 清单：id、名称、depends `builtin.lib.editor`，`data: {"editor": "data/editor.json"}` |
+| plugin.json | 清单：id、名称、depends `builtin.lib.editor`，`data: {"editor": ".data/editor.json"}` |
 | plugin.py | 入口：`OfficeEditorPlugin(EditorPlugin)`，`default_kind = KIND_EXTERNAL`、`default_host = ""` |
-| data/editor.json | 显示名、`kind="external"`、扩展名清单、能力、排序 |
+| .data/editor.json | 显示名、`kind="external"`、扩展名清单、能力、排序 |
 
 ## 扩展名
 

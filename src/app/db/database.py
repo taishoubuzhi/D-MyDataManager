@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import config, db_file, db_url
 from .models import Base
 
@@ -50,13 +50,32 @@ _FTS_BACKFILL = f"""INSERT INTO {FTS_TABLE}(rowid, name, content, keywords)
     SELECT id, name, content, keywords FROM {FTS_SOURCE_TABLE}
     WHERE id NOT IN (SELECT rowid FROM {FTS_TABLE})"""
 
+#: SQLite 连接级 PRAGMA：名字 → 值。
+#:
+#: - `foreign_keys=ON`：SQLite 默认不校验外键，程序靠它保证引用完整；
+#: - `journal_mode=WAL`：读写不互相阻塞（WAL 下崩溃安全性由日志保证）；
+#: - `synchronous=NORMAL`：WAL 下只丢最近一次提交、不坏库，换来每次提交不再 fsync；
+#: - `temp_store=MEMORY`：排序 / 临时表放内存；
+#: - `cache_size=-32000`：负数表示 KiB，约 32 MiB 页缓存；
+#: - `mmap_size=268435456`：256 MiB 只读映射，超出可用内存时由 SQLite 自己收敛；
+#: - `busy_timeout=5000`：并发写等 5 秒再报 locked，而不是立刻抛错。
+SQLITE_PRAGMAS: dict[str, object] = {
+    "foreign_keys": "ON",
+    "journal_mode": "WAL",
+    "synchronous": "NORMAL",
+    "temp_store": "MEMORY",
+    "cache_size": -32000,
+    "mmap_size": 268435456,
+    "busy_timeout": 5000,
+}
+
 
 def _sqlite_pragmas(dbapi_connection, _record) -> None:
-    """SQLite 默认关闭外键约束，这里打开并启用 WAL 以改善并发读写。"""
+    """每条新连接都套一遍 `SQLITE_PRAGMAS`（非 SQLite 连接忽略错误）。"""
     try:
         cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.execute("PRAGMA journal_mode=WAL")
+        for name, value in SQLITE_PRAGMAS.items():
+            cursor.execute(f"PRAGMA {name}={value}")
         cursor.close()
     except Exception:  # 非 SQLite 连接忽略
         pass
@@ -370,3 +389,25 @@ def dispose_engine() -> None:
         _engine.dispose()
     _engine = None
     _session_factory = None
+
+
+def optimize_database() -> dict[str, int]:
+    """整理数据库文件：`PRAGMA optimize` 刷新查询统计，`VACUUM` 回收删数据留下的空洞。
+
+    `VACUUM` 要独占整库、且不能在事务里跑，所以这里用 AUTOCOMMIT 连接；
+    调用方（设置页的「整理数据库」）应当先 `dispose_engine()` 放掉其它连接，
+    整理完再重建会话。返回整理前后的字节数。
+    """
+    path = db_file()
+    before = path.stat().st_size if path.is_file() else 0
+    engine = get_engine()
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.exec_driver_sql("PRAGMA optimize")
+            connection.exec_driver_sql("VACUUM")
+    except Exception as exc:  # noqa: BLE001 - 整理失败要报清楚，但不能让调用方拿到半个状态
+        logger.error("数据库整理失败：{}", exc)
+        raise
+    after = path.stat().st_size if path.is_file() else 0
+    logger.info("数据库整理完成：{} -> {} 字节（释放 {}）", before, after, max(before - after, 0))
+    return {"before": before, "after": after, "freed": max(before - after, 0)}

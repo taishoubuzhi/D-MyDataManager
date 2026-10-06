@@ -59,8 +59,8 @@
 
 本插件同时提供两种对外面：`libraries` 暴露页面模板与弹窗**类**（别的插件可以 import、继承，或自己实例化），
 `provides` 暴露当前程序里那**一个宿主实例**（消费方 `ctx.require("dialog")` / `ctx.require("ui")`，
-本插件被禁用时它会随之消失，消费方应当提示而不是崩溃）。两者的分工见 `plugins/PLUGIN_PROTOCOL.md` 2.7。
-内置 7 个查看器插件的 data/viewer.json 里都写 host: "dialog"，查看器库据此 require 本插件：
+本插件被禁用时它会随之消失，消费方应当提示而不是崩溃）。两者的分工见 `../../docs/PLUGIN_PROTOCOL.md` 2.7。
+内置 7 个查看器插件的 .data/viewer.json 里都写 host: "dialog"，查看器库据此 require 本插件：
 禁用本插件后，查看器会提示缺少界面工具库。
 
 音频 / 视频查看器用的播放控件就是本库的 `PlayerPanel`：`builtin.viewer.audio` 与 `builtin.viewer.video` 的视图分别是

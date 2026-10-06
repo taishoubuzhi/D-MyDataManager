@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 from enum import Enum
@@ -23,7 +22,7 @@ from qfluentwidgets import (
     qconfig,
 )
 
-from . import paths
+from .runtime import jsonio, paths
 
 
 class Language(Enum):
@@ -55,18 +54,6 @@ DOUBLE_CLICK_EDITOR = "editor"
 DOUBLE_CLICK_ACTIONS = (DOUBLE_CLICK_VIEWER, DOUBLE_CLICK_EDITOR)
 
 
-class SimpleDisplayValidator(OptionsValidator):
-    """简化显示挡位：把旧版的布尔值换算成挡位（`true` → 完全简化、`false` → 不简化）。"""
-
-    def __init__(self) -> None:
-        super().__init__(list(SIMPLE_MODES))
-
-    def correct(self, value) -> str:
-        if isinstance(value, bool):
-            return SIMPLE_FULL if value else SIMPLE_NONE
-        return value if self.validate(value) else SIMPLE_DEFAULT
-
-
 class Config(QConfig):
     """全局配置对象。"""
 
@@ -90,7 +77,7 @@ class Config(QConfig):
     expandCategories = ConfigItem("Layout", "Expand-Categories", False, BoolValidator())
     expandedFilters = ConfigItem("Layout", "Expanded-Filters", [])
     simpleDisplay = OptionsConfigItem(
-        "Layout", "Simple-Display", SIMPLE_DEFAULT, SimpleDisplayValidator()
+        "Layout", "Simple-Display", SIMPLE_DEFAULT, OptionsValidator(list(SIMPLE_MODES))
     )
     # 悬停提示：鼠标停在按钮或标题上多久才弹出说明（毫秒，0 表示立刻弹出）
     tooltipDelay = RangeConfigItem("Layout", "Tooltip-Delay", 2000, RangeValidator(0, 10_000))
@@ -202,7 +189,7 @@ def db_url() -> str:
 def _legacy_library_path() -> str:
     """旧版配置里的库文件夹路径（Storage/Library-Path）。"""
     try:
-        data = json.loads(paths.CONFIG_FILE.read_text(encoding="utf-8"))
+        data = jsonio.loads(paths.CONFIG_FILE.read_bytes())
     except (OSError, ValueError):
         return ""
     storage = data.get("Storage")
@@ -279,9 +266,34 @@ def _rebase_library_paths(old_root: Path, new_root: Path) -> None:
             library.path = str(new_root / relative)
 
 
+def _migrate_legacy_simple_display() -> None:
+    """一次性迁移：旧版把「简化显示」存成布尔值，改成三挡位后按 不简化 / 完全简化 换算。
+
+    只在启动读配置之前跑一次；换算结果直接落到配置文件，之后布尔值不再有特殊含义。
+    """
+    path = paths.CONFIG_FILE
+    if not path.is_file():
+        return
+    try:
+        payload = jsonio.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    section = payload.get("Layout")
+    if not isinstance(section, dict) or not isinstance(section.get("Simple-Display"), bool):
+        return
+    from .manifest.kit import write_json_atomic  # 与清单机制共用原子写
+
+    section["Simple-Display"] = SIMPLE_FULL if section["Simple-Display"] else SIMPLE_NONE
+    write_json_atomic(path, payload)
+    logging.getLogger(__name__).info("已把「简化显示」的旧布尔值换算成挡位：%s", section["Simple-Display"])
+
+
 def load_config() -> None:
     paths.migrate_app_dirs()
     paths.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_simple_display()
     qconfig.load(str(paths.CONFIG_FILE), config)
     # 上一次退出时锁上的资源文件夹要先放行，否则迁移与建目录都会被拒绝
     release_resource_root()

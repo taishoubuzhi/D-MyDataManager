@@ -199,7 +199,7 @@ class ItemsApi(Protocol):
 def provider() -> object | None:
     """程序提供的数据接口（`items.open`）；没有（脚本、测试）时为 None。"""
     try:
-        from ..core.extensions import extension_registry
+        from ..core.plugins.extensions import extension_registry
     except Exception:
         return None
     return extension_registry.provider(ITEMS_EXTENSION)

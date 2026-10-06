@@ -1,0 +1,26 @@
+{
+  "manifest": "1",
+  "id": "builtin.viewer.markdown.viewer",
+  "version": "1",
+  "kind": "registry",
+  "title": "Markdown 查看器",
+  "description": "渲染 Markdown 文档，超长文档只显示前 512 KiB。",
+  "items": [
+    {
+      "key": "builtin.viewer.markdown",
+      "name": "Markdown 查看器",
+      "kind": "viewer",
+      "host": "dialog",
+      "extensions": [
+        "md",
+        "markdown"
+      ],
+      "capabilities": [
+        "Markdown 渲染",
+        "大文件截断"
+      ],
+      "description": "渲染 Markdown 文档，超长文档只显示前 512 KiB。",
+      "order": 100
+    }
+  ]
+}

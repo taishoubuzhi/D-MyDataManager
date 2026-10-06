@@ -1,6 +1,6 @@
 """日志 / 控制台检查：统一格式规范，插件只能走 SDK 控制台。
 
-统一格式：`时间 | 级别 | 来源 | 函数:行 | 消息`（`app.core.logging_setup.DEFAULT_FORMAT`）。
+统一格式：`时间 | 级别 | 来源 | 函数:行 | 消息`（`app.core.runtime.logging_setup.DEFAULT_FORMAT`）。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ _SAMPLES = {"控制台自检：绑定来源", "控制台自检：按调用模块
 @check("console_source_mapping", "services")
 def console_source_mapping(case: Case) -> None:
     """来源列映射：插件去掉 `dm_plugin.` 前缀，`__main__` 记成 app，旧格式串自动升级。"""
-    from app.core import logging_setup
+    from app.core.runtime import logging_setup
     from app.core.config import Config
 
     problems = []
@@ -62,7 +62,7 @@ def console_line_format(case: Case) -> None:
     """真正渲染一行：时间 / 级别 / 来源 / 函数:行 / 消息 五段齐全，来源与行号指到调用点。"""
     from loguru import logger
 
-    from app.core import logging_setup
+    from app.core.runtime import logging_setup
     from app.sdk.console import console_for, warning
 
     lines: list[tuple[str, dict]] = []
@@ -144,6 +144,6 @@ def plugin_logging_via_sdk(case: Case) -> None:
             wired += 1
     if wired < 10:
         problems.append(f"只有 {wired} 个插件模块接上了 SDK 控制台，应该在 10 个以上")
-    if not (BUILTIN_PLUGINS / "lib.model" / "adapters" / "worker.py").exists():
+    if not (BUILTIN_PLUGINS / "lib.model" / ".plugin" / "adapters" / "worker.py").exists():
         problems.append("找不到 worker 适配器")
     assert not problems, "插件日志没统一走 SDK 控制台：" + "；".join(problems[:8])

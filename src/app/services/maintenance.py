@@ -11,7 +11,7 @@ from pathlib import Path
 
 from qfluentwidgets import ConfigItem, qconfig
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import config, library_root, release_resource_root
 from ..db import database
 from ..db.seed import seed
@@ -79,3 +79,13 @@ def reset_to_defaults() -> None:
     """恢复初始化状态：设置回默认值 + 清空运行期数据。此操作不可撤销。"""
     reset_config()
     reset_runtime_data()
+
+
+def compact_database() -> dict[str, int]:
+    """整理数据库文件：`PRAGMA optimize` + `VACUUM`，返回整理前后的字节数。
+
+    会先释放引擎：`VACUUM` 要独占整库、且不能在事务里跑。调用方拿到结果后必须
+    重建会话（旧会话绑在已经 dispose 的引擎上）。
+    """
+    database.dispose_engine()
+    return database.optimize_database()

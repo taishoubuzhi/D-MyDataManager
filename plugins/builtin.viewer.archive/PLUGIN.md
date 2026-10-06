@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖与 data 声明 |
 | plugin.py | 插件类 ArchiveViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据（kind=archive、扩展名、能力） |
+| .data/viewer.json | 查看器元数据（kind=archive、扩展名、能力） |
 
 ## 依赖
 
@@ -22,4 +22,4 @@
 
 ## 数据文件
 
-- data/viewer.json：元数据；zip 之外的格式按 tar 系列处理，成员上限来自程序侧常量。
+- .data/viewer.json：元数据；zip 之外的格式按 tar 系列处理，成员上限来自程序侧常量。

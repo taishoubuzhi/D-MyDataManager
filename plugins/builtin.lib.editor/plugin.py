@@ -1,16 +1,17 @@
 """编辑器工具库（也是入口文件）：EditorPlugin 基类、对外导出、入口类 EditorLibraryPlugin。
 
 具体编辑器插件继承 `EditorPlugin`，只实现 `create_editor()`；注册、规则、窗口都由本库负责。
-本库在 setup() 里把调度接口 `editor.open` 暴露成 `EditorOpenApi`，程序侧 `app.sdk.editors` 只做转调。
+本库在 setup() 里把调度接口 `editor.open` 暴露成 `EditorOpenApi`，程序侧 `app.services.editor_service` 只做转调。
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 
 from app.sdk import Plugin, PluginError, SdkError
-from app.sdk.editors import EDITOR_EXTENSION
+from app.sdk.manifest import record_of
+#: 本库提供的扩展点：程序侧（`app.services.editor_service`）与别的插件按它取调度接口
+EDITOR_EXTENSION = "editor.open"
 
 from .config_page import EditorConfigPage
 from .editor_window import EditorWindow
@@ -43,7 +44,8 @@ CONFIG_PAGE_TITLE = "编辑器"
 
 
 class EditorPlugin(Plugin):
-    """编辑器插件基类：清单 data 段声明 kind / extensions，子类实现 create_editor()。"""
+    """编辑器插件基类：`.data/editor.json`（统一清单格式，`key` = 插件 id）声明 kind /
+    extensions / host，子类实现 create_editor()。"""
 
     #: 子类可覆盖：编辑器类型（内置控件 / 外部程序）与默认窗口宿主、排序
     default_kind = KIND_INTERNAL
@@ -52,9 +54,9 @@ class EditorPlugin(Plugin):
 
     def setup(self, ctx) -> None:
         self._ctx = ctx
-        data = ctx.data("editor")
-        if not isinstance(data, Mapping):
-            raise SdkError(f"插件 {self.id} 的编辑器数据必须是对象：data/editor.json")
+        data = record_of(ctx.data("editor"), self.id)
+        if not data:
+            raise SdkError(f"插件 {self.id} 的编辑器数据缺少记录：.data/editor.json 的 items 里要有 key = {self.id}")
         host = str(data.get("host") or self.default_host)
         if host:
             ctx.require(host)  # 内置编辑器要弹窗，缺界面工具库就注册失败
@@ -128,7 +130,7 @@ class EditorPlugin(Plugin):
 class EditorLibraryPlugin(EditorPlugin):
     """编辑器工具库入口：注册 `editor.open` 接口与「编辑器」配置页。
 
-    数据管理页右键的「编辑器 ▸」子菜单由程序本体（`ManagePage`）按 `app.sdk.editors`
+    数据管理页右键的「编辑器 ▸」子菜单由程序本体（`ManagePage`）按 `app.services.editor_service`
     搭出来，所以本插件不贡献菜单项——编辑器库被禁用时那个子菜单照样在，只是只剩
     「系统默认程序 / 交给系统选择…」。
     """

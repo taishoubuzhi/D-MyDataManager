@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from .harness import PAGE_ATTRS, ROOT, Case, build_window, check, dispose_window, ensure_app, install_builtin_plugins
@@ -1031,16 +1032,29 @@ def user_card_info(case: Case) -> None:
 @check("simple_modes", "pages")
 def simple_modes(case: Case) -> None:
     """简化显示三挡位：不简化 / 默认（只简化不会混淆的图标）/ 完全简化。"""
-    from app.core.config import config
+    from app.core.config import _migrate_legacy_simple_display, config
+    from app.core.runtime import paths as app_paths
     from app.ui.framework import IconTextButton, IconTextLabel, IconTextPrimaryButton, simple_mode
     from app.ui.pages.settings_page import ComboSettingCard
 
     problems: list[str] = []
     validator = config.simpleDisplay.validator
-    if validator.correct(True) != "full" or validator.correct(False) != "none":
-        problems.append("旧版布尔值没有换算成挡位（true → 完全简化、false → 不简化）")
-    if validator.correct("没有这个挡位") != "default":
-        problems.append("非法的简化挡位没有回到「默认」")
+    if list(validator.options) != ["none", "default", "full"]:
+        problems.append(f"简化显示的挡位不是三挡：{list(validator.options)}")
+    # 旧版布尔值不再在读取时换算，而是启动时一次性改写配置文件
+    raw_path = app_paths.CONFIG_FILE
+    raw_text = raw_path.read_text(encoding="utf-8")
+    try:
+        for raw_bool, wanted in ((False, "none"), (True, "full")):
+            payload = json.loads(raw_text)
+            payload.setdefault("Layout", {})["Simple-Display"] = raw_bool
+            raw_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            _migrate_legacy_simple_display()
+            migrated = json.loads(raw_path.read_text(encoding="utf-8"))["Layout"]["Simple-Display"]
+            if migrated != wanted:
+                problems.append(f"旧版布尔值 {raw_bool} 没有换算成 {wanted!r}，迁移后是 {migrated!r}")
+    finally:
+        raw_path.write_text(raw_text, encoding="utf-8")
 
     install_builtin_plugins()
     app = ensure_app()
@@ -1083,10 +1097,6 @@ def simple_modes(case: Case) -> None:
         for button in (page.toggle_button, page.options_button, page.reveal_button, page.delete_button):
             if button.text():
                 problems.append(f"「默认」挡位下图标唯一的按钮「{button.full_text}」应该简化")
-
-        config.set(config.simpleDisplay, True)
-        if simple_mode() != "full":
-            problems.append("通过配置写入旧版 true 没有换算成「完全简化」")
 
         combos = [
             card

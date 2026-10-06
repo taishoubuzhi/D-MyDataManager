@@ -10,9 +10,15 @@
   "entry": "plugin.py",
   "class": "AutoKeywordPlugin",
   "depends": [
-    { "id": "lib.autolabel" },
-    { "id": "lib.model", "optional": true },
-    { "id": "builtin.lib.ui" }
+    {
+      "id": "lib.autolabel"
+    },
+    {
+      "id": "lib.model"
+    },
+    {
+      "id": "builtin.lib.ui"
+    }
   ],
   "options": [
     {
@@ -37,7 +43,7 @@
   "libraries": [
     {
       "name": "runner",
-      "module": "runner.py",
+      "module": ".plugin/runner.py",
       "description": "关键词执行逻辑：按数据类型排请求、收结果、写库。"
     }
   ]

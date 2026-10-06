@@ -6,7 +6,7 @@ from loguru import logger
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import library_root
 from .models import Category, Library, Tag, User
 

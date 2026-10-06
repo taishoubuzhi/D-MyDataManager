@@ -354,7 +354,7 @@ def privacy_state(case: Case) -> None:
     """隐私保护：开关只改状态、隐藏数据进出 `.hiddens`、隐藏目录枚举可失效。"""
     from pathlib import Path
 
-    from app.core import paths
+    from app.core.runtime import paths
     from app.core.config import config, resources_root
     from app.services import ImportService, ItemService, LibraryService
     from app.services.privacy_service import privacy
@@ -364,7 +364,7 @@ def privacy_state(case: Case) -> None:
     assert privacy.state_text(), "状态文本不应为空"
     # 开关全关时启动不能碰 ACL：白放行一次要给整棵 .resources 传播继承（十几万个文件），
     # 表现就是「启动 3/8」卡住几分钟起不来
-    from app.core import acl
+    from app.core.runtime import acl
 
     calls: list[str] = []
     real_unlock = acl.unlock
@@ -790,7 +790,7 @@ def library_single(case: Case) -> None:
     """库文件夹：只保留一个默认库、额外库被吸收、布局目录齐全、目录名被清洗。"""
     from pathlib import Path
 
-    from app.core import paths
+    from app.core.runtime import paths
     from app.core.config import library_root
     from app.repositories import LibraryRepository
     from app.services import LibraryService, sanitize_dir_name
@@ -1025,7 +1025,7 @@ def archive_hidden_state(case: Case) -> None:
     """隐藏态特例：先对齐隐藏位与回收站，再考虑新建（修缺陷 ①：归档里也有、回收站里也有的数据被复制第二份）。"""
     from pathlib import Path
 
-    from app.core import paths
+    from app.core.runtime import paths
     from app.repositories import ItemFilter, ItemRepository
     from app.services import LibraryService
 

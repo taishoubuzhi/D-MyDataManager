@@ -20,7 +20,7 @@
   ——跟随系统就是「启用」，自己挑过就是「自定义」），
   「设置对齐」开共享库的 `AlignDialog`（`purpose="keyword"`），「重置」把这一行还原成系统方案、「全部重置」还原整张表；
   选中的行下面会写清楚它实际调哪个模型。
-* **跟随系统方案**：`lib.autolabel/data/align.json` 给每种数据类型都配好了模型（轻量优先），对齐表的「方案」列显示这一行是
+* **跟随系统方案**：`lib.autolabel/.data/align.json` 给每种数据类型都配好了模型（轻量优先），对齐表的「方案」列显示这一行是
   `启用`（跟随系统）还是 `自定义`。选中一行点「设置对齐」，在编辑框里勾上「启用系统方案」就让这一行**跟随系统**（`AlignRow.use_preset`：模型与对齐模型都用出厂值，
   出厂换模型它跟着换；要在编辑框里取消勾选「启用系统方案」才能自己挑模型与对齐模型，下拉里 `已登记` 组不会再重复列出系统方案已有的同一个模型）。
   「一键补全」把这一行还缺的模型逐条 `models.create_from_template(key)` 登记成**草稿**并写回对齐表；缺**模型文件**时弹**一个**确认框
@@ -58,7 +58,7 @@
 ## 边界
 
 * 只读/写自己需要的数据：`app.sdk.items`（`list_items` / `add_keywords` / `notify_changed`）、
-  `app.sdk.models`（`templates` / `create_from_template` / `requirements` / `page_route`）、
+  `dm_plugin.lib.model.api`（`templates` / `create_from_template` / `requirements` / `page_route`）、
   `app.sdk.ui.open_page`；模型批量一律走共享库的 `pipeline.run()` → `models.run_batch()`。
 * 界面只用集成界面工具库（`dm_plugin.builtin.lib.ui.plugin`）与共享控件
   （`dm_plugin.lib.autolabel.ui.controls`），图标用 `FluentIcon` 名字字符串。

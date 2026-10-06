@@ -7,14 +7,55 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import config, cover_dir
 from ..db.models import DataItem, DataType, Feature
 
+try:  # 内容嗅探（能认出改了扩展名的文件）；缺依赖时只看扩展名
+    import puremagic as _puremagic
+except ImportError:  # pragma: no cover - 取决于运行环境
+    _puremagic = None
 
-def guess_mime(name: str, fallback: str = "application/octet-stream") -> str:
-    mime, _ = mimetypes.guess_type(name)
-    return mime or fallback
+#: 扩展名判不出来时的兜底 MIME
+FALLBACK_MIME = "application/octet-stream"
+
+
+def mime_of_file(source: str | Path) -> str:
+    """按**文件内容**猜 MIME（puremagic）；没装依赖 / 认不出 / 读不了都返回空串。
+
+    puremagic 认不出会抛 `PureError`（纯文本、小文件常常认不出），所以这里吞掉异常：
+    「内容认不出」是正常情况，交给扩展名兜底。
+    """
+    if _puremagic is None:
+        return ""
+    try:
+        return str(_puremagic.from_file(str(source), mime=True) or "")
+    except Exception:  # noqa: BLE001 - PureError / OSError 都表示「这条线索没用」
+        return ""
+
+
+def guess_mime(
+    name: str, source: str | Path | None = None, fallback: str = FALLBACK_MIME
+) -> str:
+    """猜 MIME：扩展名与文件内容都看，跨类冲突时以内容为准。
+
+    规则（内容嗅探能认出被改名的文件，但也会把普通 zip 当成 docx，所以不是无脑优先）：
+
+    - 内容认不出来（纯文本、小文件）→ 用扩展名；
+    - 扩展名未知或只给出 `application/octet-stream` → 用内容；
+    - 两者顶层类型相同（`text/*`、`application/*`…）→ 用扩展名，它更具体
+      （`.md` 比 `text/plain`、`.zip` 比 docx 准）；
+    - 顶层类型不同（把 png 改名成 `.txt`）→ 用内容。
+    """
+    by_name, _encoding = mimetypes.guess_type(name or "")
+    by_content = mime_of_file(source) if source is not None else ""
+    if not by_content:
+        return by_name or fallback
+    if not by_name or by_name in (fallback, FALLBACK_MIME):
+        return by_content
+    if by_name.split("/", 1)[0] == by_content.split("/", 1)[0]:
+        return by_name
+    return by_content
 
 
 def image_size(source: str | Path) -> tuple[int, int] | None:

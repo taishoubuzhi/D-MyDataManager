@@ -1,0 +1,104 @@
+{
+  "manifest": "1",
+  "id": "core.plugins",
+  "version": "1",
+  "kind": "module-data",
+  "items": [
+    {
+      "key": "manifest_name",
+      "value": "plugin.json",
+      "label": "插件清单文件名"
+    },
+    {
+      "key": "source_builtin",
+      "value": "builtin",
+      "label": "内置插件来源标识"
+    },
+    {
+      "key": "source_external",
+      "value": "external",
+      "label": "外部插件来源标识"
+    },
+    {
+      "key": "plugin_id_pattern",
+      "value": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+      "label": "插件 id 正则（可直接拼进 dm_plugin.<id>）"
+    },
+    {
+      "key": "dm_package",
+      "value": "dm_plugin",
+      "label": "插件包的命名空间前缀"
+    },
+    {
+      "key": "phases",
+      "value": ["manifest", "dependency", "import", "construct", "setup"],
+      "label": "载入阶段（诊断、插件页与自检共用）"
+    },
+    {
+      "key": "protocol_fields",
+      "value": [
+        "id",
+        "name",
+        "version",
+        "api_version",
+        "entry",
+        "class",
+        "depends",
+        "conflicts",
+        "provides",
+        "options",
+        "libraries",
+        "description",
+        "author",
+        "builtin",
+        "enabled"
+      ],
+      "label": "协议字段白名单：出现别的字段一律报错"
+    },
+    {
+      "key": "removed_type_fields",
+      "value": ["kind", "kinds", "kind_label", "kind_description", "kind_requires_extensions"],
+      "label": "已取消的类型字段"
+    },
+    {
+      "key": "removed_data_fields",
+      "value": ["extensions", "capabilities"],
+      "label": "已取消、改由库插件的扩展接口承载的字段"
+    },
+    {
+      "key": "removed_protocol_fields",
+      "value": {
+        "incompatible": "conflicts",
+        "load_after": "depends（载入顺序由依赖决定）",
+        "data": "数据文件固定放 .data/，用 ctx.data(\"name\") 读",
+        "manager_version": "api_version（协议版本只有一个）"
+      },
+      "label": "已删字段 → 现应改用的字段（写错时的提示）"
+    },
+    {
+      "key": "option_kind_labels",
+      "value": {
+        "bool": "开关",
+        "int": "整数",
+        "text": "文本",
+        "choice": "单选"
+      },
+      "label": "选项类型 → 界面用中文名（类型标识本身是代码约定，见 OPTION_* 常量）"
+    },
+    {
+      "key": "option_key_pattern",
+      "value": "^[a-z][a-z0-9_.\\-]{0,63}$",
+      "label": "选项键名正则"
+    },
+    {
+      "key": "option_true_texts",
+      "value": ["1", "true", "yes", "on", "是", "开"],
+      "label": "文本里算「真」的写法"
+    },
+    {
+      "key": "option_false_texts",
+      "value": ["0", "false", "no", "off", "否", "关"],
+      "label": "文本里算「假」的写法"
+    }
+  ]
+}

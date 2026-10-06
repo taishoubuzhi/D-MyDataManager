@@ -1,0 +1,287 @@
+{
+  "manifest": "1",
+  "id": "lib.autolabel.rules",
+  "version": "1",
+  "kind": "registry",
+  "title": "自动标签规则（出厂）",
+  "description": "出厂规则；用户改动写 .configs/autolabel.rules.json（同名 key 覆盖出厂项）",
+  "items": [
+    {
+      "key": "type.image",
+      "name": "图片",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "image",
+      "tags": [
+        "图片"
+      ]
+    },
+    {
+      "key": "type.video",
+      "name": "视频",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "video",
+      "tags": [
+        "视频"
+      ]
+    },
+    {
+      "key": "type.audio",
+      "name": "音频",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "audio",
+      "tags": [
+        "音频"
+      ]
+    },
+    {
+      "key": "type.document",
+      "name": "文档",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "document",
+      "tags": [
+        "文档"
+      ]
+    },
+    {
+      "key": "type.spreadsheet",
+      "name": "表格",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "spreadsheet",
+      "tags": [
+        "表格"
+      ]
+    },
+    {
+      "key": "type.presentation",
+      "name": "演示文稿",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "presentation",
+      "tags": [
+        "演示文稿"
+      ]
+    },
+    {
+      "key": "type.archive",
+      "name": "压缩包",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "archive",
+      "tags": [
+        "压缩包"
+      ]
+    },
+    {
+      "key": "type.code",
+      "name": "代码",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "code",
+      "tags": [
+        "代码"
+      ]
+    },
+    {
+      "key": "type.text",
+      "name": "纯文本",
+      "kind": "match",
+      "field": "type",
+      "op": "is",
+      "pattern": "text",
+      "tags": [
+        "纯文本"
+      ]
+    },
+    {
+      "key": "suffix.pdf",
+      "name": "PDF",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "pdf",
+      "tags": [
+        "PDF"
+      ]
+    },
+    {
+      "key": "suffix.word",
+      "name": "Word 文档",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "doc,docx,rtf,odt",
+      "tags": [
+        "Word文档"
+      ]
+    },
+    {
+      "key": "suffix.excel",
+      "name": "Excel 表格",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "xls,xlsx,xlsm,csv,tsv,ods",
+      "tags": [
+        "Excel表格"
+      ]
+    },
+    {
+      "key": "suffix.ppt",
+      "name": "PPT",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "ppt,pptx,odp",
+      "tags": [
+        "PPT"
+      ]
+    },
+    {
+      "key": "suffix.markdown",
+      "name": "Markdown",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "md,markdown",
+      "tags": [
+        "Markdown"
+      ]
+    },
+    {
+      "key": "suffix.json",
+      "name": "JSON",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "json,jsonc",
+      "tags": [
+        "JSON"
+      ]
+    },
+    {
+      "key": "suffix.yaml",
+      "name": "YAML",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "yaml,yml",
+      "tags": [
+        "YAML"
+      ]
+    },
+    {
+      "key": "suffix.web",
+      "name": "网页",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "html,htm",
+      "tags": [
+        "网页"
+      ]
+    },
+    {
+      "key": "suffix.photo",
+      "name": "照片",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "jpg,jpeg,png,heic,heif,bmp,tiff",
+      "tags": [
+        "照片"
+      ]
+    },
+    {
+      "key": "suffix.vector",
+      "name": "矢量图",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "svg,ai,eps",
+      "tags": [
+        "矢量图"
+      ]
+    },
+    {
+      "key": "suffix.pack",
+      "name": "压缩文件",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "zip,7z,rar,tar,gz,bz2,xz",
+      "tags": [
+        "压缩文件"
+      ]
+    },
+    {
+      "key": "suffix.python",
+      "name": "Python 脚本",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "py,pyw,ipynb",
+      "tags": [
+        "Python"
+      ]
+    },
+    {
+      "key": "suffix.frontend",
+      "name": "前端代码",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "js,jsx,ts,tsx,vue,html,css,scss",
+      "tags": [
+        "前端"
+      ]
+    },
+    {
+      "key": "suffix.shell",
+      "name": "命令行脚本",
+      "kind": "match",
+      "field": "suffix",
+      "op": "in",
+      "pattern": "sh,bash,zsh,ps1,bat,cmd",
+      "tags": [
+        "脚本"
+      ]
+    },
+    {
+      "key": "name.screenshot",
+      "name": "截图（文件名带「截图」）",
+      "kind": "match",
+      "field": "name",
+      "op": "contains",
+      "pattern": "截图",
+      "tags": [
+        "截图"
+      ]
+    },
+    {
+      "key": "prompt.screenshot",
+      "name": "交模型判断是不是截图（示例规则，默认关闭）",
+      "kind": "prompt",
+      "enabled": false,
+      "field": "name",
+      "op": "contains",
+      "pattern": "",
+      "tags": [
+        "截图"
+      ],
+      "prompt": "请判断这个文件是不是手机 / 电脑截图；是的话给出「截图」标签，不是的话给出更贴切的标签。"
+    }
+  ]
+}

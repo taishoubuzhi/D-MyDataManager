@@ -27,11 +27,11 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from ..core.extensions import extension_registry
-from ..core.plugin_options import OPTION_BOOL, OPTION_CHOICE, OPTION_INT, coerce_option
+from ..core.plugins.extensions import extension_registry
+from ..core.plugins.plugin_options import OPTION_BOOL, OPTION_CHOICE, OPTION_INT, coerce_option
 from ..services import PluginInfo
-from ..core.signals import signalBus
-from ..sdk import viewers as viewer_api
+from ..core.runtime.signals import signalBus
+from ..services import viewer_service as viewer_api
 from ..services.plugin_service import plugin_service
 from .framework import clear_scroll_background, toast_error, toast_success
 from .framework import IconTextButton
@@ -45,7 +45,7 @@ class PluginOptionsDialog(MessageBoxBase):
         self.info = info
         self.service = service
         # 扩展接口由主程序在启动时登记；测试 / 自检里没登记时退回模块级接口实现
-        self._open_with = extension_registry.provider(viewer_api.OPEN_EXTENSION) or viewer_api
+        self._open_with = extension_registry.provider(viewer_api.VIEWER_EXTENSION) or viewer_api
         self._editors: dict[str, Callable[[], object]] = {}
         self._checks: dict[str, tuple[CheckBox, str]] = {}
         self._viewers = service.viewers_of(info.id)

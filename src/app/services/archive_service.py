@@ -15,7 +15,7 @@ from loguru import logger
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import config
 from ..db.models import (
     Archive,

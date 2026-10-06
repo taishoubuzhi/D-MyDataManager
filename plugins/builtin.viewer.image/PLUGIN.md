@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖、data 声明、插件选项 options |
 | plugin.py | 插件类 ImageViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据：名称、kind、宿主、扩展名、能力、排序 |
+| .data/viewer.json | 查看器元数据：名称、kind、宿主、扩展名、能力、排序 |
 
 ## 依赖
 
@@ -18,12 +18,12 @@
 ## 贡献
 
 - 查看器（扩展点 app.viewer）：viewer_id = builtin.viewer.image，kind = image，
-  认领 png / jpg / jpeg / jpe / bmp / gif / webp / tif / tiff / ico / ppm / pgm / jfif（13 个，见 data/viewer.json），
+  认领 png / jpg / jpeg / jpe / bmp / gif / webp / tif / tiff / ico / ppm / pgm / jfif（13 个，见 .data/viewer.json），
   能力：缩放 / 旋转 / 适应窗口 / 图片信息。
 
 ## 数据文件
 
-- data/viewer.json：name、kind、host、extensions、capabilities、description、order(=100)。
+- .data/viewer.json：name、kind、host、extensions、capabilities、description、order(=100)。
   要再加一种图片格式，只改这里的 extensions 即可，不用动 plugin.py。
 
 ## 插件选项

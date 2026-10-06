@@ -83,40 +83,40 @@ def clear_scroll_background(area, inner: bool = True) -> None:
 
 def open_default(path: str | Path) -> bool:
     """用系统默认关联程序打开文件。"""
-    from ..core import shell
+    from ..core.runtime import shell
 
     return bool(shell.open_default(path))
 
 
 def ask_open_with(path: str | Path) -> bool:
     """弹出系统的「选择程序」对话框，让用户挑一个程序打开文件。"""
-    from ..core import shell
+    from ..core.runtime import shell
 
     return bool(shell.ask_open_with(path))
 
 
 def open_with_program(program: str | Path, args: str, path: str | Path) -> bool:
     """用指定程序打开文件；`args` 里可以用 `{path}` 占位。"""
-    from ..core import shell
+    from ..core.runtime import shell
 
     return bool(shell.open_with_program(str(program), args, path))
 
 
 def reveal(path: str | Path) -> bool:
     """在系统文件管理器里定位文件。"""
-    from ..core import shell
+    from ..core.runtime import shell
 
     return bool(shell.reveal(path))
 
 
 def open_page(route: str) -> bool:
-    """跳到某个页面：插件页面路由用 `models.page_route()` 这类值，跳不过去返回 False。
+    """跳到某个页面：插件页面路由用模型工具库的 `page_route()` 这类值，跳不过去返回 False。
 
     本体没装界面（脚本、服务层自检）或页面不在时返回 False，插件据此提示用户手动打开。
     """
     try:
-        from ..core.app_ui import APP_UI_EXTENSION
-        from ..core.extensions import extension_registry
+        from ..core.plugins.app_ui import APP_UI_EXTENSION
+        from ..core.plugins.extensions import extension_registry
     except Exception:
         return False
     api = extension_registry.provider(APP_UI_EXTENSION)
@@ -135,6 +135,6 @@ def notify_items_changed() -> None:
 
     程序只提供这条公开信号：插件改完库内文件调用它，不要直接写库。
     """
-    from ..core.signals import signalBus
+    from ..core.runtime.signals import signalBus
 
     signalBus.itemsChanged.emit()

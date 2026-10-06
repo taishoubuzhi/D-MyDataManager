@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Iterable, Mapping
@@ -74,7 +73,7 @@ class Plugin:
         """插件页展示的额外信息行 `[(标题, 内容), ...]`；默认空。"""
         return []
 
-    # ---- 清单数据（data 块指向的文件） ------------------------------
+    # ---- 插件目录与数据文件 ----------------------------------------
 
     @property
     def log(self):
@@ -83,20 +82,30 @@ class Plugin:
 
     @property
     def data_dir(self) -> Path:
-        return Path(self.path) / "data"
+        """插件的数据目录（协议 v2 固定为 `<插件目录>/.data`）。"""
+        return Path(self.path) / ".data"
 
     def data_path(self, key: str) -> Path | None:
-        """清单 `data` 块里 `key` 指向的文件；没有声明返回 None。"""
-        declared = self.manifest.get("data") or {}
-        if not isinstance(declared, Mapping):
+        """`key` 对应的数据文件：`.data/<key>`，或 `.data/<key>.json`。
+
+        需要完整文件名时直接写 `data_path("name.json")`；两者都不存在返回 None。
+        """
+        folder = self.data_dir
+        name = str(key)
+        if not name:
             return None
-        relative = declared.get(str(key))
-        if not relative:
-            return None
-        return Path(self.path) / str(relative)
+        direct = folder / name
+        if direct.is_file():
+            return direct
+        if not direct.suffix:
+            candidate = direct.with_suffix(".json")
+            if candidate.is_file():
+                return candidate
+            return candidate
+        return direct
 
     def data(self, key: str, default: Any = _MISSING) -> Any:
-        """读取并缓存 `data` 块里的数据文件（.json 自动解析，其余按文本读）。"""
+        """读取并缓存数据文件（.json 自动解析，其余按文本读）。"""
         path = self.data_path(key)
         if path is None or not path.exists():
             if default is _MISSING:
@@ -107,7 +116,12 @@ class Plugin:
             return self._data_cache[cache_key]
         try:
             text = path.read_text(encoding="utf-8")
-            value = json.loads(text) if path.suffix.lower() == ".json" else text
+            if path.suffix.lower() == ".json":
+                from ..core.runtime import jsonio  # 数据文件按 orjson 解析（缺依赖自动退回标准库）
+
+                value = jsonio.loads(text)
+            else:
+                value = text
         except Exception as exc:  # 数据文件坏了要报清楚是哪个插件
             raise SdkError(f"插件 {self.id or '?'} 的数据文件读取失败：{path.name}（{exc}）") from exc
         self._data_cache[cache_key] = value

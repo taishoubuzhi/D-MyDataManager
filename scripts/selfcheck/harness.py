@@ -1,7 +1,8 @@
 """自检套件的运行骨架：检查注册表、隔离环境与统一结果收集。
 
-每个检查都在自己的临时目录与全新数据库上运行（复用 `tests/harness.py` 的重定向
-工具），只调用公开契约，不接触真实的 `.resources/` 与 `.configs/`。
+每个检查都在自己的临时目录与全新数据库上运行（复用 `scripts/tmpenv.py` 的重定向
+工具），临时物统一落在 `scripts/.tmp/`，只调用公开契约，不接触真实的
+`.resources/` 与 `.configs/`。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
 for _path in (ROOT, ROOT / "src", SCRIPTS):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
@@ -26,7 +27,14 @@ LAYERS: tuple[str, ...] = ("data", "services", "pages", "flows")
 #: 每层可以拆成多个模块，按主题分工、便于并行维护。
 MODULES: dict[str, tuple[str, ...]] = {
     "data": ("checks_data", "checks_model", "checks_autolabel"),
-    "services": ("checks_services", "checks_plugins", "checks_editor_ui", "checks_model", "checks_logging"),
+    "services": (
+        "checks_services",
+        "checks_plugins",
+        "checks_plugin_layout",
+        "checks_editor_ui",
+        "checks_model",
+        "checks_logging",
+    ),
     "pages": (
         "checks_pages",
         "checks_manage_ui",
@@ -61,7 +69,7 @@ def install_builtin_plugins() -> None:
     """把仓库内置插件复制进隔离插件目录，并让插件服务重新载入。"""
     import shutil
 
-    from app.core import paths
+    from app.core.runtime import paths
     from app.services.plugin_service import plugin_service
 
     target = Path(paths.PLUGIN_DIR)
@@ -103,11 +111,11 @@ class Case:
     """一个检查的隔离环境：临时根目录 + 全新数据库 + 已播种的默认数据。"""
 
     def __init__(self, name: str, *, keep: bool = False) -> None:
-        from tests.harness import TempDir, redirect_paths, reset_config, reset_runtime_dirs
+        from tmpenv import TempDir, redirect_paths, reset_config, reset_runtime_dirs
 
         self.name = name
         self._keep = keep
-        self._temp = TempDir(prefix=f"selfcheck-{name}")
+        self._temp = TempDir(SCRIPTS, prefix=f"selfcheck-{name}", keep=keep)
         self.root: Path = self._temp.path
         self._reset_runtime_dirs = reset_runtime_dirs
         redirect_paths(self.root)

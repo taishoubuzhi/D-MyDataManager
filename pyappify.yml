@@ -1,5 +1,11 @@
 # PyAppify 打包配置（配合 .github/workflows/build.yml 使用）
 # 文档：https://github.com/ok-oldking/pyappify
+#
+# 打包输入是**本仓库在 tag 上的 git 检出**：启动器在用户机器上按 `git_url` 克隆代码，
+# 再建独立 venv 装 `requirements.txt`。所以「排除体积大户」靠的是 .gitignore——
+# `.venv/`、`PyQt-Fluent-Widgets/`（上游 qfluentwidgets 参考仓库）、`.packages/`、
+# `stubs/`、`.resources/`、`.configs/`、各目录下的 `.tmp/`
+# 都不在版本库里，配置里没有（也不需要）exclude/include 这类键。
 name: "D-MyDataManager" # 仅支持英文
 icon: "icons/icon.png"
 website: "https://github.com/taishoubuzhi/D-MyDataManager"
@@ -8,5 +14,9 @@ profiles:
     # 用户端从这里按标签克隆代码，并在本机创建独立 venv 安装依赖
     git_url: "https://github.com/taishoubuzhi/D-MyDataManager.git"
     main_script: "src/main.py"
-    requires_python: "3.13" # pyappify 支持 3.7 - 3.13
+    # 程序按 3.14 开发：标准库 compression.zstd 让内容仓库默认用 zstd（3.13 会自动退回
+    # deflate，功能不丢、只是压缩率差一点）。注意 pyappify / pyappify-action 的 README
+    # 目前仍写「supports python 3.7 - 3.13」——首次正式打包要确认启动器能取到 3.14 的
+    # 独立发行包，取不到就把这里改回 "3.13"（代码两条路都支持）。
+    requires_python: "3.14"
     requirements: "requirements.txt"

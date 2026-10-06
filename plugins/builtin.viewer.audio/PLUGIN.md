@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖与 data 声明 |
 | plugin.py | 插件类 AudioViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据（kind=audio、扩展名、能力） |
+| .data/viewer.json | 查看器元数据（kind=audio、扩展名、能力） |
 
 ## 依赖
 
@@ -27,5 +27,5 @@
 
 ## 数据文件
 
-- data/viewer.json：元数据。播放能力取决于 Qt 多媒体后端，认不出的编码会提示播放失败；
+- .data/viewer.json：元数据。播放能力取决于 Qt 多媒体后端，认不出的编码会提示播放失败；
   缺少 QtMultimedia 时播放控件会抛 RuntimeError(「当前环境缺少 QtMultimedia，无法播放音视频」)。

@@ -13,9 +13,9 @@ from qfluentwidgets import StrongBodyLabel
 
 import app.ui.dialogs as dialogs_module
 import app.ui.pages.manage_page as manage_module
-from app.core import paths
+from app.core.runtime import paths
 from app.core.config import resources_root
-from app.core.naming import RENAME_MODE_KEYS, RenameRule, build_plan
+from app.core.runtime.naming import RENAME_MODE_KEYS, RenameRule, build_plan
 from app.repositories import CategoryRepository, ItemFilter, TagRepository
 from app.services import (
     ImportService,
@@ -767,7 +767,7 @@ def manage_edit_dialog(case: Case) -> None:
 @check("manage_editor_menu", "pages")
 def manage_editor_menu(case: Case) -> None:
     """右键「编辑器」子菜单是程序本体内置的：有系统默认程序 / 各编辑器 / 交给系统选择，禁用编辑器库也还在。"""
-    from app.sdk import editors
+    from app.services import editor_service as editors
 
     install_builtin_plugins()
     fixture, window = build_window(case)
@@ -846,7 +846,7 @@ def manage_editor_menu(case: Case) -> None:
 def manage_double_click_action(case: Case) -> None:
     """设置页新增「左键双击」配置：默认打开查看器，可改成打开编辑器。"""
     from app.core.config import DOUBLE_CLICK_EDITOR, DOUBLE_CLICK_VIEWER, config
-    from app.sdk import editors
+    from app.services import editor_service as editors
     from app.ui.pages.settings_page import ComboSettingCard
 
     install_builtin_plugins()
@@ -1176,9 +1176,9 @@ def manage_refresh_sees_plugin_writes(case: Case) -> None:
     不 `expire_all()` 的话，identity map 里的关系集合还是旧值，`refresh()` 重新查库也读不到，
     用户就会看到「提示成功但列表里没有标签」。
     """
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
-    from app.core.signals import signalBus
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
+    from app.core.runtime.signals import signalBus
     from app.sdk import items as items_sdk
     from app.services.item_api import ItemsApi
     from app.services.plugin_service import plugin_service

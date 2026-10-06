@@ -38,11 +38,11 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..core import acl, paths
+from ..core.runtime import acl, paths
 from ..core.config import config, library_root, resources_root
-from ..core.paths import HIDDEN_DIR_NAME, UNPROTECTED_DIRS
+from ..core.runtime.paths import HIDDEN_DIR_NAME, UNPROTECTED_DIRS
 
-# 不参与保护的资源子目录名单（`models/`）定义在 app.core.paths：锁定与放行必须共用同一份，
+# 不参与保护的资源子目录名单（`models/`）定义在 app.core.runtime.paths：锁定与放行必须共用同一份，
 # 否则放行时会对一个从没被锁过的十几万对象目录执行 icacls，反倒触发一次全子树 ACE 传播。
 __all__ = ["PrivacyService", "UNPROTECTED_DIRS", "privacy"]
 

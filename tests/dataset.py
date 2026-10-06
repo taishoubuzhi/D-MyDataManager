@@ -18,6 +18,8 @@ import wave
 import zipfile
 from pathlib import Path
 
+from tmpenv import tests_tmp
+
 TEXT_LIMIT = 512 * 1024  # 与 import_service._TEXT_LIMIT 保持一致
 BIG_TEXT_BYTES = 600 * 1024
 
@@ -155,9 +157,8 @@ def _tar_bytes():
 
 
 def _sqlite_bytes():
-    """造一个真实的 SQLite 文件；沙箱禁写系统临时目录，因此在 tests/_scratch 下生成再删除。"""
-    scratch = Path(__file__).resolve().parent / "_scratch"
-    scratch.mkdir(parents=True, exist_ok=True)
+    """造一个真实的 SQLite 文件；沙箱禁写系统临时目录，因此在 `tests/.tmp/` 下生成再删除。"""
+    scratch = tests_tmp("scratch")
     path = scratch / "store.db"
     try:
         connection = sqlite3.connect(str(path))

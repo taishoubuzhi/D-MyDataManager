@@ -23,8 +23,8 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
-from ...core import shell
-from ...core.signals import signalBus
+from ...core.runtime import shell
+from ...core.runtime.signals import signalBus
 from ...db import database
 from ...services import UserService
 from ...services.plugin_service import (
@@ -454,7 +454,6 @@ class PluginPage(Page):
                     f"扩展接口：{info.provides_text}",
                     f"提供库：{info.libraries_text}",
                     f"适配 SDK：{info.api_text}",
-                    f"适用管理器版本：{info.manager_text}",
                     f"入口文件：{info.entry or '—'}",
                 ]
             )

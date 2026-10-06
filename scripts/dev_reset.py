@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from app.core import paths  # noqa: E402
+from app.core.runtime import paths # noqa: E402
 from app.services.maintenance import reset_runtime_data  # noqa: E402
 
 

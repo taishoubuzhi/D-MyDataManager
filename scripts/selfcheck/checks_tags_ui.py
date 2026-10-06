@@ -492,6 +492,7 @@ def superuser_permissions(case: Case) -> None:
             ("更改资料库位置", settings_page._path_card),
             ("扫描并登记", settings_page._scan_card),
             ("重建目录结构", settings_page._rebuild_card),
+            ("整理数据库", settings_page._compact_card),
             ("恢复初始化", settings_page._reset_card),
         ):
             if card.isEnabled():
@@ -509,6 +510,7 @@ def superuser_permissions(case: Case) -> None:
                 ("恢复初始化", settings_page._reset_to_defaults),
                 ("扫描并登记", settings_page._scan_library),
                 ("重建目录结构", settings_page._rebuild_layout),
+                ("整理数据库", settings_page._compact_database),
             ):
                 try:
                     action()
@@ -523,6 +525,7 @@ def superuser_permissions(case: Case) -> None:
             ("更改资料库位置", settings_page._path_card),
             ("扫描并登记", settings_page._scan_card),
             ("重建目录结构", settings_page._rebuild_card),
+            ("整理数据库", settings_page._compact_card),
             ("恢复初始化", settings_page._reset_card),
         ):
             if not card.isEnabled():
@@ -727,7 +730,7 @@ def superuser_permissions(case: Case) -> None:
 @check("settings_privacy_group", "pages")
 def settings_privacy_group(case: Case) -> None:
     """设置页附加项与隐私分组：日志模式联动、资源卡片指向 .resources、开关只记设置。"""
-    from app.core import acl, logging_setup
+    from app.core.runtime import acl, logging_setup
     from app.core.config import config, resources_root
     from app.services.privacy_service import privacy
     from app.ui.framework import restart_application
@@ -828,7 +831,7 @@ def settings_privacy_group(case: Case) -> None:
 @check("recent_focus", "flows")
 def recent_focus(case: Case) -> None:
     """首页「最近」条目点击后跳到数据管理页并聚焦该数据项。"""
-    from app.core.signals import signalBus
+    from app.core.runtime.signals import signalBus
     from app.ui.pages.home_page import _Row
 
     _, window = build_window(case, show=True)

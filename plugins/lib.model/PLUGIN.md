@@ -1,16 +1,16 @@
 # 模型工具库（lib.model）
 
 模型插件的公共工具箱：模型登记表、下载器、运行环境（独立 venv）、推理适配器与 worker 子进程协议，外加「模型」管理页。
-程序本体只留一个扩展接口 `model.open` 与调度门面（`app.sdk.models`），**不实现任何模型调用、也不保存模型数据**：
-没启用本插件时 `list_models()` 返回空、`acquire()` / `invoke()` 直接抛 `SdkError`。
+门面 `dm_plugin.lib.model.api` 属于本插件自己（协议 v2 之前它叫 `app.sdk.models`），程序本体只保留扩展接口 `model.open` 的登记位，**不实现任何模型调用、也不保存模型数据**：
+没启用本插件时 `list_models()` 返回空、`acquire()` / `invoke()` 直接抛 `ModelError`。
 
-权重与运行环境全部落在**资源文件夹**（`.resources/models/`），插件自己的 `data/` 只放只读模板 —— 插件覆盖安装时插件目录会被整个删掉重建。
+权重与运行环境全部落在**资源文件夹**（`.resources/models/`），插件自己的 `.data/` 只放只读模板 —— 插件覆盖安装时插件目录会被整个删掉重建。
 
 ## 目录
 
 | 文件 | 作用 |
 | --- | --- |
-| plugin.json | 清单：id、名称、`class = ModelLibraryPlugin`，depends `builtin.lib.ui`，provides `model.open`，data 三项模板 |
+| plugin.json | 清单：id、名称、`class = ModelLibraryPlugin`，depends `builtin.lib.ui`，provides `model.open`，`.data/` 三项模板 |
 | plugin.py | 库模块（也是入口文件）：ModelLibraryPlugin（注册 `model.open` 接口与「模型」页）、模块级 `model_manager`、`data_templates(ctx, key)` |
 | constants.py | 常量：页面键 / 标题 / 图标 / 排序、模型类型、状态与标签、任务与能力、能力→后端映射、适配器名、默认值 |
 | record.py | `ModelRecord`（记录）与 `slugify()` / `make_id()`：id 一旦创建不可改，改名只改 `name` |
@@ -28,9 +28,11 @@
 
 ## 暴露的库
 
-库模块固定写成入口 `plugin.py`（协议规定：一个插件对其他插件的公开面只有 plugin.py）。两种取法：
+本插件在 `libraries` 里声明了三个模块：`model`（`plugin.py`）、`api`（`.plugin/api.py`）、`errors`（`.plugin/errors.py`），
+导入名分别是 `dm_plugin.lib.model.plugin` / `.api` / `.errors`。两种取法：
 
     from dm_plugin.lib.model.plugin import ModelRecord, ModelManager   # 推荐：静态导入（要先 depends）
+    from dm_plugin.lib.model.api import BatchRequest, run_batch        # 其它插件最常用的门面
     library("lib.model", "model")                                      # 兜底：运行时取
 
 - `ModelRecord` / `slugify` / `make_id` / `KIND_LOCAL` / `KIND_EXTERNAL` / `STATE_READY` / …
@@ -42,8 +44,8 @@
 
 ## 扩展接口 model.open
 
-程序侧 `app.sdk.models` 的 `list_models()` / `model_by_id()` / `acquire()` / `invoke()` 都先取
-`extension_registry.provider("model.open")`（`MODEL_EXTENSION = "model.open"` 定义在 `app.sdk.models`）。
+门面 `dm_plugin.lib.model.api` 的 `list_models()` / `model_by_id()` / `acquire()` / `invoke()` 都由本插件自己提供，
+不再经过程序的 `extension_registry`；`MODEL_EXTENSION = "model.open"` 定义在 `dm_plugin.lib.model.api`。
 `ModelOpenApi` 的成员：
 
 | 分组 | 成员 |
@@ -57,9 +59,9 @@
 调用方拿到的是一份**租约**（`Lease`，也支持 `with`）：
 
 ```python
-from app.sdk import models
+from dm_plugin.lib.model.api import acquire
 
-lease = models.acquire(capability="embedding", task="embedding", timeout=30)
+lease = acquire(capability="embedding", task="embedding", timeout=30)
 try:
     vectors = lease.invoke("embedding", {"input": ["你好"]})
 finally:
@@ -76,10 +78,10 @@ finally:
 由本插件内部调度（`batch.py`）：
 
 ```python
-from app.sdk import models
+from dm_plugin.lib.model.api import BatchRequest, run_batch
 
-requests = [models.BatchRequest(task="chat", payload={"messages": [...]}, key=item_id) for item_id in ids]
-results = models.run_batch(requests, capability="chat", on_progress=lambda done, total: bar.setValue(done * 100 // total))
+requests = [BatchRequest(task="chat", payload={"messages": [...]}, key=item_id) for item_id in ids]
+results = run_batch(requests, capability="chat", on_progress=lambda done, total: bar.setValue(done * 100 // total))
 for result in results:
     if not result.ok:
         ctx.log.warning("{} 失败：{}", result.key, result.error)
@@ -92,7 +94,7 @@ for result in results:
 - `on_progress(done, total)` 每完成一条回调一次（在工作线程里，界面侧要切回主线程）。
 - `cancel()` 返回真表示尽快停：还没跑的标成「已取消」，已跑完的不回滚。
 - **单条失败不打断整批**：`BatchResult.ok=False`、`error` 是人类可读原因，顺序与入参一一对应。
-- 没实现批量接口的旧版模型插件：`models.supports_batch()` 返回 False，`models.run_batch()` 抛 `SdkError`。
+- `supports_batch()` 返回 False 时 `run_batch()` 抛 `ModelError`。
 
 ### 预定义方案与一键使用
 
@@ -100,13 +102,13 @@ for result in results:
 
 | 成员 | 作用 |
 | --- | --- |
-| `templates(capability="", lightweight_only=False)` | 读 `data/model_list.json` 的本地模型模板，返回普通 dict 列表（含 `id`/`name`/`capabilities`/`params`/`size_bytes`/`lightweight`，以及 `registered_id`/`state`/`state_label` 表示当前是否已登记）；排序 = 轻量优先、再按体积升序 |
+| `templates(capability="", lightweight_only=False)` | 读 `.data/model_list.json` 的本地模型模板，返回普通 dict 列表（含 `id`/`name`/`capabilities`/`params`/`size_bytes`/`lightweight`，以及 `registered_id`/`state`/`state_label` 表示当前是否已登记）；排序 = 轻量优先、再按体积升序 |
 | `create_from_template(key, name="")` | **只登记一条草稿**（`未填充`），不下载、不装包；同一仓库已登记过就返回旧记录 |
 | `page_route()` | 模型管理页路由，直接 `ui.open_page(models.page_route())` |
 | `requirements(model_id)` | 还缺什么：`{"ok", "missing": [...], "missing_files", "profile", "profile_effective", "profile_ready", "hint"}`。缺模型文件时 `missing` 按「权重 / 配置 / 分词器」分组说明（如 `缺模型文件：权重（pytorch_model.bin）；配置（config.json、preprocessor_config.json）；分词器（tokenizer.json、vocab.json、merges.txt）`——transformers 的模型目录是成套的，配置与分词器缺一个都跑不起来）；运行环境没装、没登记 profile 各占一条。运行环境按 `runtime.resolve_id()` 做 CPU / GPU 孪生回退（模型写 `llama-cpp`、机器只装了 `llama-cpp-gpu` 也算就绪），`profile_effective` 是实际命中的那套；`installed()` 会起子进程跑 `python --version`，结果按 profile 进程内缓存，装 / 卸运行环境后由模型页调 `forget_runtime_cache()` 清掉 |
-| `download(model_id)` | 把该模型 `source` 里声明、盘上还没有的权重排进**模型页那套**下载队列（同一套镜像回退 / 续传 / 暂停取消），返回 `{"ok", "queued": [文件名], "hint"}`；要求模型页已经把队列挂上来（`attach_downloads(factory)`，由 `ModelPage.__init__` 调用），否则返回「先打开一次模型页」的提示。SDK 门面是 `app.sdk.models.download_model(model_id)` |
+| `download(model_id)` | 把该模型 `source` 里声明、盘上还没有的权重排进**模型页那套**下载队列（同一套镜像回退 / 续传 / 暂停取消），返回 `{"ok", "queued": [文件名], "hint"}`；要求模型页已经把队列挂上来（`attach_downloads(factory)`，由 `ModelPage.__init__` 调用），否则返回「先打开一次模型页」的提示。SDK 门面是 `dm_plugin.lib.model.api.download_model(model_id)` |
 
-`data/model_list.json` 里 `"lightweight": true` 表示核显 / 纯 CPU 也能跑，其它插件挑「预定义方案」时优先选这些
+`.data/model_list.json` 里 `"lightweight": true` 表示核显 / 纯 CPU 也能跑，其它插件挑「预定义方案」时优先选这些
 （当前：qwen3-0.6b、qwen3-1.7b、qwen2.5-1.5b、all-minilm-l6-v2、nomic-embed-text-v1.5、whisper-base）。
 
 模板与已登记模型的配对（`_template_record`）按「登记时写下的模板 key → 来源仓库 → 文件清单（只对来源没记下来的老记录）→ 名字」逐轮**完全相等**匹配，都匹配不上就让 `registered_id` 为空（未登记）。**不要**用「文件名有交集」判定：BLIP 与 CLIP 的目录里都有 `config.json` / `preprocessor_config.json` / `tokenizer.json`，用交集会把它们互相认成对方（用户 m42266：除了图片，其他类型的对齐模型全被显示成 blip）。`create_from_template` 登记时会把模板 key 写进记录的 `source["template"]`，以后就按它认领。
@@ -140,7 +142,7 @@ for result in results:
 2. **worker 族**（本地模型，推荐）：独立 Python 进程，JSON-Lines over stdio；一行一个请求 `{"id":1,"op":"load","payload":{...}}`，一行一个响应 `{"id":1,"ok":true,...}`，流式数据是 `{"id":1,"stream":"delta","text":"…"}`；op 取 `ping` / `info` / `load` / `invoke` / `cancel` / `unload`。worker 按 backend 分派（`llama_cpp` / `transformers` / `sentence_transformers` / `faster_whisper` / `piper` / `diffusers` / `rapidocr` / `custom`），5 秒没响应判僵死、杀进程并置 `错误`；Windows 上子进程用 `CREATE_NO_WINDOW`；worker 的 stdout / stderr 一律强制 UTF-8，中文日志不会因为目标环境是 GBK 控制台而变成乱码。
 3. **inprocess 族**：默认**拒绝**（会把模型挂进程序进程，难以释放），只留一个明确的报错。
 
-能力 → 后端 → 运行环境 profile 的对应写在 `constants.py` 的 `CAPABILITY_BACKENDS` 与 `data/runtime_profiles.json`：
+能力 → 后端 → 运行环境 profile 的对应写在 `constants.py` 的 `CAPABILITY_BACKENDS` 与 `.data/runtime_profiles.json`：
 `chat`/`completion` → `llama_cpp`（GGUF）；`embedding`/`rerank` → `sentence_transformers`；`vision`/`classify` → `transformers`；
 `asr` → `faster_whisper`；`tts` → `piper`；`image` → `diffusers`；`ocr` → `rapidocr`。
 清单里一共 13 个 profile：每个 CPU 版都有一个 `-gpu` 变体（`llama-cpp-gpu` / `transformers-gpu` /
@@ -200,11 +202,11 @@ worker 适配器用解析后的解释器；两边都没装时才报「运行环�
 
 ## 谁在用
 
-- 程序本体：`app.sdk.models` 门面 + 插件页的「模型」页面（`plugin.model_manager` 路由）。
-- 其他插件：`ctx.require("model.open")` 或直接 `import app.sdk.models`，按 `model_id` / `capability` 取租约。
+- 程序本体：只提供插件页的「模型」页面挂载点（`plugin.model_manager` 路由），没有模型门面。
+- 其他插件：`ctx.require("model.open")`，或 `from dm_plugin.lib.model.api import acquire`，按 `model_id` / `capability` 取租约。
 
 ## 验证
 
-- 单测：`tests/test_model_registry.py`（登记表 / 记录 / 调度 / 下载源（GitHub）的设置与取址顺序）、`tests/test_model_download.py`（续传 / 校验 / 镜像回退 / 按「GitHub 下载源」展开地址 / 阶段与动作提示 / `forget` 与 `clear_finished` / 取消清断点与暂停保留）、`tests/test_model_runtime.py`（worker 协议 / 超时 / 卸载 / 设备解析与设备·依赖探测 / 暂停取消与完成标记 / CPU·GPU 双胞胎解析 / llama.cpp 层数默认（`LlamaKwargsCase`）/ 模型日志（`ModelLogCase`）/ GitHub 直链识别与镜像重试（`GitHubSourceCase`）/ 请求字段不进 params（`WorkerRequestShapeCase`））。
+- 单测：`tests/plugins/test_model_registry.py`（登记表 / 记录 / 调度 / 下载源（GitHub）的设置与取址顺序）、`tests/plugins/test_model_download.py`（续传 / 校验 / 镜像回退 / 按「GitHub 下载源」展开地址 / 阶段与动作提示 / `forget` 与 `clear_finished` / 取消清断点与暂停保留）、`tests/plugins/test_model_runtime.py`（worker 协议 / 超时 / 卸载 / 设备解析与设备·依赖探测 / 暂停取消与完成标记 / CPU·GPU 双胞胎解析 / llama.cpp 层数默认（`LlamaKwargsCase`）/ 模型日志（`ModelLogCase`）/ GitHub 直链识别与镜像重试（`GitHubSourceCase`）/ 请求字段不进 params（`WorkerRequestShapeCase`））。
 - 自检：`scripts/selfcheck/checks_model.py`（清单与模板、`model.open` 接口、常量交叉校验、无插件时的门面行为、设置与密钥、页面装配、页面设置表单（每项即改即存、没有「保存设置」按钮）、下载源（GitHub）（`model_page_github_source`）、程序环境安装、按钮状态、批量依赖探测、安装源与删除弹窗、运行环境暂停取消与完成标记、运行环境补全调度（并发 / 挨个）、双胞胎 profile 解析（`model_runtime_profile_twins`）、模型日志（`model_logs_latest_and_cleanup`）、本地 whl 来源、空目录也能列进清理清单（`local/model` 不再被凭空造出来）、下载目录清理，以及界面回归：`model_ui_via_tool_library`、`model_dialog_form_scroll`、`model_dialog_template_reset`、`model_page_card_cleanup`、`model_page_queue_rows`、`model_page_runtime_installing`）。
 - 运行环境那一行：点「安装」后立刻变成「安装中… n s · 最后一行输出」+ 忙等进度条、按钮锁住，装完刷新成真实状态；卸载没删干净（目录里还有文件）会明确报错而不是谎报成功。

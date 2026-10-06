@@ -29,7 +29,7 @@ from qfluentwidgets import (
 )
 
 from ...core.config import config
-from ...core.signals import signalBus
+from ...core.runtime.signals import signalBus
 from ...db import database
 from ...services import LibraryService, UserService
 from ..components import FlowArea

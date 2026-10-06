@@ -5,7 +5,7 @@
     from dm_plugin.builtin.lib.viewer.plugin import ViewerPlugin, ViewerWindow
 
 内容分三块：
-- `ViewerPlugin`：查看器插件基类（读 data/viewer.json、登记查看器、提供选项读取、负责弹窗）；
+- `ViewerPlugin`：查看器插件基类（读 `.data/viewer.json`、登记查看器、提供选项读取、负责弹窗）；
 - `ViewerWindow`：查看器内容页外壳（文件名 + 查看器名 + 「用系统程序打开」「定位文件」+ 内容区）；
 - `ViewerOpenApi` + `ViewerRules` + `viewer_registry`：`viewer.open` 扩展接口、规则读写与注册表，
   程序本体与别的插件都靠它；具体的播放页 / 文本页等「某个查看器怎么画」的实现属于各自的
@@ -18,11 +18,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from pathlib import Path
 
 from app.sdk import Plugin, PluginError, SdkError
-from app.sdk.viewers import OPEN_EXTENSION
+from app.sdk.manifest import record_of
+
+#: 本库提供的扩展点：程序侧（`app.services.viewer_service`）与别的插件按它取调度接口
+VIEWER_EXTENSION = "viewer.open"
 
 from .config_page import ViewerConfigPage
 from .provider import ViewerOpenApi
@@ -87,20 +90,20 @@ class ViewerPlugin(Plugin):
             def create_view(self, path, parent=None):
                 return TextViewer(path, parent)
 
-    扩展名、类型、显示名等来自插件的 `data/viewer.json`（清单 data 段声明），
-    所以程序侧不需要认识任何具体格式。
+    扩展名、类型、显示名等来自插件的 `.data/viewer.json`（统一清单格式，只有一条记录，
+    `key` 就是插件 id），所以程序侧不需要认识任何具体格式。
     """
 
-    #: data/viewer.json 缺省值，可被子类覆盖
+    #: `.data/viewer.json` 缺省值，可被子类覆盖
     default_kind = "text"
     default_host = DEFAULT_HOST
     default_order = 100
 
     def setup(self, ctx) -> None:
         self._ctx = ctx
-        data = ctx.data("viewer")
-        if not isinstance(data, Mapping):
-            raise SdkError(f"插件 {self.id} 的查看器数据必须是对象：data/viewer.json")
+        data = record_of(ctx.data("viewer"), self.id)
+        if not data:
+            raise SdkError(f"插件 {self.id} 的查看器数据缺少记录：.data/viewer.json 的 items 里要有 key = {self.id}")
         host = str(data.get("host") or self.default_host)
         ctx.require(host)
         self._host = host
@@ -159,12 +162,12 @@ class ViewerLibraryPlugin(ViewerPlugin):
 
     def setup(self, ctx) -> None:
         self._ctx = ctx
-        ctx.provide(OPEN_EXTENSION, ViewerOpenApi(ctx))
+        ctx.provide(VIEWER_EXTENSION, ViewerOpenApi(ctx))
         try:
             ctx.add_page(
                 CONFIG_PAGE_KEY,
                 CONFIG_PAGE_TITLE,
-                lambda: ViewerConfigPage(ctx, ctx.require(OPEN_EXTENSION)),
+                lambda: ViewerConfigPage(ctx, ctx.require(VIEWER_EXTENSION)),
                 icon="VIEW",
                 order=200,
             )

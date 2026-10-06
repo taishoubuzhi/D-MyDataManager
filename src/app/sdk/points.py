@@ -18,7 +18,7 @@ class ExtensionPoint:
     （程序侧统一由 app.ui.framework.contributions 取用，缺字段按默认值处理）：
 
     - VIEWER / EDITOR / PAGE：用 ctx.add_viewer(...) / ctx.add_editor(...) / ctx.add_page(...) 的字段；
-    - MODEL：模型工具库用 ctx.provide(MODEL_EXTENSION, ...) 暴露调度接口（见 app.sdk.models）；
+    - MODEL：模型工具库用 ctx.provide(MODEL_EXTENSION, ...) 暴露调度接口（见库模块 `dm_plugin.lib.model.api`）；
     - HOME_KPI：{"title": str, "value": 回调或字符串, "sub": str, "icon": str}；
     - SETTINGS_CARD：{"title": str, "factory": 回调(parent) -> QWidget}；
     - MANAGE_TOOLBAR：{"text": str, "callback": 回调(), "icon": str, "tip": str}

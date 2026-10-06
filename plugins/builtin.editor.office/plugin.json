@@ -11,8 +11,5 @@
     {
       "id": "builtin.lib.editor"
     }
-  ],
-  "data": {
-    "editor": "data/editor.json"
-  }
+  ]
 }

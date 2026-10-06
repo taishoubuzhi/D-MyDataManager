@@ -1,0 +1,255 @@
+{
+  "manifest": "1",
+  "id": "lib.model.runtime_profiles",
+  "version": "1",
+  "kind": "profiles",
+  "description": "运行环境（profile）：每个 profile 一个独立 venv，装在 .resources/models/runtime/<id>/venv。CUDA 运行库（cudart / cuBLAS / cuDNN）走 nvidia-*-cu12 这几个 pip 包，装进哪个环境就只有哪个环境有。装包前页面会弹确认，不会静默安装。带 -gpu 的 profile 只是把索引指向 CUDA 轮子（torch 的 CUDA 版自带 CPU 内核，不需要装两份）；OCR 的 onnxruntime 与 onnxruntime-gpu 是两个发行包，GPU 版没 CUDA 时自动退回 CPU，只用装其中一个。",
+  "items": [
+    {
+      "key": "llama-cpp",
+      "id": "llama-cpp",
+      "name": "llama.cpp（GGUF 对话，CPU）",
+      "description": "跑 GGUF 文件的本地对话 / 续写 / 向量化，装好后可直接加载 .gguf 模型。",
+      "packages": [
+        "llama-cpp-python>=0.3.2"
+      ],
+      "index_url": "",
+      "extra_index": [
+        "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+      ],
+      "python": "",
+      "size_hint": "约 300 MB",
+      "backends": [
+        "llama_cpp"
+      ]
+    },
+    {
+      "key": "llama-cpp-gpu",
+      "id": "llama-cpp-gpu",
+      "name": "llama.cpp（GGUF 对话，CUDA）",
+      "description": "同上，但用 CUDA 预编译轮子；会一并装上 CUDA 12 的 cudart / cuBLAS 运行库；设备选到 CUDA 时 llama.cpp 默认把所有层放上显卡（模型参数写了 n_gpu_layers 就按写的来）。",
+      "packages": [
+        "llama-cpp-python>=0.3.2",
+        "nvidia-cuda-runtime-cu12",
+        "nvidia-cublas-cu12"
+      ],
+      "index_url": "",
+      "extra_index": [
+        "https://abetlen.github.io/llama-cpp-python/whl/cu124"
+      ],
+      "python": "",
+      "size_hint": "约 2.3 GB（含 CUDA 运行库）",
+      "backends": [
+        "llama_cpp"
+      ]
+    },
+    {
+      "key": "transformers",
+      "id": "transformers",
+      "name": "transformers（通用推理，CPU）",
+      "description": "视觉、分类等通用模型；含 PyTorch（CPU 版），体积较大。要 GPU 选下面的 CUDA 版本。",
+      "packages": [
+        "torch",
+        "transformers>=4.45",
+        "accelerate",
+        "sentencepiece",
+        "pillow"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 2.5 GB（CPU 版）",
+      "backends": [
+        "transformers"
+      ]
+    },
+    {
+      "key": "transformers-gpu",
+      "id": "transformers-gpu",
+      "name": "transformers（通用推理，CUDA torch）",
+      "description": "同一套包，torch 走 PyTorch CUDA 索引（CUDA 版自带 CPU 内核，不用另外装一份）。",
+      "packages": [
+        "torch",
+        "transformers>=4.45",
+        "accelerate",
+        "sentencepiece",
+        "pillow"
+      ],
+      "index_url": "",
+      "extra_index": [
+        "https://download.pytorch.org/whl/cu126"
+      ],
+      "python": "",
+      "size_hint": "约 3.5 GB（含 CUDA 运行库）",
+      "backends": [
+        "transformers"
+      ]
+    },
+    {
+      "key": "sentence-transformers",
+      "id": "sentence-transformers",
+      "name": "sentence-transformers（向量化 / 重排，CPU）",
+      "description": "句向量与 CrossEncoder 重排，做检索与去重。",
+      "packages": [
+        "torch",
+        "sentence-transformers>=3.0"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 2 GB",
+      "backends": [
+        "sentence_transformers"
+      ]
+    },
+    {
+      "key": "sentence-transformers-gpu",
+      "id": "sentence-transformers-gpu",
+      "name": "sentence-transformers（向量化 / 重排，CUDA torch）",
+      "description": "同一套包，torch 走 PyTorch CUDA 索引，设备选 cuda 时用显卡算。",
+      "packages": [
+        "torch",
+        "sentence-transformers>=3.0"
+      ],
+      "index_url": "",
+      "extra_index": [
+        "https://download.pytorch.org/whl/cu126"
+      ],
+      "python": "",
+      "size_hint": "约 3 GB（含 CUDA 运行库）",
+      "backends": [
+        "sentence_transformers"
+      ]
+    },
+    {
+      "key": "whisper",
+      "id": "whisper",
+      "name": "faster-whisper（语音识别，CPU）",
+      "description": "音频转文字，CPU 也能跑。",
+      "packages": [
+        "faster-whisper>=1.0"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 200 MB",
+      "backends": [
+        "faster_whisper"
+      ]
+    },
+    {
+      "key": "whisper-gpu",
+      "id": "whisper-gpu",
+      "name": "faster-whisper（语音识别，CUDA）",
+      "description": "补上 CUDA 12 的 cudart / cuBLAS / cuDNN 运行库，设备选 cuda 时走显卡；驱动太旧会退回 CPU。",
+      "packages": [
+        "faster-whisper>=1.0",
+        "nvidia-cuda-runtime-cu12",
+        "nvidia-cublas-cu12",
+        "nvidia-cudnn-cu12"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 1.5 GB",
+      "backends": [
+        "faster_whisper"
+      ]
+    },
+    {
+      "key": "diffusers",
+      "id": "diffusers",
+      "name": "diffusers（图片生成，CPU）",
+      "description": "Stable Diffusion 等文生图模型；CPU 出图很慢，建议用下面的 CUDA 版本。",
+      "packages": [
+        "torch",
+        "diffusers>=0.31",
+        "transformers",
+        "accelerate",
+        "safetensors"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 3 GB",
+      "backends": [
+        "diffusers"
+      ]
+    },
+    {
+      "key": "diffusers-gpu",
+      "id": "diffusers-gpu",
+      "name": "diffusers（图片生成，CUDA torch）",
+      "description": "同一套包，torch 走 PyTorch CUDA 索引；需要较大显存（6 GB 起比较稳）。",
+      "packages": [
+        "torch",
+        "diffusers>=0.31",
+        "transformers",
+        "accelerate",
+        "safetensors"
+      ],
+      "index_url": "",
+      "extra_index": [
+        "https://download.pytorch.org/whl/cu126"
+      ],
+      "python": "",
+      "size_hint": "约 4 GB（含 CUDA 运行库）",
+      "backends": [
+        "diffusers"
+      ]
+    },
+    {
+      "key": "rapidocr",
+      "id": "rapidocr",
+      "name": "rapidocr（文字识别，CPU）",
+      "description": "图片里的文字识别，轻量、CPU 可跑；rapidocr 1.x / 3.x 都支持，3.x 没装 onnxruntime 时会退回 torch 引擎。",
+      "packages": [
+        "rapidocr>=3.0",
+        "onnxruntime"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 300 MB",
+      "backends": [
+        "rapidocr"
+      ]
+    },
+    {
+      "key": "rapidocr-gpu",
+      "id": "rapidocr-gpu",
+      "name": "rapidocr（文字识别，onnxruntime-gpu）",
+      "description": "把 onnxruntime 换成 onnxruntime-gpu：有 CUDA 时走 GPU，没有时自动退回 CPU（同一个包，不用两套）；一并装上 CUDA 12 运行库。",
+      "packages": [
+        "rapidocr>=3.0",
+        "onnxruntime-gpu",
+        "nvidia-cuda-runtime-cu12",
+        "nvidia-cublas-cu12",
+        "nvidia-cudnn-cu12"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 2.4 GB（含 CUDA 运行库）",
+      "backends": [
+        "rapidocr"
+      ]
+    },
+    {
+      "key": "piper",
+      "id": "piper",
+      "name": "piper（语音合成 TTS）",
+      "description": "离线文字转语音，走 piper-tts；模型文件（.onnx + .json）要另外下载。",
+      "packages": [
+        "piper-tts>=1.2"
+      ],
+      "index_url": "",
+      "extra_index": [],
+      "python": "",
+      "size_hint": "约 100 MB",
+      "backends": [
+        "piper"
+      ]
+    }
+  ]
+}

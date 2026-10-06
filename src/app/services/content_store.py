@@ -12,12 +12,18 @@
 `Content` 行记下 `size`（原始字节数）、`codec`、`stored_size`、`name`、`mime`。
 内容身份仍是原始字节的 sha256，因此同一份内容在仓库里只落一份文件。
 
+读写都按流式处理：`sha256_of()` 用 `hashlib.file_digest` 一次读盘算完，
+`iter_content()` 用各编码自己的流式解码器边解边给（zstd 走 `ZstdFile`、
+deflate / lzma 走 `decompressobj`），`read_content()` 只是把它拼起来；
+`verify("deep")` 也按流式边解边算摘要，不再把整份内容读进内存。
+
 写压缩结果走「先写 `.part`、结束后原子改名」，崩在中途只会留下 `.part`，由 `sweep()` 清掉。
-`iter_content()` 对压缩编码会先整体解压再分片给出（整份存储下没有可用的流式解码器）。
 """
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import lzma
 import os
 import shutil
@@ -35,12 +41,13 @@ from loguru import logger
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from ..core import paths
+from ..core.runtime import paths
 from ..core.config import store_dir
 from ..db.models import ArchiveEntry, Blob, Content, DataItem
-from .blob_store import BlobStore, sha256_of, sha256_of_bytes
 
 READ_CHUNK = 1 << 20
+#: 判断「是不是已经压缩过的容器」要看的文件头字节数
+SNIFF_BYTES = 64
 CODEC_RAW = "raw"
 CODEC_DEFLATE = "deflate"
 CODEC_ZSTD = "zstd"
@@ -107,6 +114,132 @@ COMPRESSED_MAGIC = (
     b"BZ0",                         # brotli（非官方魔数，仅示意）
     b"%PDF-",                       # PDF 内部多为已压缩流
 )
+
+
+def sha256_of(path: str | Path) -> str:
+    """整份文件的 sha256：`hashlib.file_digest` 走 C 循环，比手写分块快一档。"""
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def sha256_of_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+class BlobStore:
+    """内容寻址的松散文件仓库：`root/ab/cd/<checksum>`，相同内容只落盘一次。
+
+    内容仓库（`ContentStore`）用它存放整份压缩后的字节；统计与自检也直接用它
+    数一数仓库目录占了多少。
+    """
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+        paths.make_dir(self.root)
+
+    # ----------------------------------------------------------------- 路径
+    def rel_path_for(self, checksum: str) -> str:
+        return f"{checksum[:2]}/{checksum[2:4]}/{checksum}"
+
+    def path_of(self, rel_path: str) -> Path:
+        return self.root / rel_path
+
+    def exists(self, rel_path: str) -> bool:
+        return bool(rel_path) and self.path_of(rel_path).exists()
+
+    # ----------------------------------------------------------------- 写入
+    def put_file(self, source: str | Path) -> tuple[str, str, int]:
+        """登记一个已有文件，返回 (checksum, rel_path, size)。"""
+        source = Path(source)
+        checksum = sha256_of(source)
+        rel_path = self.rel_path_for(checksum)
+        target = self.path_of(rel_path)
+        size = source.stat().st_size
+        if target.exists():
+            return checksum, rel_path, size
+
+        paths.make_dir(target.parent)
+        temp = target.with_name(target.name + PART_SUFFIX)
+        shutil.copy2(source, temp)
+        temp.replace(target)
+        logger.debug("文件已入库：{} -> {}", source.name, rel_path)
+        return checksum, rel_path, size
+
+    def put_bytes(self, data: bytes) -> tuple[str, str, int]:
+        checksum = sha256_of_bytes(data)
+        rel_path = self.rel_path_for(checksum)
+        target = self.path_of(rel_path)
+        if not target.exists():
+            paths.make_dir(target.parent)
+            target.write_bytes(data)
+        return checksum, rel_path, len(data)
+
+    def put_text(self, text: str) -> tuple[str, str, int]:
+        return self.put_bytes(text.encode("utf-8"))
+
+    # ----------------------------------------------------------------- 读取
+    def read_bytes(self, rel_path: str) -> bytes:
+        return self.path_of(rel_path).read_bytes()
+
+    def read_text(self, rel_path: str) -> str:
+        return self.path_of(rel_path).read_text(encoding="utf-8", errors="replace")
+
+    def remove(self, rel_path: str) -> bool:
+        if not rel_path:
+            return False
+        path = self.path_of(rel_path)
+        if path.exists():
+            path.unlink()
+            self.prune_empty_parents(path)
+            logger.debug("已删除仓库文件：{}", rel_path)
+            return True
+        return False
+
+    # ------------------------------------------------------------- 空目录清理
+    def prune_empty_parents(self, path: str | Path) -> int:
+        """删掉文件后顺手收掉空掉的哈希目录（`ab/cd`），返回删掉的目录数。
+
+        只往上走到仓库根为止：根目录本身、非空目录、被占用的目录都不动。
+        """
+        removed = 0
+        folder = Path(path).parent
+        while folder != self.root and self.root in folder.parents:
+            try:
+                if any(folder.iterdir()):
+                    break
+                folder.rmdir()
+            except OSError as exc:
+                logger.debug("空目录删除失败，留待下次清理：{}（{}）", folder, exc)
+                break
+            removed += 1
+            folder = folder.parent
+        return removed
+
+    def sweep_empty_dirs(self) -> int:
+        """收掉仓库里所有空目录（删内容留下的 `ab/cd`、空的 pack 世代目录）。"""
+        removed = 0
+        folders = sorted(
+            (p for p in self.root.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        )
+        for folder in folders:
+            try:
+                if any(folder.iterdir()):
+                    continue
+                folder.rmdir()
+            except OSError as exc:
+                logger.debug("空目录删除失败，留待下次清理：{}（{}）", folder, exc)
+                continue
+            removed += 1
+        return removed
+
+    # ----------------------------------------------------------------- 统计
+    def iter_files(self):
+        return (p for p in self.root.rglob("*") if p.is_file())
+
+    def total_size(self) -> int:
+        return sum(path.stat().st_size for path in self.iter_files())
 
 
 def is_compressible(name: str, mime: str = "") -> bool:
@@ -223,6 +356,42 @@ def decode_stored(codec: str, data: bytes) -> bytes:
     raise ValueError(f"未知的内容编码：{codec}")
 
 
+def iter_decoded(path: str | Path, codec: str, chunk: int = READ_CHUNK) -> Iterator[bytes]:
+    """把落盘文件按编码流式还原成原始字节（每次最多 `chunk` 字节）。
+
+    四种编码都支持：`raw` 直接读文件，`zstd` 走标准库的 `ZstdFile`，
+    `deflate` / `lzma` 用各自的一次性解码器分批喂。解压失败会抛异常，
+    调用方决定是「这份内容坏了」还是「整场中断」。
+    """
+    target = Path(path)
+    if codec == CODEC_ZSTD:
+        if _zstd is None:
+            raise ValueError("这份内容以 zstd 压缩，需要 Python 3.14+ 才能读取")
+        with _zstd.ZstdFile(target, "rb") as handle:
+            for data in iter(lambda: handle.read(chunk), b""):
+                yield data
+        return
+    if codec == CODEC_RAW:
+        with target.open("rb") as handle:
+            for data in iter(lambda: handle.read(chunk), b""):
+                yield data
+        return
+    if codec == CODEC_DEFLATE:
+        pump = zlib.decompressobj()
+    elif codec == CODEC_LZMA:
+        pump = lzma.LZMADecompressor()
+    else:
+        raise ValueError(f"未知的内容编码：{codec}")
+    with target.open("rb") as handle:
+        for data in iter(lambda: handle.read(chunk), b""):
+            unpacked = pump.decompress(data)
+            if unpacked:
+                yield unpacked
+        tail = pump.flush() if hasattr(pump, "flush") else b""
+        if tail:
+            yield tail
+
+
 @dataclass
 class VerifyReport:
     """完整性校验结果：计数 + 少量可读的问题描述。"""
@@ -319,25 +488,33 @@ class ContentStore:
         return self.put_bytes(text.encode("utf-8"), name=name, mime=mime)
 
     def _store_file(self, source: Path, checksum: str, name: str, mime: str) -> tuple[str, int]:
-        """把文件整份编码落盘，返回 (编码, 落盘大小)。"""
+        """把文件整份编码落盘，返回 (编码, 落盘大小)。
+
+        源文件只开一次：先读文件头判断是不是已压缩容器，不是就接着同一个句柄边读边压。
+        """
         target = self.loose.path_of(self.loose.rel_path_for(checksum))
         size = source.stat().st_size
         codec = policy_for(name, mime)
-        if codec == CODEC_RAW or sniff_compressed(self._sample(source)):
+        if codec == CODEC_RAW:
             return CODEC_RAW, self._copy_raw(source, target)
         textual = is_textual(name, mime)
         temp = target.with_name(target.name + PART_SUFFIX)
         paths.make_dir(target.parent)
-        compressor = _compressor(codec, textual)
         try:
-            with source.open("rb") as reader, temp.open("wb") as writer:
-                for data in iter(lambda: reader.read(READ_CHUNK), b""):
-                    packed = compressor.compress(data)
-                    if packed:
-                        writer.write(packed)
-                tail = compressor.flush()
-                if tail:
-                    writer.write(tail)
+            with source.open("rb") as reader:
+                head = reader.read(SNIFF_BYTES)
+                if sniff_compressed(head):  # 已经是压缩容器：原样存更省事
+                    return CODEC_RAW, self._copy_raw(source, target)
+                compressor = _compressor(codec, textual)
+                with temp.open("wb") as writer:
+                    chunks = itertools.chain((head,), iter(lambda: reader.read(READ_CHUNK), b""))
+                    for data in chunks:
+                        packed = compressor.compress(data)
+                        if packed:
+                            writer.write(packed)
+                    tail = compressor.flush()
+                    if tail:
+                        writer.write(tail)
         except Exception:  # noqa: BLE001 - 压缩失败就退回原样存，不留下半个文件
             temp.unlink(missing_ok=True)
             logger.warning("内容压缩失败，改为原样存储：{}", name)
@@ -367,13 +544,6 @@ class ContentStore:
         temp = target.with_name(target.name + PART_SUFFIX)
         temp.write_bytes(data)
         os.replace(temp, target)
-
-    def _sample(self, source: Path) -> bytes:
-        try:
-            with source.open("rb") as handle:
-                return handle.read(64)
-        except OSError:
-            return b""
 
     def _record(self, checksum: str, size: int, codec: str, stored_size: int, name: str, mime: str) -> None:
         row = self.content(checksum)
@@ -419,28 +589,18 @@ class ContentStore:
 
     def read_content(self, checksum: str) -> bytes:
         """整份读回原始字节；文件不在或损坏时抛异常。"""
-        stored = self._stored_bytes(checksum)
-        if stored is None:
-            raise FileNotFoundError(f"内容文件缺失：{checksum[:12]}")
         row = self.content(checksum)
-        data = decode_stored(row.codec if row is not None else CODEC_RAW, stored)
+        data = b"".join(self.iter_content(checksum))
         if row is not None and len(data) != int(row.size):
             raise ValueError(f"内容大小不符：{checksum[:12]}（{len(data)} != {row.size}）")
         return data
 
     def iter_content(self, checksum: str) -> Iterator[bytes]:
-        """分片给出原始字节；原样存的内容直接流式读文件。"""
+        """分片给出原始字节；四种编码都按流式解码，内存里只留一块。"""
         if not self.content_available(checksum):
             raise FileNotFoundError(f"内容文件缺失：{checksum[:12]}")
-        if self._codec_of(checksum) == CODEC_RAW:
-            rel_path = self.rel_path_for(checksum)
-            with self.loose.path_of(rel_path).open("rb") as handle:
-                for data in iter(lambda: handle.read(READ_CHUNK), b""):
-                    yield data
-            return
-        data = self.read_content(checksum)
-        for start in range(0, len(data), READ_CHUNK):
-            yield data[start:start + READ_CHUNK]
+        path = self.loose.path_of(self.rel_path_for(checksum))
+        yield from iter_decoded(path, self._codec_of(checksum))
 
     def export_content(self, checksum: str, target: str | Path) -> bool:
         """把内容导出到目标路径（先写 `.part` 再原子改名）；内容不可用返回 False。"""
@@ -612,13 +772,17 @@ class ContentStore:
                 self._note(report, f"落盘大小不符：{row.checksum[:12]}（{stored_size} != {row.stored_size}）")
             if level == "quick":
                 continue
+            digest = hashlib.sha256()
+            total = 0
             try:
-                data = decode_stored(row.codec, path.read_bytes())
+                for data in iter_decoded(path, row.codec):
+                    digest.update(data)
+                    total += len(data)
             except Exception as exc:  # noqa: BLE001 - 单份内容损坏不该中断整场校验
                 report.bad_checksum += 1
                 self._note(report, f"内容解压失败：{row.checksum[:12]}（{exc}）")
                 continue
-            if len(data) != int(row.size) or sha256_of_bytes(data) != row.checksum:
+            if total != int(row.size) or digest.hexdigest() != row.checksum:
                 report.bad_checksum += 1
                 self._note(report, f"内容校验和不符：{row.checksum[:12]}")
         for path in self.loose.iter_files():
@@ -691,6 +855,8 @@ __all__ = [
     "CODEC_LZMA",
     "CODEC_RAW",
     "CODEC_ZSTD",
+    "SNIFF_BYTES",
+    "BlobStore",
     "ContentStore",
     "VerifyReport",
     "compress_bytes",
@@ -699,8 +865,11 @@ __all__ = [
     "encode_stored",
     "is_compressible",
     "is_textual",
+    "iter_decoded",
     "policy_for",
     "preferred_codec",
+    "sha256_of",
+    "sha256_of_bytes",
     "sniff_compressed",
     "zstd_available",
 ]

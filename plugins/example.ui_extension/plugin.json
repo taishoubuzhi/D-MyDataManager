@@ -7,8 +7,5 @@
   "author": "D-MyDataManager",
   "builtin": true,
   "enabled": false,
-  "entry": "plugin.py",
-  "data": {
-    "info": "data/info.json"
-  }
+  "entry": "plugin.py"
 }

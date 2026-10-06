@@ -1,15 +1,17 @@
 """自动标注共享库：规则模型 + 匹配引擎、数据类型 ↔ 模型对齐表、批处理管线与共用控件。
 
-库自身**不注册页面、不写数据库**：它只负责把出厂默认（`data/rules.json`、`data/align.json`）
+库自身**不注册页面、不写数据库**：它只负责把出厂默认（`.data/rules.json`、`.data/align.json`）
 与用户在 `.configs/` 里的改动合并成可用视图，并把「规则怎么匹配」「条目怎么排成批量请求」
 「模型输出怎么解析」这些纯逻辑交出去。自动标签（`auto_tag*`）与自动关键词
 （`auto_keyword`）两个插件共用这里的实现，规则文件与对齐表也只有一份。
+
+**纯规则路径不依赖模型工具库**：`auto_tag.rule` 只用到规则引擎，所以这里对 `lib.model`
+的引用一律走 `_model_api()`（没启用就返回 None），模块导入期不碰它。
 """
 
 from __future__ import annotations
 
 from app.sdk import Plugin, storage
-from app.sdk import models as model_sdk
 
 from .align import (
     DATATYPES,
@@ -81,27 +83,41 @@ def align_file():
 
 
 # --------------------------------------------------------------- 出厂默认
+def _items(payload: object) -> list:
+    """出厂文件是统一清单格式，取它的 `items`（顺手容忍旧的纯数组写法，方便手改时试错）。"""
+    if isinstance(payload, dict):
+        raw = payload.get("items")
+        return list(raw) if isinstance(raw, (list, tuple)) else []
+    return list(payload) if isinstance(payload, (list, tuple)) else []
+
+
 def factory_rules(ctx) -> tuple[tuple[Rule, ...], tuple[str, ...]]:
-    """出厂规则；返回 (规则, 读取出错说明)。"""
+    """出厂规则（`.data/rules.json`，统一清单格式）；返回 (规则, 读取出错说明)。"""
     try:
         payload = ctx.data("rules", {})
     except Exception as exc:  # 出厂文件坏了也不该让插件起不来
         return (), (f"出厂规则读取失败：{exc}",)
-    return parse_rules(payload, source=SOURCE_FACTORY)
+    return parse_rules(_items(payload), source=SOURCE_FACTORY)
 
 
 def factory_align(ctx) -> tuple[tuple[AlignTable, ...], tuple[str, ...]]:
-    """出厂对齐表（`label` / `keyword` 两张）。"""
+    """出厂对齐表（`.data/align.json`，按 `purpose` 分 `label` / `keyword` 两张）。"""
     try:
         payload = ctx.data("align", {})
     except Exception as exc:
         return (), (f"出厂对齐表读取失败：{exc}",)
-    if not isinstance(payload, dict):
-        return (), ("出厂对齐表必须是一个对象",)
+    grouped: dict[str, list[dict]] = {}
+    for item in _items(payload):
+        if not isinstance(item, dict):
+            continue
+        purpose = str(item.get("purpose") or "")
+        grouped.setdefault(purpose, []).append(
+            {key: value for key, value in item.items() if key not in ("key", "purpose")}
+        )
     tables: list[AlignTable] = []
     errors: list[str] = []
     for purpose in PURPOSES:
-        rows, issues = parse_table(payload.get(purpose), purpose=purpose)
+        rows, issues = parse_table(grouped.get(purpose, []), purpose=purpose)
         tables.append(AlignTable(purpose=purpose, rows=rows, errors=tuple(issues)))
         errors.extend(f"{PURPOSE_LABELS.get(purpose, purpose)}：{issue}" for issue in issues)
     return tuple(tables), tuple(errors)
@@ -138,10 +154,23 @@ def save_align(ctx, book: AlignBook) -> bool:
 
 
 # --------------------------------------------------------------- 模型清单
+
+def _model_api():
+    """模型工具库的门面模块；没启用（或没装）时返回 None。"""
+    try:
+        from dm_plugin.lib.model import api
+    except ImportError:
+        return None
+    return api
+
+
 def registered_models() -> dict[str, str]:
     """`{预定义方案 key: 已登记 model_id}`；没启用模型插件时为空。"""
+    model_api = _model_api()
+    if model_api is None:
+        return {}
     try:
-        return registered_map(model_sdk.templates())
+        return registered_map(model_api.templates())
     except Exception:
         return {}
 
@@ -152,8 +181,11 @@ def known_model_ids() -> set[str] | None:
     对齐表里存的是 `model_id`：模型页把模型删掉之后那份 id 就成了死引用，状态列会一直
     显示未就绪、补全逻辑也以为「已经登记过」。有这份 id 集合就能识别并清掉它们。
     """
+    model_api = _model_api()
+    if model_api is None:
+        return None
     try:
-        records = model_sdk.list_models()
+        records = model_api.list_models()
     except Exception:
         return None
     return {str(getattr(record, "id", "") or "") for record in records} - {""}
@@ -163,8 +195,9 @@ def model_choices(*, capability: str = "") -> tuple[tuple[str, ...], tuple[str, 
     """已登记模型的下拉选项：返回 `(显示文字, 传给 combo_box data 的值)`。"""
     labels: list[str] = []
     values: list[str] = []
+    model_api = _model_api()
     try:
-        records = model_sdk.list_models(capability=capability)
+        records = model_api.list_models(capability=capability) if model_api is not None else ()
     except Exception:
         records = ()
     for record in records:
@@ -180,8 +213,13 @@ def template_choices(*, capability: str = "", lightweight_only: bool = False):
     """预定义方案的下拉选项：`(显示文字, 方案 key)`；轻量档排前面。"""
     labels: list[str] = []
     values: list[str] = []
+    model_api = _model_api()
     try:
-        rows = model_sdk.templates(capability=capability, lightweight_only=lightweight_only)
+        rows = (
+            model_api.templates(capability=capability, lightweight_only=lightweight_only)
+            if model_api is not None
+            else ()
+        )
     except Exception:
         rows = ()
     for row in rows:

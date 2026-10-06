@@ -20,7 +20,7 @@ for _path in (ROOT, ROOT / "src"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from app.core import paths  # noqa: E402
+from app.core.runtime import paths # noqa: E402
 from app.db import database  # noqa: E402
 from app.db.models import DataType, guess_type  # noqa: E402
 from app.repositories import ItemFilter, ItemRepository  # noqa: E402

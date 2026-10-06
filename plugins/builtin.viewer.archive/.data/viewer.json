@@ -1,0 +1,37 @@
+{
+  "manifest": "1",
+  "id": "builtin.viewer.archive.viewer",
+  "version": "1",
+  "kind": "registry",
+  "title": "压缩包查看器",
+  "description": "列出压缩包内的条目与大小，支持预览包内文本。",
+  "items": [
+    {
+      "key": "builtin.viewer.archive",
+      "name": "压缩包查看器",
+      "kind": "viewer",
+      "host": "dialog",
+      "extensions": [
+        "zip",
+        "jar",
+        "whl",
+        "apk",
+        "tar",
+        "gz",
+        "tgz",
+        "bz2",
+        "tbz",
+        "tbz2",
+        "xz",
+        "txz"
+      ],
+      "capabilities": [
+        "条目列表",
+        "压缩比",
+        "包内文本预览"
+      ],
+      "description": "列出压缩包内的条目与大小，支持预览包内文本。",
+      "order": 100
+    }
+  ]
+}

@@ -8,7 +8,7 @@
 | --- | --- |
 | plugin.json | 清单：依赖与 data 声明 |
 | plugin.py | 插件类 MarkdownViewerPlugin(ViewerPlugin)：只实现 create_view() |
-| data/viewer.json | 查看器元数据（kind=markdown、扩展名 md/markdown、能力） |
+| .data/viewer.json | 查看器元数据（kind=markdown、扩展名 md/markdown、能力） |
 
 ## 依赖
 
@@ -21,4 +21,4 @@
 
 ## 数据文件
 
-- data/viewer.json：元数据；截断阈值 512 KiB 来自程序侧的读取上限。
+- .data/viewer.json：元数据；截断阈值 512 KiB 来自程序侧的读取上限。

@@ -1,0 +1,40 @@
+{
+  "manifest": "1",
+  "id": "builtin.editor.office.editor",
+  "version": "1",
+  "kind": "registry",
+  "title": "系统默认程序",
+  "description": "用电脑上关联的 Office / PDF 程序打开并编辑文档与表格。",
+  "items": [
+    {
+      "key": "builtin.editor.office",
+      "name": "系统默认程序",
+      "kind": "external",
+      "extensions": [
+        "doc",
+        "docx",
+        "docm",
+        "dot",
+        "dotx",
+        "xls",
+        "xlsx",
+        "xlsm",
+        "xlsb",
+        "csv",
+        "ppt",
+        "pptx",
+        "pptm",
+        "odt",
+        "ods",
+        "odp",
+        "rtf",
+        "pdf"
+      ],
+      "capabilities": [
+        "系统默认程序编辑"
+      ],
+      "description": "用电脑上关联的 Office / PDF 程序打开并编辑文档与表格。",
+      "order": 200
+    }
+  ]
+}

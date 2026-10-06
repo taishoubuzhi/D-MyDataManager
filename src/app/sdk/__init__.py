@@ -11,14 +11,12 @@ from __future__ import annotations
 
 from loguru import logger
 
-from . import console, data, editors, items, models, storage, ui, viewers
+from . import console, data, items, manifest, storage, ui
 from .context import ContextServices, PluginContext
 from .errors import (
     DependencyError,
-    ManifestError,
-    ModelBusyError,
-    ModelError,
     PluginError,
+    PluginManifestError,
     SdkError,
     VersionError,
 )
@@ -40,9 +38,7 @@ __all__ = [
     "DependencyError",
     "Events",
     "ExtensionPoint",
-    "ManifestError",
-    "ModelBusyError",
-    "ModelError",
+    "PluginManifestError",
     "Plugin",
     "PluginContext",
     "PluginError",
@@ -53,11 +49,10 @@ __all__ = [
     "compare_versions",
     "console",
     "data",
-    "editors",
     "events",
     "items",
     "library",
-    "models",
+    "manifest",
     "parse_range",
     "parse_version",
     "plugin_class_names",
@@ -69,7 +64,6 @@ __all__ = [
     "sdk_banner",
     "storage",
     "ui",
-    "viewers",
 ]
 
 

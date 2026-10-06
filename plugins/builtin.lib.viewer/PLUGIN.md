@@ -1,7 +1,7 @@
 # 查看器库（builtin.lib.viewer）
 
 查看器插件的公共工具箱：查看器基类、窗口外壳、查看器注册表，外加「按规则决定用哪个查看器打开」的调度实现与「查看器」配置页。
-打开行为整体由本插件提供（扩展接口 `viewer.open`）；程序本体只剩调度门面与类型别名（`app.sdk.viewers`），注册表、规则、界面都在这里。
+打开行为整体由本插件提供（扩展接口 `viewer.open`）；程序本体只剩调度门面与类型别名（`app.services.viewer_service`），注册表、规则、界面都在这里。
 
 ## 目录
 
@@ -22,13 +22,13 @@
 
 ## 暴露的库
 
-库模块固定写成入口 `plugin.py`（协议规定：一个插件对其他插件的公开面只有 plugin.py）。两种取法：
+本插件的库模块是入口 `plugin.py`，导入名 `dm_plugin.builtin.lib.viewer.plugin`。两种取法：
 
     from dm_plugin.builtin.lib.viewer.plugin import ViewerPlugin, ViewerWindow   # 推荐：静态导入（要先 depends）
     library("builtin.lib.viewer", "plugin")                                       # 兜底：运行时取
 
 本插件同时声明两种对外面：`libraries` 给的是**类**（要继承 / 实例化），`provides: viewer.open` 给的是**运行期那一个实例**
-（消费方 `ctx.require("viewer.open")`）。分工见 `plugins/PLUGIN_PROTOCOL.md` 2.7。
+（消费方 `ctx.require("viewer.open")`）。分工见 `../../docs/PLUGIN_PROTOCOL.md` 2.7。
 
 ViewerPlugin 提供：
 
@@ -42,8 +42,8 @@ ViewerPlugin 提供：
 
 入口类 ViewerLibraryPlugin 在 setup() 里：
 
-- `ctx.provide(OPEN_EXTENSION, ViewerOpenApi(ctx))` —— `OPEN_EXTENSION = "viewer.open"` 定义在 `app.sdk.viewers`；
-- `ctx.add_page(CONFIG_PAGE_KEY, "查看器", lambda: ViewerConfigPage(ctx, ctx.require(OPEN_EXTENSION)), icon="VIEW", order=200)`
+- `ctx.provide(VIEWER_EXTENSION, ViewerOpenApi(ctx))` —— `VIEWER_EXTENSION = "viewer.open"` 定义在 `app.services.viewer_service`；
+- `ctx.add_page(CONFIG_PAGE_KEY, "查看器", lambda: ViewerConfigPage(ctx, ctx.require(VIEWER_EXTENSION)), icon="VIEW", order=200)`
   —— 宿主没有提供界面接口（`app.ui`）时只记一条 warning，查看器照常可用；
 - `teardown()` 里 `reset_registry()` —— 本插件卸载时注册表跟着清空，重新载入时各查看器插件再登记。
 
@@ -56,7 +56,7 @@ ViewerPlugin 提供：
 
 ## 扩展接口 viewer.open
 
-程序侧 `app.sdk.viewers` 的 `open_path()` / `open_viewer_with()` / `open_system()` 都先取
+程序侧 `app.services.viewer_service` 的 `open_path()` / `open_viewer_with()` / `open_system()` 都先取
 `extension_registry.provider("viewer.open")`：拿不到接口时退回系统默认（`rules_available()` 可用来判断）。ViewerOpenApi 的成员：
 
 | 分组 | 成员 |
@@ -80,4 +80,4 @@ ViewerPlugin 提供：
 
 builtin.viewer.image / builtin.viewer.text / builtin.viewer.markdown / builtin.viewer.spreadsheet / builtin.viewer.archive /
 builtin.viewer.audio / builtin.viewer.video —— 它们都写 `depends: [{"id": "builtin.lib.viewer"}, {"id": "builtin.lib.ui"}]`，
-在自己的目录里放视图代码（例如 `plugins/builtin.viewer.image/image_view.py`），继承 ViewerPlugin 并只实现 create_view()。
+在自己的目录里放视图代码（例如 `plugins/builtin.viewer.image/.plugin/image_view.py`），继承 ViewerPlugin 并只实现 create_view()。

@@ -19,13 +19,9 @@ from ...core.config import SIMPLE_DEFAULT, SIMPLE_FULL, SIMPLE_NONE, SIMPLE_MODE
 
 
 def simple_mode() -> str:
-    """当前的简化挡位；配置里如果是旧版布尔值，按 不简化 / 完全简化 处理。"""
+    """当前的简化挡位（只认三挡位；旧版布尔值在启动时已被换算掉）。"""
     value = config.simpleDisplay.value
-    if value in SIMPLE_MODES:
-        return str(value)
-    if isinstance(value, bool):
-        return SIMPLE_FULL if value else SIMPLE_NONE
-    return SIMPLE_DEFAULT
+    return str(value) if value in SIMPLE_MODES else SIMPLE_DEFAULT
 
 
 def simple_display() -> bool:

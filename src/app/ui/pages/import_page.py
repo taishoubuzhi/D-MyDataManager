@@ -27,7 +27,7 @@ from qfluentwidgets import (
 from loguru import logger
 
 from ...core.config import config
-from ...core.signals import signalBus
+from ...core.runtime.signals import signalBus
 from ...db import database
 from ...db.models import guess_type
 from ...repositories import ItemRepository, TagRepository

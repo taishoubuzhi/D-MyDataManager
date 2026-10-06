@@ -5,6 +5,7 @@
 会标红。本脚本按仓库里的插件清单一比一生成桩目录：
 
     stubs/dm_plugin/<插件 id 的点号路径>/{__init__.pyi,plugin.pyi}
+    stubs/dm_plugin/<插件 id 的点号路径>/<libraries 声明模块的点号路径>.pyi
 
 把 `stubs` 标成源码根（仓库的 .idea/D-MyDataManager.iml 已经配好）之后，
 IDE 就能解析这些导入，插件作者不用再看红字。
@@ -26,6 +27,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_DIR = ROOT / "plugins"
 STUB_DIR = ROOT / "stubs" / "dm_plugin"
+
+#: 代码目录名（载入时挂进包搜索路径，导入名里不带它）
+CODE_DIR = ".plugin"
 
 HEADER = "# 由 scripts/plugin_stubs.py 生成，请勿手改：dm_plugin 是运行期合成包，这里只是给 IDE 用的桩。\n"
 
@@ -77,6 +81,33 @@ def _package_init(plugin_id: str) -> str:
     return HEADER + f'"""合成包：{plugin_id}（运行期由插件核心登记，这里只是 IDE 桩）。"""\n'
 
 
+def _module_parts(module: str) -> list[str]:
+    """`libraries[].module` 的导入路径：`.plugin/api.py` -> `['api']`。"""
+    rel = str(module or "").replace("\\", "/").strip("/")
+    if rel.startswith(CODE_DIR + "/"):
+        rel = rel[len(CODE_DIR) + 1 :]
+    if rel.endswith(".py"):
+        rel = rel[:-3]
+    return [part for part in rel.split("/") if part and part != ".."]
+
+
+def _library_stub(plugin_id: str, folder: Path, module: str) -> str:
+    """一个库模块的 .pyi：按 `__all__` 列名字，没有 `__all__` 就退化成任意属性。"""
+    names = [name for name in _read_all(folder / module) if name]
+    lines = [
+        HEADER.rstrip("\n"),
+        f'"""插件 {plugin_id} 暴露的库模块：{module}。"""',
+        "",
+        "from typing import Any",
+        "",
+    ]
+    if not names:
+        lines.append("def __getattr__(name: str) -> Any: ...")
+    for name in names:
+        lines.append(f"class {name}: ..." if _CLASS_HINT.match(name) else f"{name}: Any")
+    return "\n".join(lines) + "\n"
+
+
 def _plugin_stub(info: dict, folder: Path) -> str:
     """一个插件的 plugin.pyi：入口类 + 库导出的名字。"""
     plugin_id = str(info.get("id") or folder.name)
@@ -119,6 +150,17 @@ def build(plugin_dir: Path = PLUGIN_DIR) -> dict[str, str]:
         leaf = f"dm_plugin/{'/'.join(parts)}"
         files[f"{leaf}/__init__.pyi"] = _package_init(plugin_id)
         files[f"{leaf}/plugin.pyi"] = _plugin_stub(info, folder)
+        entry_parts = _module_parts(str(info.get("entry") or "plugin.py"))
+        for library in info.get("libraries") or ():
+            module = str(library.get("module") or "")
+            parts_of_module = _module_parts(module)
+            if not parts_of_module or parts_of_module == entry_parts:
+                continue
+            parent = leaf
+            for part in parts_of_module[:-1]:
+                parent = f"{parent}/{part}"
+                files.setdefault(f"{parent}/__init__.pyi", _package_init(plugin_id))
+            files[f"{parent}/{parts_of_module[-1]}.pyi"] = _library_stub(plugin_id, folder, module)
     return files
 
 

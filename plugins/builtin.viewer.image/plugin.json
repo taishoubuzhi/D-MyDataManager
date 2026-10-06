@@ -15,9 +15,6 @@
       "id": "builtin.lib.ui"
     }
   ],
-  "data": {
-    "viewer": "data/viewer.json"
-  },
   "options": [
     {
       "key": "fit_on_open",

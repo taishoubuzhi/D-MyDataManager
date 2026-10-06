@@ -20,8 +20,8 @@
 | `align.py` | 数据类型 ↔ 模型对齐表（`AlignRow` / `AlignTable` / `AlignBook`） |
 | `pipeline.py` | 条目 → 批量请求 → 结果 → 名字列表（不含写库/界面） |
 | `ui/controls.py` | 共用控件：规则/对齐行编辑对话框、进度面板、表格填充 |
-| `data/rules.json` | 出厂规则（25 条，覆盖常见后缀与类型） |
-| `data/align.json` | 出厂对齐表：`label` / `keyword` 两张，各 10 个数据类型 |
+| `.data/rules.json` | 出厂规则（25 条，覆盖常见后缀与类型），**统一清单格式**（`id: lib.autolabel.rules`，规则在 `items` 里） |
+| `.data/align.json` | 出厂对齐表：`label` / `keyword` 两张，各 10 个数据类型，**统一清单格式**（`id: lib.autolabel.align`，每项 `key = <purpose>/<数据类型>`） |
 
 用户改动只写两份文件，**只在和出厂不同时才写**（出厂规则更新后仍然生效）：
 
@@ -60,10 +60,10 @@ table.missing(registered=registered)                    # → 还没着落的行
 ```
 
 `registered` 是 `{预定义方案 key: 已登记 model_id}`，来自
-`app.sdk.models.templates()`（每行取 `id` / `registered_id`）；`AlignRow.model_id` 优先于
-`template`。界面上的「一键补全」= `app.sdk.models.create_from_template(key)` 登记草稿并写回对齐表，
-缺权重时弹一个确认框、确认后 `app.sdk.models.download_model(model_id)` 排队下载；缺什么由
-`app.sdk.models.requirements(model_id)` 提示（运行环境仍去模型页装）。
+`registered_models()`（内部走 `dm_plugin.lib.model.api.templates()`，每行取 `id` / `registered_id`）；`AlignRow.model_id` 优先于
+`template`。界面上的「一键补全」= `dm_plugin.lib.model.api.create_from_template(key)` 登记草稿并写回对齐表，
+缺权重时弹一个确认框、确认后 `dm_plugin.lib.model.api.download_model(model_id)` 排队下载；缺什么由
+`dm_plugin.lib.model.api.requirements(model_id)` 提示（运行环境仍去模型页装）。
 `ui/controls.py` 的对齐表工具：`preset_align_text(row)`（出厂方案的中文文案，供提示行用）、
 `align_rows(rows, *, registered=None, factory=None, names=None)` / `fill_align_table(...)`（5 列：
 数据类型 / 方案 / 主模型 / 对齐模型 / 状态；「方案」列三态——`启用`（这一行跟随系统）、`自定义`（自己挑过）、`已停用`（`enabled=False` 时优先显示），
@@ -102,7 +102,7 @@ pending_keys(plan_obj, results)     # 取消后还没出结果的条目
 ```
 
 * `plan()` 把没有 id、没有可用模型的条目放进 `skipped`（附可显示的中文原因）；
-* `run()` 只是转交 `app.sdk.models.run_batch()`（软依赖：模型插件没启用时会在那里报错）；
+* `run()` 只是转交 `dm_plugin.lib.model.api.run_batch()`（软依赖：模型工具库没启用时会在那里报错）；
 * `parse_names()` 解析模型输出（JSON 数组、项目符号、编号、逗号/顿号/换行、``` 围栏）；
 * `clamp()` 负责数量上下限与「只留库里已有的名字」，`merge_names()` 合并规则与模型结果。
 * `align_texts(items, *, table=None, registered=None, purpose=PURPOSE_LABEL, on_problem=None)`：只有

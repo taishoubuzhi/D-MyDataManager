@@ -1,117 +1,56 @@
 """测试基类：把数据库、库文件夹、内容仓库与配置重定向到临时目录。
 
-所有测试都在 `tests/_tmp/<测试类名>/` 里运行，不会读写真实的 `.resources/` 与 `.configs/`。
-设置环境变量 `DM_KEEP_TMP=1` 可保留临时目录以便排查失败。
+所有测试都在 `tests/.tmp/<测试类名>/` 里运行，不会读写真实的 `.resources/` 与 `.configs/`。
+临时目录由 `scripts/tmpenv.py` 统一管理，进程退出时整体删除；设置环境变量 `DM_KEEP_TMP=1`
+可保留以便排查失败。新增用例的规范见 `docs/TESTS.md`。
 """
 
 from __future__ import annotations
 
-import itertools
-import os
 import shutil
 import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-for _path in (ROOT, ROOT / "src"):
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+SCRIPTS = ROOT / "scripts"
+for _path in (ROOT, ROOT / "src", SCRIPTS):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
-from app.core import paths  # noqa: E402
-from app.core.config import config  # noqa: E402
+from tmpenv import (  # noqa: E402
+    KEEP_TMP,
+    TempDir as _TempDir,
+    redirect_paths,
+    reset_config,
+    reset_runtime_dirs,
+    tests_tmp,
+)
 from tests.dataset import Corpus, build_corpus  # noqa: E402
 
-TMP_ROOT = ROOT / "tests" / "_tmp"
-KEEP_TMP = bool(os.environ.get("DM_KEEP_TMP"))
+#: 测试的临时根：`tests/.tmp/`（进程退出时整体删除）
+TMP_ROOT = tests_tmp()
+
+__all__ = [
+    "KEEP_TMP",
+    "ROOT",
+    "TMP_ROOT",
+    "Corpus",
+    "IsolatedCase",
+    "TempDir",
+    "build_corpus",
+    "redirect_paths",
+    "reset_config",
+    "reset_runtime_dirs",
+]
 
 
-class TempDir:
-    """临时目录。
-
-    tempfile.mkdtemp 以 0o700 建目录，本机沙箱下该目录里无法再写入文件，因此改用普通 mkdir 建目录。
-    """
-
-    _counter = itertools.count(1)
+class TempDir(_TempDir):
+    """测试用临时目录：落在 `tests/.tmp/` 下。"""
 
     def __init__(self, prefix: str = "case") -> None:
-        TMP_ROOT.mkdir(parents=True, exist_ok=True)
-        self.name = str(TMP_ROOT / f"{prefix}-{os.getpid()}-{next(self._counter)}")
-        Path(self.name).mkdir(parents=True, exist_ok=True)
-
-    @property
-    def path(self) -> Path:
-        return Path(self.name)
-
-    def cleanup(self) -> None:
-        shutil.rmtree(self.name, ignore_errors=True)
-
-    def __enter__(self) -> Path:
-        return self.path
-
-    def __exit__(self, *exc_info: object) -> None:
-        self.cleanup()
-
-
-def redirect_paths(root: Path) -> None:
-    """把 paths 里的运行期目录整体指向临时根目录。"""
-    data = paths.apply_resource_root(root / paths.RESOURCE_ROOT_NAME)
-    paths.LOG_DIR = root / paths.LOG_DIR_NAME
-    paths.DEFAULT_EXPORT_DIR = root / "exports"
-    paths.CONFIG_DIR = root / paths.CONFIG_DIR_NAME
-    paths.CONFIG_FILE = paths.CONFIG_DIR / "config.json"
-    paths.PLUGIN_DIR = root / "plugins"
-    paths.PLUGIN_STATE_FILE = paths.CONFIG_DIR / "plugins.json"
-    paths.VIEWER_RULES_FILE = paths.CONFIG_DIR / "viewers.json"
-    paths.LEGACY_VIEWER_RULES_FILE = paths.CONFIG_DIR / "open_with.json"
-    paths.SESSION_FILE = paths.CONFIG_DIR / "session.json"
-    paths.ensure_dirs()
-    return data
-
-
-def reset_config(root: Path) -> None:
-    """把配置的保存目标改到临时目录，并把影响用例的配置项恢复为默认值。"""
-    from qfluentwidgets import qconfig
-
-    target = root / paths.CONFIG_DIR_NAME / "config.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("{}", encoding="utf-8")
-    qconfig.load(str(target), config)
-    config.set(config.dbUrl, "")
-    config.set(config.dbEcho, False)
-    config.set(config.resourcePath, str(paths.DATA_DIR))
-    config.set(config.resourceProtected, False)
-    config.set(config.hiddenProtected, False)
-    config.set(config.exportPath, "")
-    config.set(config.currentUserId, 0)
-    config.set(config.nameByTime, False)
-    config.set(config.duplicatePolicy, "rename")
-    config.set(config.coverSize, 256)
-    config.set(config.pruneMode, "none")
-    config.set(config.keepVersions, 10)
-    config.set(config.keepSize, 2048)
-    config.set(config.keepDays, 30)
-    config.set(config.pageSize, 50)
-    config.set(config.showCategoryPanel, True)
-    config.set(config.showFilterPanel, True)
-    config.set(config.expandCategories, False)
-    config.set(config.expandedFilters, [])
-    config.set(config.simpleDisplay, "none")
-    config.set(config.tooltipDelay, 2000)
-
-
-def reset_runtime_dirs() -> None:
-    """清空库文件夹、内容仓库、封面与数据库文件，让每个用例都从零开始。"""
-    for folder in (
-        paths.DEFAULT_LIBRARY_DIR,
-        paths.LEGACY_STORE_DIR,
-        paths.LEGACY_COVER_DIR,
-        paths.DEFAULT_EXPORT_DIR,
-    ):
-        shutil.rmtree(folder, ignore_errors=True)
-    for name in ("data.db", "data.db-wal", "data.db-shm"):
-        (paths.DATA_DIR / name).unlink(missing_ok=True)
-    paths.ensure_dirs()
+        super().__init__(TMP_ROOT, prefix=prefix)
 
 
 class IsolatedCase(unittest.TestCase):

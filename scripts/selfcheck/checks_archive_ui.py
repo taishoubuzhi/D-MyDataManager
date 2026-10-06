@@ -393,7 +393,7 @@ def archive_table(case: Case) -> None:
 @check("archive_entry_filters", "pages")
 def archive_entry_filters(case: Case) -> None:
     """条目明细：各列筛选、状态随数据变更即时刷新、普通用户的可见与回档范围。"""
-    from app.core.signals import signalBus
+    from app.core.runtime.signals import signalBus
     from app.db.models import DataItem as Item
     from app.services import ArchiveService, ImportService, ItemService
     from app.ui.framework import PageBase
@@ -675,10 +675,10 @@ def viewer_config_page(case: Case) -> None:
     """查看器配置页（由 builtin.lib.viewer 插件提供）：格式清单、模式与查看器联动、保存 / 恢复默认。"""
     from pathlib import Path as _Path
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
-    from app.sdk import viewers as viewer_api
-    from app.sdk.viewers import open_api
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
+    from app.services import viewer_service as viewer_api
+    from app.services.viewer_service import open_api
     from app.services.plugin_service import plugin_service
 
     # 插件登记配置页要先有 app.ui：按真实程序的顺序，先给接口再载入插件
@@ -693,7 +693,7 @@ def viewer_config_page(case: Case) -> None:
     page = window._plugin_pages.get("viewer_config")
     _expect(problems, page is not None, "查看器插件应把配置页注册成插件页面 viewer_config")
     assert page is not None, "查看器配置页检查未通过：" + "；".join(problems)
-    api = extension_registry.provider(viewer_api.OPEN_EXTENSION)
+    api = extension_registry.provider(viewer_api.VIEWER_EXTENSION)
     _expect(problems, api is not None, "查看器插件应提供 viewer.open 扩展接口")
     assert api is not None, "查看器配置页检查未通过：" + "；".join(problems)
 
@@ -777,7 +777,7 @@ def plugin_page_detail(case: Case) -> None:
     from PyQt6.QtCore import Qt
 
     from app.sdk import ExtensionPoint
-    from app.sdk.viewers import open_api
+    from app.services.viewer_service import open_api
     from app.services.plugin_service import SOURCE_BUILTIN, plugin_service
 
     install_builtin_plugins()
@@ -861,13 +861,13 @@ def plugin_page_detail(case: Case) -> None:
             info = plugin_service.get("builtin.viewer.image")
             _expect(problems, info is not None and info.has_options, "内置图片插件应声明可配置选项")
             protocol = page.detail_protocol.text()
-            for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适配 SDK", "适用管理器版本", "入口文件"):
+            for label in ("贡献", "依赖插件", "扩展接口", "提供库", "适配 SDK", "入口文件"):
                 _expect(problems, label in protocol, f"协议行缺少「{label}」：{protocol!r}")
             _expect(problems, f"插件选项（{len(info.options)}）" in page.detail_options.text(), f"选项行不对：{page.detail_options.text()!r}")
             _expect(problems, "plugin.json" in page.detail_path.text(), f"应显示清单路径，实际 {page.detail_path.text()!r}")
             _expect(
                 problems,
-                "data/viewer.json" in page.detail_ext.text(),
+                ".data/viewer.json" in page.detail_ext.text(),
                 f"应列出清单数据文件，实际 {page.detail_ext.text()!r}",
             )
             _expect(
@@ -957,8 +957,8 @@ def plugin_injected_pages(case: Case) -> None:
     """插件页面注入：注册 / 卸载导航页，工厂报错时退化为提示页。"""
     from PyQt6.QtWidgets import QWidget
 
-    from app.core.app_ui import APP_UI_EXTENSION, AppUiApi
-    from app.core.extensions import extension_registry
+    from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi
+    from app.core.plugins.extensions import extension_registry
     from app.services.plugin_service import plugin_service
 
     _fixture, window = build_window(case)
@@ -1017,7 +1017,7 @@ def image_viewer(case: Case) -> None:
     """图片查看器：加载真实图片、缩放 / 适应窗口 / 原尺寸与内置查看器注册。"""
     from PyQt6.QtGui import QPixmap
 
-    from app.sdk.viewers import open_api
+    from app.services.viewer_service import open_api
     from app.services.plugin_service import plugin_service
     install_builtin_plugins()
     registry = open_api()
@@ -1089,7 +1089,7 @@ def image_viewer(case: Case) -> None:
 def plugin_page_contributions(case: Case) -> None:
     """插件页按贡献分组：界面上没有类型概念，贡献筛选与查看器注册表一致。"""
     from app.sdk import ExtensionPoint
-    from app.sdk.viewers import open_api
+    from app.services.viewer_service import open_api
 
     install_builtin_plugins()
     registry = open_api()
@@ -1292,7 +1292,7 @@ def archive_restore_dialog(case: Case) -> None:
 def archive_usage_ui(case: Case) -> None:
     """存档占用口径：表格与统计报真实落盘占用，自动清理文案进提示框，详情标签与回档计划同源。"""
     import app.ui.pages.archive_page as archive_module
-    from app.core.signals import signalBus
+    from app.core.runtime.signals import signalBus
     from app.services import ArchiveService, ImportService, ItemService
     from app.ui.framework import format_size
 
@@ -1514,7 +1514,7 @@ def archive_entry_selection(case: Case) -> None:
     """条目勾选：打开存档自动勾选不一致项，全选 / 清空 / 只选不一致 / 跳到下一个不一致。"""
     from PyQt6.QtCore import Qt
 
-    from app.core.signals import signalBus
+    from app.core.runtime.signals import signalBus
     from app.db.models import DataItem as Item
     from app.services import ArchiveService, ImportService, ItemService
     from app.ui.framework import accent_color

@@ -7,7 +7,7 @@ from .feature_service import build_features, make_cover, replace_features
 from .import_service import ImportResult, ImportService, timestamp_name
 from .item_service import ItemService
 from .library_service import LibraryService, sanitize_dir_name
-from .maintenance import reset_config, reset_runtime_data, reset_to_defaults
+from .maintenance import compact_database, reset_config, reset_runtime_data, reset_to_defaults
 from .content_store import ContentStore, preferred_codec
 from .plugin_service import PluginHost, PluginInfo, PluginService, plugin_service
 from .stats_service import overview, recent, storage_usage, type_breakdown
@@ -33,6 +33,7 @@ __all__ = [
     "UserInfo",
     "UserService",
     "build_features",
+    "compact_database",
     "is_uncategorized",
     "make_cover",
     "overview",

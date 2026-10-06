@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import json
 import shutil
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..core import paths
+from ..core.runtime import jsonio, paths
 from ..db.database import backup_database_file
 from ..db.models import DataItem, Library, User
 from ..db.seed import UNCATEGORIZED_NAME
@@ -133,13 +132,9 @@ def migrate_layout(session: Session) -> dict:
                 pass
 
     paths.make_dir(marker.parent)
-    marker.write_text(
-        json.dumps(
-            {"version": paths.LAYOUT_VERSION, "at": dt.datetime.now().isoformat(timespec="seconds"), "stats": stats},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    jsonio.write_json(
+        marker,
+        {"version": paths.LAYOUT_VERSION, "at": dt.datetime.now().isoformat(timespec="seconds"), "stats": stats},
     )
     service.ensure_layout(library)
     session.flush()

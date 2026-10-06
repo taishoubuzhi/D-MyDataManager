@@ -261,7 +261,7 @@ class ItemsApi:
         return read_file_text(path, size)
 
     def notify_changed(self) -> None:
-        from ..core.signals import signalBus
+        from ..core.runtime.signals import signalBus
 
         signalBus.itemsChanged.emit()
 

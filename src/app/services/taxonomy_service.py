@@ -224,6 +224,9 @@ class TaxonomyService:
         if not self.tags.can_manage(tag, user_id, is_admin):
             logger.warning("只有默认用户或创建者可以切换标签归属：{}", tag.name)
             return False
+        if not is_global and self.tags.others_use(tag):
+            logger.warning("标签仍被其他用户的数据项使用，不能转为个人：{}", tag.name)
+            return False
         if not self.tags.set_global(tag, is_global):
             logger.warning("已存在同名全局标签：{}", tag.name)
             return False

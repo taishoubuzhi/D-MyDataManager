@@ -21,7 +21,7 @@ from qfluentwidgets import (
     setTheme,
 )
 
-from ...core import logging_setup, paths
+from ...core.runtime import logging_setup, paths
 from ...core.config import (
     DOUBLE_CLICK_EDITOR,
     DOUBLE_CLICK_VIEWER,
@@ -30,12 +30,13 @@ from ...core.config import (
     resources_root,
     set_resource_root,
 )
-from ...core.signals import signalBus
-from ...core.version import APP_VERSION
+from ...core.runtime.signals import signalBus
+from ...core.runtime.version import APP_VERSION
 from ...db import database
 from ...sdk import Events, ExtensionPoint
+from ...sdk.data import human_size
 from ...services import LibraryService, UserService
-from ...services.maintenance import reset_to_defaults
+from ...services.maintenance import compact_database, reset_to_defaults
 from ...services.plugin_service import plugin_service
 from ...services.privacy_service import privacy
 from ..components.pager import PAGE_SIZES, normalize_page_size
@@ -455,6 +456,16 @@ class SettingsPage(ScrollPage):
 
     def _maintenance_group(self) -> SettingCardGroup:
         group = SettingCardGroup("维护", self)
+        self._compact_card = ActionCard(
+            "整理数据库",
+            FluentIcon.ZIP_FOLDER,
+            "整理数据库",
+            "合并数据库里的空洞并刷新查询统计；删过大量数据后运行可以减小体积",
+            group,
+        )
+        self._compact_card.clicked.connect(self._compact_database)
+        group.addSettingCard(self._compact_card)
+
         self._reset_card = ActionCard(
             "恢复初始化",
             FluentIcon.DELETE,
@@ -508,7 +519,7 @@ class SettingsPage(ScrollPage):
         self._apply_permissions()
 
     def _apply_permissions(self) -> None:
-        for card in (self._path_card, self._scan_card, self._rebuild_card, self._reset_card):
+        for card in (self._path_card, self._scan_card, self._rebuild_card, self._compact_card, self._reset_card):
             card.setEnabled(self._is_admin)
         for hint in (self._library_permission_card, self._maintenance_permission_card):
             hint.setVisible(not self._is_admin)
@@ -519,6 +530,27 @@ class SettingsPage(ScrollPage):
             return True
         self.toast_warning("无权操作", f"只有默认用户可以{action}")
         return False
+
+    def _compact_database(self) -> None:
+        """整理数据库：`VACUUM` 要独占整库，所以先断引擎、整理完重建会话。"""
+        if not self._require_admin("整理数据库"):
+            return
+        if not confirm(
+            self,
+            "整理数据库",
+            "将合并数据库里的空洞并刷新查询统计，运行期间界面会短暂无响应。\n确定继续？",
+        ):
+            return
+        tip = self.busy("正在整理数据库", "合并空洞并刷新统计…")
+        try:
+            result = compact_database()
+        except Exception as exc:  # noqa: BLE001
+            tip.finish("整理失败")
+            self.toast_warning("整理数据库失败", str(exc))
+            return
+        self._reload_session()
+        tip.finish("整理完成")
+        self.toast_success("整理数据库完成", f"释放 {human_size(result.get('freed', 0))}")
 
     def _reset_to_defaults(self) -> None:
         if not self._require_admin("恢复初始化"):

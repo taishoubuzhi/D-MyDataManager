@@ -1,0 +1,86 @@
+{
+  "manifest": "1",
+  "id": "core.runtime",
+  "version": "1",
+  "kind": "module-data",
+  "items": [
+    {
+      "key": "app_name",
+      "value": "D-MyDataManager",
+      "label": "应用名"
+    },
+    {
+      "key": "app_version",
+      "value": "0.1.3-rc",
+      "label": "应用版本（「设置 → 关于」显示的就是它）"
+    },
+    {
+      "key": "manager_version",
+      "value": "0.1.3-rc",
+      "label": "协议版本：程序自身的插件协议版本（插件清单只声明 api_version）"
+    },
+    {
+      "key": "log_format",
+      "value": "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {extra[source]} | {function}:{line} | {message}",
+      "label": "统一日志格式：时间 | 级别 | 来源 | 函数:行 | 消息"
+    },
+    {
+      "key": "log_legacy_formats",
+      "value": [
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+        "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {source} | {function}:{line} | {message}"
+      ],
+      "label": "历史格式串：启动时自动升级成 log_format"
+    },
+    {
+      "key": "log_glob",
+      "value": "*.log",
+      "label": "日志目录里按此通配符找待清理的旧文件"
+    },
+    {
+      "key": "log_modes",
+      "value": [
+        {
+          "name": "single",
+          "label": "单文件追加",
+          "uses_file_size": true,
+          "uses_keep_days": false
+        },
+        {
+          "name": "session",
+          "label": "每次启动一个文件",
+          "uses_file_size": true,
+          "uses_keep_days": false
+        },
+        {
+          "name": "daily",
+          "label": "每天一个文件",
+          "uses_file_size": false,
+          "uses_keep_days": true
+        },
+        {
+          "name": "size",
+          "label": "按大小切分",
+          "uses_file_size": true,
+          "uses_keep_days": false
+        }
+      ],
+      "label": "日志模式表（模式标识本身是代码约定，见 MODE_* 常量）"
+    },
+    {
+      "key": "password_hash_algorithm",
+      "value": "sha256",
+      "label": "口令散列用的算法（PBKDF2-HMAC）"
+    },
+    {
+      "key": "password_hash_iterations",
+      "value": 200000,
+      "label": "口令散列迭代次数"
+    },
+    {
+      "key": "password_salt_bytes",
+      "value": 16,
+      "label": "口令盐的字节数"
+    }
+  ]
+}

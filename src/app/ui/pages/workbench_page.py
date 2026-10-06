@@ -16,7 +16,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
 )
 
-from ...core.signals import signalBus
+from ...core.runtime.signals import signalBus
 from ..framework import COMPACT_MARGINS, ROW_SPACING, ClickCard, ScrollPage, clear_layout
 from ..framework import IconTextButton
 

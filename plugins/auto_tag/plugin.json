@@ -14,14 +14,15 @@
       "id": "lib.autolabel"
     },
     {
-      "id": "lib.model",
-      "optional": true
+      "id": "lib.model"
     },
     {
       "id": "builtin.lib.ui"
     }
   ],
-  "conflicts": ["auto_tag.rule"],
+  "conflicts": [
+    "auto_tag.rule"
+  ],
   "options": [
     {
       "key": "min_tags",
@@ -52,7 +53,7 @@
   "libraries": [
     {
       "name": "runner",
-      "module": "runner.py",
+      "module": ".plugin/runner.py",
       "description": "模型方案的执行逻辑：按数据类型排请求、收结果、写库；不碰界面与数据库。"
     }
   ]

@@ -13,7 +13,7 @@
 
 规则的模型、匹配引擎和用户规则文件都在共享库 `lib.autolabel` 里：
 
-* 出厂规则 `plugins/lib.autolabel/data/rules.json`（25 条：按数据类型、后缀、文件名等）；
+* 出厂规则 `plugins/lib.autolabel/.data/rules.json`（25 条：按数据类型、后缀、文件名等）；
 * 用户规则 `.configs/autolabel.rules.json`（同名 `key` 覆盖出厂，保存时只写与出厂不同的规则）。
 
 **任务 2 与任务 3 共用同一份规则文件**（不另建 `auto_tag.rule.json`）：方案要求「规则方案与任务 3 同源」，

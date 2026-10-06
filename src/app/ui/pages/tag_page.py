@@ -13,7 +13,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from ...core.signals import signalBus
+from ...core.runtime.signals import signalBus
 from ...db import database
 from ...db.models import Tag
 from ...services import TaxonomyService, UserService
@@ -355,6 +355,12 @@ class TagPage(Page):
         if bool(tag.is_global) == is_global:
             self.toast_warning("标签归属未变化", f"「{tag.name}」已经是{label}标签")
             return
+        if not is_global and self.tag_repo.others_use(tag):
+            self.toast_error(
+                "无法转为个人标签",
+                f"「{tag.name}」仍被其他用户的数据项使用；先请他们取消这个标签再改",
+            )
+            return
         if not self.taxonomy.set_tag_global(
             tag, is_global, user_id=self._user_id, is_admin=self._is_admin
         ):
@@ -425,8 +431,12 @@ class TagPage(Page):
             return
         changed = 0
         failed = 0
+        blocked = 0
         for tag in owned:
             if bool(tag.is_global) == is_global:
+                continue
+            if not is_global and self.tag_repo.others_use(tag):
+                blocked += 1
                 continue
             if self.taxonomy.set_tag_global(
                 tag, is_global, user_id=self._user_id, is_admin=self._is_admin
@@ -439,6 +449,8 @@ class TagPage(Page):
         detail = [f"{changed} 个标签现在是{label}标签"]
         if failed:
             detail.append(f"{failed} 个因存在同名全局标签而跳过")
+        if blocked:
+            detail.append(f"{blocked} 个仍被其他用户使用、不能转为个人")
         if skipped:
             detail.append(f"{len(skipped)} 个不是由你创建的已跳过")
         self.toast_success("标签归属已更新", "；".join(detail))
