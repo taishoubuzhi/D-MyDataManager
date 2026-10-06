@@ -32,6 +32,8 @@ class ItemFilter:
     tags: set[str] = field(default_factory=set)
     keywords: set[str] = field(default_factory=set)
     category_ids: set[int] = field(default_factory=set)
+    #: 单个数据项 id；与 category_ids 同时给出时取并集（分类树里既勾分类又勾文件）
+    item_ids: set[int] = field(default_factory=set)
     library_ids: set[int] = field(default_factory=set)
     user_ids: set[int] = field(default_factory=set)
     suffixes: set[str] = field(default_factory=set)
@@ -84,8 +86,13 @@ class ItemRepository(Repository[DataItem]):
             stmt = stmt.where(DataItem.id.in_(list(flt.text_ids)) if flt.text_ids else false())
         if flt.types:
             stmt = stmt.where(DataItem.type.in_(list(flt.types)))
-        if flt.category_ids:
-            stmt = stmt.where(DataItem.category_id.in_(list(flt.category_ids)))
+        if flt.category_ids or flt.item_ids:
+            matched = []
+            if flt.category_ids:
+                matched.append(DataItem.category_id.in_(list(flt.category_ids)))
+            if flt.item_ids:
+                matched.append(DataItem.id.in_(list(flt.item_ids)))
+            stmt = stmt.where(or_(*matched) if len(matched) > 1 else matched[0])
         if flt.library_ids:
             stmt = stmt.where(DataItem.library_id.in_(list(flt.library_ids)))
         if flt.user_ids:

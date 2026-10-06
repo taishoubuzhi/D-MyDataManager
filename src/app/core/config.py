@@ -75,6 +75,8 @@ class Config(QConfig):
     showCategoryPanel = ConfigItem("Layout", "Show-Category-Panel", True, BoolValidator())
     showFilterPanel = ConfigItem("Layout", "Show-Filter-Panel", True, BoolValidator())
     expandCategories = ConfigItem("Layout", "Expand-Categories", False, BoolValidator())
+    # 分类栏只显示分类；关掉后每个分类下面列出该分类文件夹里的文件
+    onlyShowCategories = ConfigItem("Layout", "Only-Show-Categories", True, BoolValidator())
     expandedFilters = ConfigItem("Layout", "Expanded-Filters", [])
     simpleDisplay = OptionsConfigItem(
         "Layout", "Simple-Display", SIMPLE_DEFAULT, OptionsValidator(list(SIMPLE_MODES))

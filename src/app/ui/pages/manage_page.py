@@ -202,6 +202,7 @@ class ManagePage(Page):
         super().__init__(parent)
         self.session = database.new_session()
         self._checked_categories: set[int] = set()
+        self._checked_items: set[int] = set()
         self._syncing_tree = False
         self.item_service = ItemService(self.session)
         self.taxonomy = TaxonomyService(self.session)
@@ -263,9 +264,18 @@ class ManagePage(Page):
         # 分类树的说明改挂在树上：说明文字不显示，鼠标停住才弹出
         self.tree.setToolTip("勾选分类可批量移动或删除")
         self.tree.categorySelected.connect(self._on_category_selected)
+        self.tree.fileSelected.connect(self.focus_item)
         self.tree.checkedChanged.connect(self._on_category_checked)
         self.tree.actionRequested.connect(self._on_tree_action)
         layout.addWidget(self.tree, 1)
+        self.only_categories_box = CheckBox("仅显示分类", card)
+        self.only_categories_box.setToolTip(
+            "勾选时分类栏只显示分类；取消勾选后每个分类下面列出该分类文件夹里的文件，"
+            "没有分类的文件列在「全部数据」下面"
+        )
+        self.only_categories_box.setChecked(bool(config.onlyShowCategories.value))
+        self.only_categories_box.toggled.connect(self._on_only_categories_toggled)
+        layout.addWidget(self.only_categories_box)
         self.category_hint = CaptionLabel("勾选分类可批量移动或删除", card)
         self.category_hint.setVisible(False)
         layout.addWidget(self.category_hint)
@@ -571,7 +581,11 @@ class ManagePage(Page):
                 self.toast_warning("口令不正确", "隐藏数据保持锁定")
                 return
         self._page = 0
-        self._load_items()
+        if self._files_in_tree():
+            # 分类栏里也列着文件：隐藏项 / 回收站的显隐同样要重建分类栏
+            self.refresh()
+        else:
+            self._load_items()
 
     def refresh(self) -> None:
         self._reload_users()
@@ -580,7 +594,13 @@ class ManagePage(Page):
         total = self.item_repo.count(ItemFilter(include_hidden=True, user_ids={user_id}))
         self._syncing_tree = True
         self.tree.set_nodes(
-            nodes, total=total, selected=self._category_id, checked=self._checked_categories
+            nodes,
+            total=total,
+            selected=self._category_id,
+            checked=self._checked_categories,
+            checked_items=self._checked_items,
+            files=self._tree_files(user_id),
+            only_categories=not self._files_in_tree(),
         )
         self._syncing_tree = False
         self._sync_category_buttons()
@@ -591,6 +611,28 @@ class ManagePage(Page):
         )
         self._refresh_duplicate_hint()
         self._load_items()
+
+    def _files_in_tree(self) -> bool:
+        """分类栏是否要列出文件：只有关掉「仅显示分类」时才列。"""
+        box = getattr(self, "only_categories_box", None)
+        return box is not None and not box.isChecked()
+
+    def _tree_files(self, user_id: int) -> list:
+        """分类栏里要列出的数据项；可见性与中间列表保持一致（隐藏项、回收站）。"""
+        if not self._files_in_tree():
+            return []
+        return self.item_repo.query(
+            ItemFilter(
+                user_ids={user_id},
+                include_hidden=self.filter_panel.show_hidden(),
+                only_deleted=self.filter_panel.only_trash(),
+            )
+        )
+
+    def _on_only_categories_toggled(self, checked: bool) -> None:
+        """「仅显示分类」开关：记进配置并立刻重建分类栏。"""
+        config.set(config.onlyShowCategories, bool(checked))
+        self.refresh()
 
     def _duplicate_scope(self) -> int | None:
         """默认用户（管理员）可以查重全部数据，其他用户只查自己的数据。"""
@@ -603,24 +645,32 @@ class ManagePage(Page):
         if button is not None:
             button.setToolTip(f"当前范围有 {count} 组重复内容" if count else "当前范围没有重复内容")
 
-    def _load_items(self) -> None:
+    def _load_items(self, *, select_checked: bool = False) -> None:
         sort_by, descending = self.filter_panel.sort_option()
         text = self.filter_panel.text()
         category_ids = set(self._checked_categories)
         if not category_ids and self._category_id is not None:
             category_ids.add(self._category_id)
+        if category_ids:
+            # 勾选分类时连同它下面的所有子分类一起显示
+            category_ids |= self._descendant_category_ids(category_ids)
         filters = ItemFilter(
             text_ids=self.item_repo.search_ids(text) if text else None,
             types={DataType(value) for value in self.filter_panel.selected_types()},
             tags=self.filter_panel.selected_tags(),
             keywords=self.filter_panel.selected_keywords(),
             category_ids=category_ids,
+            item_ids=set(self._checked_items),
             user_ids={self.user_service.current_id()},
             include_hidden=self.filter_panel.show_hidden(),
             only_deleted=self.filter_panel.only_trash(),
             sort_by=sort_by,
             descending=descending,
         )
+        if select_checked:
+            # 分类栏里勾了什么，中间列表就选中什么（与显示的集合同口径）
+            self._selected = {item.id for item in self.item_repo.query(filters)}
+            self._anchor = None
         self._total = self.item_repo.count(filters)
         self._page = max(0, min(self._page, self.pager_page_count() - 1))
         self._items = self.item_repo.query(
@@ -839,6 +889,7 @@ class ManagePage(Page):
             self.filter_panel.hidden_box.setChecked(True)
         self._category_id = item.category_id
         self._checked_categories.clear()
+        self._checked_items.clear()
         self.tree.set_checked_categories(set())
         self._sync_category_buttons()
         self._selected = {item.id}
@@ -1403,11 +1454,14 @@ class ManagePage(Page):
 
     # ------------------------------------------------------------------ 分类
     def _on_category_checked(self) -> None:
-        """左侧分类树的勾选：勾选集合优先作为中间列表的分类过滤条件。"""
+        """左侧分类树的勾选：勾选集既过滤中间列表，也同步中间的选中项。"""
         self._checked_categories = self.tree.checked_categories()
+        self._checked_items = self.tree.checked_items()
         self._sync_category_buttons()
         self._page = 0
-        self._load_items()
+        self._load_items(
+            select_checked=bool(self._checked_categories or self._checked_items)
+        )
 
     def _category_name(self, category_id: int) -> str:
         category = self.category_repo.get(category_id)
@@ -1529,6 +1583,7 @@ class ManagePage(Page):
         else:
             self.toast_success("已删除分类", message)
         self._checked_categories.clear()
+        self._checked_items.clear()
         self.refresh()
 
     def _on_category_sync(self) -> None:
@@ -1548,6 +1603,7 @@ class ManagePage(Page):
             return
         self._category_id = category_id
         self._checked_categories.clear()
+        self._checked_items.clear()
         self.tree.set_checked_categories(set())
         self._sync_category_buttons()
         self._page = 0

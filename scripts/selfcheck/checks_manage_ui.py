@@ -25,7 +25,14 @@ from app.services import (
     UserService,
     is_uncategorized,
 )
-from app.ui.components.category_tree import FIXED_SUFFIX, category_label, menu_entries
+from app.ui.components.category_tree import (
+    FIXED_SUFFIX,
+    ITEM_ROLE,
+    KIND_FILE,
+    KIND_ROLE,
+    category_label,
+    menu_entries,
+)
 from app.ui.components.item_card import ItemListRow
 from app.ui.framework import tri_state
 
@@ -118,11 +125,19 @@ def manage_category_filter(case: Case) -> None:
             app.processEvents()
 
         def expected_total(checked: set[int]) -> int:
-            """与 _load_items 同口径：勾选集为空时退回当前选中分类。"""
+            """与 _load_items 同口径：勾选集为空时退回当前选中分类，并含全部子孙分类。"""
             ids = set(checked)
             if not ids and page._category_id is not None:
                 ids = {page._category_id}
-            return page.item_repo.count(ItemFilter(category_ids=ids, user_ids={user_id}))
+            if ids:
+                ids |= page._descendant_category_ids(ids)
+            return page.item_repo.count(
+                ItemFilter(
+                    category_ids=ids,
+                    item_ids=set(page._checked_items),
+                    user_ids={user_id},
+                )
+            )
 
         def visible_ok(checked: set[int]) -> list[int]:
             return [item.category_id for item in page._items if item.category_id not in checked]
@@ -293,6 +308,147 @@ def manage_category_filter(case: Case) -> None:
 
         assert not problems, "分类筛选：" + "；".join(problems[:12])
     finally:
+        dispose_window(window)
+
+
+@check("manage_category_files", "pages")
+def manage_category_files(case: Case) -> None:
+    """「仅显示分类」：关掉后分类栏列出文件、未分类的文件挂到「全部数据」下、勾选联动中间列表。"""
+    from app.core.config import config
+
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        app = ensure_app()
+        page = window.manage_page
+        user_id = page.user_service.current_id()
+        taxonomy = TaxonomyService(case.session)
+        uncategorized = taxonomy.uncategorized_category(user_id=user_id)
+        box = page.only_categories_box
+
+        def root_row():
+            # 每次重建分类栏后旧的 QTreeWidgetItem 已被销毁，必须重新取
+            return page.tree.topLevelItem(0)
+
+        def file_rows(item_id: int | None = None) -> list:
+            rows = [
+                item for item in page.tree._iter_items() if item.data(0, KIND_ROLE) == KIND_FILE
+            ]
+            if item_id is None:
+                return rows
+            return [row for row in rows if row.data(0, ITEM_ROLE) == item_id]
+
+        def clear_checks() -> None:
+            for item in page.tree._iter_items():
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+            app.processEvents()
+
+        if not box.isChecked() or not config.onlyShowCategories.value:
+            problems.append("「仅显示分类」默认没有勾选")
+        if file_rows():
+            problems.append(f"默认勾选时分类栏仍有文件行：{[row.text(0) for row in file_rows()]}")
+
+        box.setChecked(False)
+        app.processEvents()
+        if config.onlyShowCategories.value:
+            problems.append("取消「仅显示分类」后没有写进配置")
+        if not file_rows():
+            problems.append("取消勾选后分类栏没有列出任何文件")
+        if uncategorized is not None and _tree_item(page, uncategorized.id) is not None:
+            problems.append("取消勾选后「未分类」仍作为分类节点显示")
+        if fixture.file_item is not None:
+            under_root = [
+                row for row in file_rows(fixture.file_item) if row.parent() is root_row()
+            ]
+            if not under_root:
+                problems.append("没有分类的文件没有列在「全部数据」下面")
+        child_item = _tree_item(page, fixture.category_child)
+        own_rows = file_rows(fixture.text_item)
+        if child_item is None:
+            problems.append("分类树里找不到子分类节点")
+        elif not own_rows or own_rows[0].parent() is not child_item:
+            problems.append("分类里的文件没有列在它自己的分类下面")
+        for row in file_rows():
+            if row.childCount():
+                problems.append(f"文件行 {row.text(0)} 下面还有子节点")
+            if not row.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                problems.append(f"文件行 {row.text(0)} 没有复选框")
+
+        # 勾选一个文件：中间列表显示并选中它
+        if own_rows:
+            own_rows[0].setCheckState(0, Qt.CheckState.Checked)
+            app.processEvents()
+            if page._checked_items != {fixture.text_item}:
+                problems.append(f"勾选文件后 _checked_items={sorted(page._checked_items)}")
+            if fixture.text_item not in page._selected:
+                problems.append("勾选文件后中间列表没有选中它")
+            if not any(item.id == fixture.text_item for item in page._items):
+                problems.append("勾选文件后中间列表没有显示它")
+
+        # 部分勾选时父节点半选：文件与它同级的分类一起参与三态
+        if fixture.file_item is not None:
+            stray = file_rows(fixture.file_item)
+            if stray:
+                stray[0].setCheckState(0, Qt.CheckState.Checked)
+                app.processEvents()
+                if root_row().checkState(0) != Qt.CheckState.PartiallyChecked:
+                    problems.append(
+                        f"只勾选部分文件时根节点状态为 {root_row().checkState(0).name}"
+                    )
+        clear_checks()
+
+        # 勾选分类：它下面的文件一起被勾上，中间列表显示并选中这些数据
+        if child_item is not None:
+            child_item.setCheckState(0, Qt.CheckState.Checked)
+            app.processEvents()
+            if fixture.category_child not in page._checked_categories:
+                problems.append("勾选分类后勾选集合里没有它")
+            if not all(
+                row.checkState(0) == Qt.CheckState.Checked
+                for row in file_rows(fixture.text_item)
+            ):
+                problems.append("勾选分类后它下面的文件没有一起勾上")
+            if fixture.text_item not in page._selected:
+                problems.append("勾选分类后中间列表没有选中它下面的数据")
+            clear_checks()
+
+        # 勾选父分类：子孙分类里的数据一起显示并选中
+        parent_item = _tree_item(page, fixture.category_root)
+        if parent_item is not None:
+            parent_item.setCheckState(0, Qt.CheckState.Checked)
+            app.processEvents()
+            expect = page.item_repo.count(
+                ItemFilter(
+                    category_ids={fixture.category_root, fixture.category_child},
+                    user_ids={user_id},
+                )
+            )
+            if page._total != expect:
+                problems.append(f"勾选父分类后计数 {page._total} != 含子分类的 {expect}")
+            if fixture.text_item not in page._selected:
+                problems.append("勾选父分类后中间列表没有选中子分类里的数据")
+            clear_checks()
+
+        # 点分类栏里的文件行：中间列表跳到并选中它
+        rows_now = file_rows(fixture.text_item)
+        if rows_now:
+            page.tree.setCurrentItem(rows_now[0])
+            app.processEvents()
+            if page._selected != {fixture.text_item}:
+                problems.append(f"点文件行后中间列表选中 {sorted(page._selected)}")
+
+        box.setChecked(True)
+        app.processEvents()
+        if file_rows():
+            problems.append("重新勾选「仅显示分类」后分类栏仍有文件行")
+        if not config.onlyShowCategories.value:
+            problems.append("重新勾选「仅显示分类」后没有写回配置")
+        if uncategorized is not None and _tree_item(page, uncategorized.id) is None:
+            problems.append("重新勾选「仅显示分类」后「未分类」节点没有回来")
+
+        assert not problems, "分类栏文件列表：" + "；".join(problems[:12])
+    finally:
+        config.set(config.onlyShowCategories, True)
         dispose_window(window)
 
 

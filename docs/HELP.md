@@ -252,15 +252,16 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」、「标签管理」、「关键词管理」、
 「批量重命名…」与「清空选择」，没有选中项时这些批量按钮（`_batch_buttons`）一并禁用。
 
-左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
+左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），并把它连同**所有子孙分类**一起交给 `ItemFilter.category_ids`、把勾选的文件行交给 `ItemFilter.item_ids`（两者取并集），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；勾选后中间列表会把这些数据一并**选中**（`_load_items(select_checked=True)` 把过滤结果整批写进 `_selected`，原本没显示出来的数据也因此显示出来）；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
 三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
+分类栏底部的「仅显示分类」复选框（`ManagePage.only_categories_box`，默认勾选）决定分类栏要不要列文件：勾选时树里只有分类节点；取消勾选后 `set_nodes(..., files=..., only_categories=False)` 按 `category_id` 把数据项挂到各自分类下面（目录在前、文件在后，组内按名称排序），**「未分类」不再单列节点**——它的文件本来就在用户名文件夹下，因此直接挂在「全部数据」下面。文件行只带**两态**复选框（本身没有子节点），与它同级的子分类一起参与父节点的三态汇总（`_aggregate_state()` 只看 `childCount()`，级联与汇总不必区分行类型）：勾选一个文件就是把它加进 `ItemFilter.item_ids`，勾选父分类则整棵子树（含文件行）一起勾上，只勾中一部分时父节点是半选。文件行右键没有菜单，单击它等于「跳到该数据项」（`fileSelected` → `ManagePage.focus_item()`）；文件行的可见性与中间列表一致——只有打开「显示隐藏项」或「回收站」时，隐藏 / 已删除的数据才会出现在分类栏里。这个开关记在配置项 `Layout/Only-Show-Categories`（`.configs/config.json` 的 `Layout` 组），下次打开按上次的样子恢复。
 勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）；勾上「全部数据」时整棵树都处于勾选状态（此时按钮一并禁用：顶层没有可移动的去处、顶层分类也不能整体删除，提示会改成「已全选「全部数据」…」，处理器同样会拒绝这次操作）；批量移动时若所选分类本来就都在目标分类下，会提示「无需移动」而不再走一次无意义的提交。
 中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏，
 显隐状态分别记进 `Layout/Show-Category-Panel` / `Layout/Show-Filter-Panel`，重启后按上次的样子复原。
 左侧分类栏默认**全部收起**（配置项 `Layout/Expand-Categories` 打开后启动即展开），用户手动展开 / 收起某个分类后刷新列表仍按用户的
 状态显示；右侧筛选区的类型 / 标签 / 关键词三个分组默认**全部折叠**，展开哪几个就记进 `Layout/Expanded-Filters`，下次启动照着恢复。
 每页条数、两栏显隐、分类栏与筛选栏的折叠状态都存在 `.configs/config.json` 的 `Layout` 组里，也可以在「设置 → 外观」里改
-（「每页条数」下拉、「分类栏默认展开」开关）。
+（「每页条数」下拉、「分类栏默认展开」开关）；分类栏是否列出文件记在 `Layout/Only-Show-Categories`，开关就在分类栏下面。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` / `editor_menu_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、
 **查看器**（系统默认程序 / 点名某个内置查看器 / 交给系统选择…）、**编辑器**（系统默认程序 / 点名某个内置编辑器 / 交给系统选择…）、
 插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」；「自动标签」「自动关键词」三个插件还有工具栏按钮与条目菜单项，
