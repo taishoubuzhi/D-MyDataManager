@@ -115,6 +115,7 @@ class AutoTagRulePlugin(Plugin):
             return
         report = runner.run_rules(runner.plan_tags(refs, self._rule_set()), api=items_sdk)
         self._refresh(selection)
+        items_sdk.notify_tags_changed()  # 整批挂完后标签页刷新一次
         self._report(report)
 
     def _on_item(self, item) -> None:
@@ -132,6 +133,7 @@ class AutoTagRulePlugin(Plugin):
             return
         report = runner.run_rules(runner.plan_tags([ref], self._rule_set()), api=items_sdk)
         items_sdk.notify_changed()
+        items_sdk.notify_tags_changed()
         self._report(report)
 
     # ------------------------------------------------------------------ 小工具

@@ -173,9 +173,11 @@ class AutoTagPlugin(Plugin):
             self._ctx.log.info("自动挂标签完成：{}", message)
             self._toast("自动挂标签完成", message)
             try:
+                from app.sdk import items as items_sdk
                 from app.sdk import ui as ui_sdk
 
                 ui_sdk.notify_items_changed()  # 让数据管理页立刻重载，标签直接显示出来
+                items_sdk.notify_tags_changed()  # 新建的标签在标签页当场可见
                 self._ctx.log.info("已通知数据管理页刷新")
             except Exception as exc:
                 self._ctx.log.warning("通知数据管理页刷新失败：{}", exc)

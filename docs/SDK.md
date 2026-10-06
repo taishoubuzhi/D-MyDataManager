@@ -345,7 +345,11 @@ _console.exception(f"失败：{reason}")         # ✅ 对
 | `add_keywords` / `remove_keywords` | 关键词 |
 | `read_text(item_id, limit=4096)` | `(正文, 编码, 是否截断)` |
 | `notify_changed()` | 改完数据后通知界面刷新 |
+| `notify_tags_changed()` | 建过 / 改过标签后通知界面刷新；批处理请**整批写完再调一次**，别每条都调 |
 | `available()` | 有没有 items 扩展接口（没有时列表类接口返回空、写接口抛 `SdkError`） |
+
+`ensure_tags()` / `tag_items()` 自己**不发**标签变更信号：批处理会连续写很多次，每条都发会让标签页重建很多遍；
+调用方在整批写完之后调一次 `notify_tags_changed()` 即可（`auto_tag` / `auto_tag.rule` 就是这么做的）。
 
 `ItemRef` 有 `id` / `name` / `type` / `suffix` / `size` / `keywords` / `tags` / `file_path` / `abs_path` / `category_id` / `user_id` / `preview`；
 `SelectionContext` / `ImportContext` 的成员见 5.2.2 与 5.2.6。

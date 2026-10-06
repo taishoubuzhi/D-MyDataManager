@@ -250,6 +250,74 @@ def global_tag_marks(case: Case) -> None:
     _fail("全局标签标记", problems)
 
 
+# ------------------------------------------------------------------ 插件写入
+@check("tag_refresh_after_plugin_write", "pages")
+def tag_refresh_after_plugin_write(case: Case) -> None:
+    """插件建标签后标签页要刷新：写标签本身不发信号，整批写完调一次 `notify_tags_changed()`。"""
+    from app.core.plugins.extensions import extension_registry
+    from app.core.runtime.signals import signalBus
+    from app.sdk import items as items_sdk
+    from app.services.item_api import ItemsApi
+
+    previous_items = extension_registry.provider(items_sdk.ITEMS_EXTENSION)
+    extension_registry.provide(items_sdk.ITEMS_EXTENSION, ItemsApi(), "selfcheck-items")
+    window = None
+    problems: list[str] = []
+    emitted: list[int] = []
+
+    def _count() -> None:
+        emitted.append(1)
+
+    try:
+        app = ensure_app()
+        _fixture, window = build_window(case)
+        page = window.tag_page
+        window.switchTo(page)
+        app.processEvents()
+        signalBus.tagsChanged.connect(_count)
+
+        names = ["自检插件标签", "自检插件标签二"]
+        items_sdk.ensure_tags(names)
+        app.processEvents()
+        if emitted:
+            problems.append("只建了标签就刷新了标签页，批处理会被刷很多遍")
+        listed = [str(tag.name) for tag in page._tags]
+        if any(name in listed for name in names):
+            problems.append("还没广播标签变更，标签页就已经列出新标签")
+
+        # 写标签的过程同样不发标签信号（`tag_items()` 只发 itemsChanged）
+        rows = items_sdk.list_items(user_id=items_sdk.current_user_id())
+        if not rows:
+            problems.append("夹具里没有可用于挂标签的数据项")
+        else:
+            items_sdk.tag_items([rows[0].id], names)
+            app.processEvents()
+            if emitted:
+                problems.append(f"写标签过程中发了 {len(emitted)} 次标签变更")
+
+        items_sdk.notify_tags_changed()
+        app.processEvents()
+        if len(emitted) != 1:
+            problems.append(f"整批结束后应恰好广播 1 次标签变更，实际 {len(emitted)} 次")
+        listed = [str(tag.name) for tag in page._tags]
+        missing = [name for name in names if name not in listed]
+        if missing:
+            problems.append(f"广播后标签页仍看不到新标签：{missing}")
+
+        assert not problems, "标签页刷新：" + "；".join(problems[:8])
+    finally:
+        try:
+            signalBus.tagsChanged.disconnect(_count)
+        except Exception:  # noqa: BLE001 - 没连上时断开失败不该影响结果
+            pass
+        if previous_items is not None:
+            extension_registry.provide(
+                items_sdk.ITEMS_EXTENSION, previous_items, "selfcheck-restore"
+            )
+        if window is not None:
+            dispose_window(window)
+
+
 # ------------------------------------------------------------------ 用户页
 @check("user_page_rows", "pages")
 def user_page_rows(case: Case) -> None:

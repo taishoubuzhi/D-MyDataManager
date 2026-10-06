@@ -196,6 +196,7 @@ class AutoTagPage(ScrollPageTemplate):
         names = [name for rule in self._rule_set.rules for name in rule.tags]
         try:
             items_sdk.ensure_tags(names, user_id=items_sdk.current_user_id())
+            items_sdk.notify_tags_changed()
         except Exception:
             pass
         if self._api.save_rules(self._rule_set):
@@ -697,6 +698,8 @@ class AutoTagPage(ScrollPageTemplate):
         else:
             toast_success(self, "挂标签完成", runner.summary_text(report))
         items_sdk.notify_changed()
+        # 整批挂完后只刷新一次标签页：新建的标签（以及标签用量）当场可见
+        items_sdk.notify_tags_changed()
         self._scope_label.setText(self._scope_text())
 
     def _show_preview(self, plan) -> None:

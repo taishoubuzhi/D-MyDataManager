@@ -149,6 +149,7 @@ def reset_config(root: Path) -> None:
     config.set(config.pageSize, 50)
     config.set(config.showCategoryPanel, True)
     config.set(config.showFilterPanel, True)
+    config.set(config.onlyShowCategories, True)
     config.set(config.expandCategories, False)
     config.set(config.expandedFilters, [])
     config.set(config.simpleDisplay, "none")

@@ -38,6 +38,7 @@ __all__ = [
     "get_item",
     "list_items",
     "notify_changed",
+    "notify_tags_changed",
     "provider",
     "read_text",
     "remove_keywords",
@@ -193,6 +194,8 @@ class ItemsApi(Protocol):
     def read_text(self, item_id: int, limit: int = 4096) -> tuple[str, str, bool]: ...
 
     def notify_changed(self) -> None: ...
+
+    def notify_tags_changed(self) -> None: ...
 
 
 # --------------------------------------------------------------------- 门面
@@ -382,3 +385,21 @@ def notify_changed() -> None:
         api.notify_changed()
     except Exception:
         logger.exception("广播条目变更失败")
+
+
+def notify_tags_changed() -> None:
+    """告诉程序「标签库变了」（新建了标签、标签用量变了），让标签页与标签列表刷新。
+
+    批处理（一键补全、按规则挂标签）会连续写很多次标签，**整批写完之后调一次**就够：
+    每写一条都发信号会让标签页重建很多遍（用户 m07851）。
+    """
+    api = provider()
+    if api is None:
+        return
+    notify = getattr(api, "notify_tags_changed", None)
+    if not callable(notify):
+        return
+    try:
+        notify()
+    except Exception:
+        logger.exception("广播标签变更失败")

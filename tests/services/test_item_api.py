@@ -176,6 +176,9 @@ class ItemsSdkCase(unittest.TestCase):
             def notify_changed(self):
                 self.calls.append(("notify",))
 
+            def notify_tags_changed(self):
+                self.calls.append(("notify-tags",))
+
         fake = Fake()
         extension_registry.provide(items_sdk.ITEMS_EXTENSION, fake, "test-items")
 
@@ -184,6 +187,8 @@ class ItemsSdkCase(unittest.TestCase):
         self.assertEqual([ref.id for ref in items_sdk.list_items(type="image")], [1])
         self.assertEqual(items_sdk.ensure_tags(["甲"]), ("甲",))
         self.assertEqual(items_sdk.tag_items([1, 2], ["乙"]), 2)
+        items_sdk.notify_tags_changed()
+        self.assertIn(("notify-tags",), fake.calls)
         self.assertEqual(fake.calls[0][1]["type"], "image")
 
 
@@ -204,6 +209,29 @@ class ItemChangedBridgeCase(unittest.TestCase):
         ItemsApi().notify_changed()
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0], {})
+
+
+class TagChangedBridgeCase(unittest.TestCase):
+    """`notify_tags_changed()`：整批写完标签后广播一次，标签页才会看到新标签（用户 m07851）。"""
+
+    def test_notify_tags_changed_emits_once(self):
+        from app.core.runtime.signals import signalBus
+
+        seen: list[int] = []
+        signalBus.tagsChanged.connect(lambda: seen.append(1))
+        try:
+            ItemsApi().notify_tags_changed()
+        finally:
+            signalBus.tagsChanged.disconnect()
+        self.assertEqual(len(seen), 1)
+
+    def test_provider_without_the_hook_is_safe(self):
+        class Fake:
+            """老版本实现没有 `notify_tags_changed()`：门面要安静降级。"""
+
+        extension_registry.provide(items_sdk.ITEMS_EXTENSION, Fake(), "test-items")
+        self.addCleanup(extension_registry.drop_plugin, "test-items")
+        items_sdk.notify_tags_changed()
 
 
 class ContextCase(unittest.TestCase):

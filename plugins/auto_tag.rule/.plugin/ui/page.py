@@ -201,6 +201,7 @@ class AutoTagRulePage(ScrollPageTemplate):
                     tags.append(tag)
         if tags:
             items_sdk.ensure_tags(tags)
+            items_sdk.notify_tags_changed()
         if not self._api.save_rules(rule_set):
             toast_error(self, "保存失败", "规则文件写不进去，看看 .configs 目录的权限。")
             return
@@ -296,6 +297,8 @@ class AutoTagRulePage(ScrollPageTemplate):
         else:
             toast_success(self, "挂标签完成", runner.summary_text(report))
         items_sdk.notify_changed()
+        # 整批挂完后只刷新一次标签页：新建的标签当场可见
+        items_sdk.notify_tags_changed()
 
     def _show_preview(self, plan) -> None:
         lines = []

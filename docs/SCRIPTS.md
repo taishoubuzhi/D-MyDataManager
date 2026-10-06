@@ -8,7 +8,7 @@
 
 | 文件 | 类型 | 作用 |
 | --- | --- | --- |
-| `selfcheck.py` | 入口 | 自检套件入口：四层共 149 项检查，末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
+| `selfcheck.py` | 入口 | 自检套件入口：四层共 151 项检查，末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
 | `selfcheck/` | 包 | 自检套件实现：`harness.py`（注册表 / 隔离环境 / 结果收集）、`cli.py`（命令行）、`fixtures.py`（代表数据）+ 15 个 `checks_*.py` |
 | `tmpenv.py` | 共用工具（非入口） | `tests_tmp()` / `scripts_tmp()` / `TempDir` / `redirect_paths()` / `reset_config()` / `reset_runtime_dirs()`：统一临时目录（`scripts/.tmp/`、`tests/.tmp/`）与隔离运行环境，`tests/` 也复用它 |
 | `plugin_stubs.py` | 入口 | 按插件清单生成 `stubs/dm_plugin/**.pyi`，供 IDE 解析运行期合成包 `dm_plugin.<id>`；`--check` 只校验一致性 |

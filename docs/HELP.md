@@ -129,7 +129,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 `tests\verify.py` 把整套门禁收成一个入口：编译 → 插件桩 `--check` → `unittest discover` → 自检四层 →
 `pytest` → 可选依赖验收（`verify_optional_absence.py`）→ 打包冒烟（`smoke_checkout.py`），逐步打印
 `ok` / `FAIL`、末行 `RESULT failures=N`；它自动带上 `PYTHONIOENCODING=utf-8` 与 `QT_QPA_PLATFORM=offscreen`，
-并把 `pages` 层按 12 项一组拆进独立进程（该层 71 项 Qt 检查在同一长驻进程里偶发原生崩溃）；selfcheck 各步遇到
+并把 `pages` 层按 12 项一组拆进独立进程（该层 73 项 Qt 检查在同一长驻进程里偶发原生崩溃）；selfcheck 各步遇到
 「原生崩溃且没有任何 FAIL 行」会自动重跑一次（本机 Qt offscreen 的已知环境问题，不是检查失败）。
 脚本与自检套件的完整清单、分层与扩展方式见 [`SCRIPTS.md`](SCRIPTS.md)，单元测试的范式见 [`TESTS.md`](TESTS.md)。
 
@@ -138,7 +138,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 重复入库 966 MB/s、`read_content` 629–638 MB/s、`iter_content` 747 MB/s、`verify(quick)` 5170 MB/s、`verify(deep)` 558 MB/s。
 不把 `pytest-benchmark` 放进常跑门禁：它拖慢 `pytest -q`，而基准的用途是同一台机器上的前后对照。
 
-**基线（改动后不得劣化）**：`unittest discover` 与 `pytest -q` 全绿（当前各 604 项）、`selfcheck` 四层 149 项全绿、
+**基线（改动后不得劣化）**：`unittest discover` 与 `pytest -q` 全绿（当前 unittest 620 项、pytest 622 项）、`selfcheck` 四层 151 项全绿、
 `plugin_stubs.py --check` 一致、`compileall` rc 0、`verify_optional_absence.py` = `PROBLEMS: 0`、`smoke_checkout.py` = `PACKAGE-SMOKE OK`。
 
 旧套件（`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`）在功能对等后已删除：
@@ -741,6 +741,9 @@ pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选
   不点确认不会下载。运行环境（pip 包）仍然只在「模型」页装，插件不静默安装。
 - **数量当场改**：标签页与关键词页的运行区都有「设置数量」按钮，直接改 `min_tags` / `max_tags`（标签页还含「规则标签与模型标签合并」）
   或 `min_keywords` / `max_keywords`，写进 `.configs/plugins.json` 的插件设置，等价于在「插件」页改。
+- **挂完标签界面立刻刷新**：整批挂标签结束后广播一次 `itemsChanged` + `notify_tags_changed()`（`app.sdk.items`），
+  数据管理页的列表与标签页的标签清单当场就能看到新标签（含刚建出来的）；批处理**中途**的每一次写标签都不广播，
+  免得标签页跟着重建很多遍——`ensure_tags()` / `tag_items()` 自己不发标签变更信号，由调用方在整批写完时调一次（用户 m07851）。
 - 批量统一走模型工具库：所有请求交 `models.run_batch()`（按模型分组、同组只加载一次模型、组间并行、单条失败隔离、带进度与取消）。
 - 入口与收敛（两处登记过的偏差）：`auto_tag.rule` 有导入页「按规则预填标签」+ 管理页工具栏 + 条目菜单三个入口；
   `auto_tag` 没有导入页入口，工具栏与条目菜单**直接起后台任务挂标签**（完成提示并刷新列表；页面里还有带进度与取消的整批运行）；

@@ -4,7 +4,8 @@
 
 - **每次调用自建会话**：插件会在自己的工作线程里批量调用，不能共用界面线程的会话；
   写操作走 `session_scope()`（正常提交、异常回滚），并在真的改了东西之后广播一次
-  `itemsChanged`，于是数据管理页 / 标签页会自动刷新；
+  `itemsChanged`，于是数据管理页 / 标签页会自动刷新；新建了标签还要广播
+  `tagsChanged`（`notify_tags_changed()`），批处理请在整批写完之后调一次；
 - **只暴露快照**：插件拿到的是 `ItemRef`，改它不会影响数据库；插件要改东西只能走这里的方法；
 - 写标签复用现成的批量实现（`ItemRepository.bulk_add_tags` / `bulk_remove_tags`），
   并按「是否真的新增/摘除」统计改动条数，而不是把整批都算成改动。
@@ -264,6 +265,16 @@ class ItemsApi:
         from ..core.runtime.signals import signalBus
 
         signalBus.itemsChanged.emit()
+
+    def notify_tags_changed(self) -> None:
+        """广播标签变更（新标签入库 / 标签用量变化），让标签页与各处标签列表刷新。
+
+        单独一条信号、且**不**在每次写标签时自动发：批处理挂标签会连续调用很多次
+        `tag_items()`，由调用方在整批写完之后调一次即可（用户 m07851）。
+        """
+        from ..core.runtime.signals import signalBus
+
+        signalBus.tagsChanged.emit()
 
     # ------------------------------------------------------------------ 内部
     @staticmethod
