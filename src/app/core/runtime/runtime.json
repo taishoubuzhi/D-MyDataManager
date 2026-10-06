@@ -11,12 +11,12 @@
     },
     {
       "key": "app_version",
-      "value": "0.1.3-rc",
+      "value": "0.1.3",
       "label": "应用版本（「设置 → 关于」显示的就是它）"
     },
     {
       "key": "manager_version",
-      "value": "0.1.3-rc",
+      "value": "0.1.3",
       "label": "协议版本：程序自身的插件协议版本（插件清单只声明 api_version）"
     },
     {
