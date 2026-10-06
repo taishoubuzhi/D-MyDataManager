@@ -35,6 +35,36 @@ class TaxonomyService:
         self.session = session
         self.categories = CategoryRepository(session)
         self.tags = TagRepository(session)
+        self._libraries = None
+
+    @property
+    def libraries(self):
+        """分类目录操作用到的库服务（延迟构建，避免服务之间互相导入）。"""
+        if self._libraries is None:
+            from .library_service import LibraryService
+
+            self._libraries = LibraryService(self.session)
+        return self._libraries
+
+    def _ensure_dirs(self, category: Category) -> int:
+        """在磁盘上补上这个分类自己的目录（「未分类」没有目录，它就在用户名文件夹下）。"""
+        if is_uncategorized(category):
+            return 0
+        library = self.libraries.ensure_default()
+        return self.libraries.ensure_category_dirs(library, category.user_id)
+
+    def _relocate_dir(self, category: Category, old_chain: list[str]) -> int:
+        """把分类目录搬到按当前分类树算出的新位置（改名或换父级），返回改写路径的条目数。"""
+        if is_uncategorized(category):
+            return 0
+        library = self.libraries.ensure_default()
+        return self.libraries.move_category_dir(
+            library,
+            category,
+            old_chain,
+            self.libraries.category_chain(category.id),
+            self.libraries.category_users(category),
+        )
 
     # ---------------------------------------------------------------- 分类
     def tree(self, include_hidden: bool = True, user_id: int | None = None) -> list[CategoryNode]:
@@ -81,7 +111,11 @@ class TaxonomyService:
         if self.categories.by_name(name, parent_id, user_id) is not None:
             logger.warning("同级下已存在分类：{}", name)
             return None
-        return self.categories.create(name, parent_id, description, icon, color, user_id)
+        category = self.categories.create(name, parent_id, description, icon, color, user_id)
+        self.session.flush()
+        # 分类即目录：新建分类的同时在库文件夹里建出同名目录
+        self._ensure_dirs(category)
+        return category
 
     def update_category(self, category: Category, **fields) -> Category:
         for key, value in fields.items():
@@ -98,7 +132,7 @@ class TaxonomyService:
         return category
 
     def rename_category(self, category: Category, name: str) -> bool:
-        """重命名分类；同级已有同名分类时拒绝（返回 False）。"""
+        """重命名分类；同级已有同名分类时拒绝（返回 False）。磁盘上的同名目录一并改名。"""
         name = (name or "").strip()
         if is_uncategorized(category):
             logger.warning("「{}」是固定分类，不能重命名", UNCATEGORIZED_NAME)
@@ -109,8 +143,10 @@ class TaxonomyService:
         if existing is not None and existing.id != category.id:
             logger.warning("同级下已存在分类：{}", name)
             return False
+        old_chain = self.libraries.category_chain(category.id)
         category.name = name
         self.session.flush()
+        self._relocate_dir(category, old_chain)
         return True
 
     def move_category(self, category: Category, parent_id: int | None) -> bool:
@@ -120,7 +156,11 @@ class TaxonomyService:
         if parent_id is not None and is_uncategorized(self.session.get(Category, parent_id)):
             logger.warning("「{}」是固定分类，不能创建子分类", UNCATEGORIZED_NAME)
             return False
-        return self.categories.move(category, parent_id)
+        old_chain = self.libraries.category_chain(category.id)
+        if not self.categories.move(category, parent_id):
+            return False
+        self._relocate_dir(category, old_chain)
+        return True
 
     def promotion_conflicts(self, category: Category) -> list[Category]:
         """删除该分类时，上移后会与父级下已有分类重名的子分类。"""
@@ -141,28 +181,50 @@ class TaxonomyService:
         """删除分类；子分类默认上移到父级，recursive 时一并删除。
 
         上移的子分类与父级下已有分类重名时：renames 里给了新名字就用它，否则自动加 -1、-2 后缀，
-        保证同一父级下不会出现重名分类。
+        保证同一父级下不会出现重名分类。分类的目录一并处理：上移的子分类目录跟着搬，
+        本分类目录里的数据搬到目标分类目录（默认「未分类」= 用户名文件夹根目录）后收掉。
         """
         if is_uncategorized(category):
             logger.warning("「{}」是固定分类，不能删除", UNCATEGORIZED_NAME)
             return 0
         renames = dict(renames or {})
+        libraries = self.libraries
+        library = libraries.ensure_default()
+        old_chain = libraries.category_chain(category.id)
+        parent_chain = libraries.category_chain(category.parent_id)
+        user_ids = libraries.category_users(category)
         for child in self.categories.children_of(category.id):
             if recursive:
                 self.delete_category(child, move_items_to, recursive=True)
                 continue
+            child_chain = libraries.category_chain(child.id)
             child.name = self.categories.unique_sibling_name(
                 renames.get(child.id) or child.name, category.parent_id, child.user_id
             )
             child.parent_id = category.parent_id
+            self.session.flush()
+            libraries.move_category_dir(
+                library, child, child_chain, libraries.category_chain(child.id), libraries.category_users(child)
+            )
         items = list(self.session.scalars(select(DataItem).where(DataItem.category_id == category.id)))
-        for item in items:
-            item.category_id = move_items_to
+        if items:
+            from .item_service import ItemService  # 延迟导入，避免服务之间互相导入
+
+            mover = ItemService(self.session)
+            for item in items:
+                target = move_items_to
+                if target is None:
+                    fallback = self.uncategorized_category(item.user_id)
+                    target = fallback.id if fallback is not None else None
+                # 「分类即目录」：搬文件到目标分类目录（未分类 = 用户名文件夹根目录）
+                mover.move_item(item, target)
         # 先把子分类的新父级落库，再用 Core DELETE 删本行：ORM 的 delete-orphan 级联会把
         # 刚上移的子分类连同其数据项一起删掉。
         self.session.flush()
         self.session.expunge(category)
         self.session.execute(delete(Category).where(Category.id == category.id))
+        # 目录里可能还剩没登记的散件：并进父级目录后收掉空壳
+        libraries.dissolve_category_dir(library, old_chain, parent_chain, user_ids)
         return len(items)
 
     def path_of(self, category: Category | None) -> str:

@@ -65,7 +65,11 @@ class HiddenDataCase(IsolatedCase):
         self.assertNotIn(paths.HIDDEN_DIR_NAME, item.file_path)
         restored = self.service.abs_path(item)
         self.assertTrue(restored.is_file(), restored)
-        self.assertEqual(restored.parent.name, self.service.category_chain(item.category_id)[-1])
+        self.assertEqual(
+            restored.parent,
+            self.service.directory_for(self.library, item.category_id, item.user_id),
+            "取消隐藏后文件要回到所属分类目录（「未分类」= 用户名文件夹根目录）",
+        )
         self.assertFalse(hidden.exists(), "空的隐藏目录应当被清理")
 
     def test_hiding_same_name_twice_keeps_both_files(self):

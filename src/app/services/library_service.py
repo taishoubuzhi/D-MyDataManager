@@ -1,9 +1,13 @@
-"""库文件夹服务：唯一库文件夹、用户文件夹、扫描入库与路径解析。
+"""库文件夹服务：唯一库文件夹、用户文件夹、分类目录、扫描入库与路径解析。
 
 库文件夹是磁盘上用户可见的数据存放根目录，只允许存在一个：
 
     <库>/全局/                       全局资源：内容仓库 store、封面 covers、备份 backups、元数据 .datamanager
     <库>/<用户名>/<分类链>/<文件>      各用户的数据；分类目录因此可以每个用户各不相同
+    <库>/<用户名>/<文件>              「未分类」的数据：它没有自己的目录，直接放在用户名文件夹下
+
+**分类就是目录**：分类树是这些目录的可视化，所以分类的增 / 改 / 移 / 删都要落到目录上
+（见 `taxonomy_service.py` 与 `category_sync.py`），目录变了也要反向同步回分类。
 """
 
 from __future__ import annotations
@@ -18,7 +22,8 @@ from sqlalchemy.orm import Session
 
 from ..core.runtime import paths
 from ..core.config import library_root
-from ..db.models import DataItem, Library, User
+from ..db.models import Category, DataItem, Library, User
+from ..db.seed import UNCATEGORIZED_NAME
 from ..repositories import (
     BlobRepository,
     CategoryRepository,
@@ -38,6 +43,21 @@ def sanitize_dir_name(name: str) -> str:
     """把分类名 / 用户名转换成合法的目录名。"""
     cleaned = "".join("_" if ch in _INVALID_CHARS else ch for ch in (name or "").strip())
     return cleaned.strip(" .") or "未命名"
+
+
+def is_uncategorized_category(category: Category | None) -> bool:
+    """「未分类」是固定分类：它对应的是用户名文件夹本身，没有自己的目录。"""
+    return bool(
+        category is not None
+        and category.parent_id is None
+        and category.name == UNCATEGORIZED_NAME
+    )
+
+
+def _like_prefix(prefix: str) -> str:
+    """把目录前缀转成带转义的 LIKE 模式（`_` / `%` 在文件名里很常见）。"""
+    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
 
 
 class LibraryService:
@@ -233,12 +253,124 @@ class LibraryService:
         return True
 
     def category_chain(self, category_id: int | None) -> list[str]:
+        """分类对应的目录层级；「未分类」与无分类都返回空列表（= 用户名文件夹本身）。
+
+        沿 `parent_id` 逐级往上取（而不是走 `category.parent` 关系）：改名 / 换父级后
+        同一个会话里的关系属性可能还留着旧对象，用外键列读到的才是刚 flush 的结果。
+        """
         names: list[str] = []
-        category = self.categories.get(category_id) if category_id else None
-        while category is not None:
+        node_id = category_id
+        guard: set[int] = set()
+        while node_id is not None and node_id not in guard:
+            guard.add(node_id)
+            category = self.categories.get(node_id)
+            if category is None or is_uncategorized_category(category):
+                break
             names.append(sanitize_dir_name(category.name))
-            category = category.parent
+            node_id = category.parent_id
         return list(reversed(names))
+
+    def category_users(self, category: Category | None) -> list[int]:
+        """该分类的目录要出现在哪些用户文件夹下：共享分类（无归属）对所有用户都成立。"""
+        if category is not None and category.user_id is not None:
+            return [category.user_id]
+        return [user.id for user in self.users.list_all()]
+
+    @guarded
+    def ensure_category_dirs(self, library: Library, user_id: int | None = None) -> int:
+        """把已存在的分类在磁盘上补齐目录（跳过「未分类」，它本来就没有目录）；返回新建个数。"""
+        users = [self.session.get(User, user_id)] if user_id is not None else self.users.list_all()
+        created = 0
+        for user in [item for item in users if item is not None]:
+            for category in self.session.scalars(select(Category)):
+                if category.user_id not in (None, user.id) or is_uncategorized_category(category):
+                    continue
+                directory = self.directory_for(library, category.id, user.id)
+                if not directory.is_dir():
+                    paths.make_dir(directory)
+                    created += 1
+        return created
+
+    @guarded
+    def move_category_dir(
+        self,
+        library: Library,
+        category: Category | None,
+        old_chain: list[str],
+        new_chain: list[str],
+        user_ids: list[int] | None = None,
+    ) -> int:
+        """把分类目录从 `old_chain` 搬到 `new_chain`（改名或换父级），返回改写路径的数据项数。"""
+        if old_chain == new_chain:
+            return 0
+        owners = user_ids if user_ids is not None else self.category_users(category)
+        changed = 0
+        for user_id in owners:
+            owner = self.owner_dir_name(user_id)
+            source = Path(library.path).joinpath(owner, *old_chain)
+            target = Path(library.path).joinpath(owner, *new_chain)
+            paths.make_dir(target.parent)
+            if source != target and source.is_dir():
+                if target.is_dir():
+                    self._move_into(source, target)
+                else:
+                    source.rename(target)
+            paths.make_dir(target)
+            changed += self._rewrite_item_paths(
+                f"{owner}/{'/'.join(old_chain)}/" if old_chain else f"{owner}/",
+                f"{owner}/{'/'.join(new_chain)}/" if new_chain else f"{owner}/",
+            )
+        logger.info(
+            "分类目录已迁移：{} -> {}（改写 {} 项路径）",
+            "/".join(old_chain) or "（用户根目录）",
+            "/".join(new_chain) or "（用户根目录）",
+            changed,
+        )
+        return changed
+
+    @guarded
+    def dissolve_category_dir(
+        self,
+        library: Library,
+        chain: list[str],
+        target_chain: list[str],
+        user_ids: list[int],
+    ) -> int:
+        """删除分类目录：剩下的内容并进目标目录后收掉空壳，返回改写路径的数据项数。"""
+        if not chain:
+            return 0
+        changed = 0
+        for user_id in user_ids:
+            owner = self.owner_dir_name(user_id)
+            source = Path(library.path).joinpath(owner, *chain)
+            target = Path(library.path).joinpath(owner, *target_chain)
+            if not source.is_dir():
+                continue
+            paths.make_dir(target)
+            self._move_into(source, target)
+            changed += self._rewrite_item_paths(
+                f"{owner}/{'/'.join(chain)}/",
+                f"{owner}/{'/'.join(target_chain)}/" if target_chain else f"{owner}/",
+            )
+        return changed
+
+    def _rewrite_item_paths(self, old_prefix: str, new_prefix: str) -> int:
+        """把落在 old_prefix 下的数据项路径改成 new_prefix（同后缀）。"""
+        if old_prefix == new_prefix:
+            return 0
+        changed = 0
+        rows = self.session.scalars(
+            select(DataItem).where(DataItem.file_path.like(_like_prefix(old_prefix), escape="\\"))
+        )
+        for item in rows:
+            # SQLite 的 LIKE 对 ASCII 不区分大小写，再按真实前缀核对一次
+            if not item.file_path.startswith(old_prefix):
+                continue
+            item.file_path = f"{new_prefix}{item.file_path[len(old_prefix):]}"
+            changed += 1
+        if changed:
+            self.session.flush()
+        return changed
 
     def directory_for(
         self, library: Library, category_id: int | None, user_id: int | None = None
@@ -347,6 +479,11 @@ class LibraryService:
             pass
 
     @guarded
+    def merge_dir(self, source: Path, target: Path) -> None:
+        """把 source 目录的内容并进 target（分类目录改名 / 删除时的冲突处理）。"""
+        self._move_into(source, target)
+
+    @guarded
     def _move_into(self, source: Path, target: Path) -> None:
         """把 source 目录的内容合并进 target（改名或迁移时的冲突处理）。"""
         paths.make_dir(target)
@@ -421,11 +558,32 @@ class LibraryService:
         return result
 
     def _match_category(self, parts: tuple[str, ...], user_id: int | None = None) -> int | None:
-        """把库内的目录层级映射到同名分类，找不到就停在上一层。"""
+        """把库内的目录层级映射到同名分类：没有的分类就地建出来（目录是权威）。
+
+        目录名是分类名 `sanitize_dir_name()` 之后的结果，所以同级要比对 sanitize 后的名字；
+        同级同名被其它归属占用时不能建（唯一约束是全局的），停在上一层。
+        """
         parent_id: int | None = None
         for part in parts:
-            category = self.categories.by_name(part, parent_id, user_id=user_id)
+            category = self._sibling_by_dir_name(part, parent_id, user_id)
             if category is None:
-                return parent_id
+                if self.categories.siblings_named(part, parent_id):
+                    return parent_id
+                category = self.categories.create(part, parent_id, user_id=user_id)
+                self.session.flush()
             parent_id = category.id
         return parent_id
+
+    def _sibling_by_dir_name(
+        self, dir_name: str, parent_id: int | None, user_id: int | None
+    ) -> Category | None:
+        """按目录名在同级里找分类（扫描与文件夹导入都用它把磁盘对齐到分类）。"""
+        shared: Category | None = None
+        for row in self.categories.children_of(parent_id):
+            if sanitize_dir_name(row.name) != dir_name:
+                continue
+            if user_id is not None and row.user_id == user_id:
+                return row
+            if row.user_id is None and shared is None:
+                shared = row
+        return shared

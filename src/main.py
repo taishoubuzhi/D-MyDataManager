@@ -34,6 +34,7 @@ from app.sdk.manifest import MANIFEST_EXTENSION  # noqa: E402
 from app.services.console_service import ConsoleOutput  # noqa: E402
 from app.services.item_api import ItemsApi  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
+from app.services.category_sync import reconcile_categories  # noqa: E402
 from app.services.plugin_service import plugin_service  # noqa: E402
 from app.services.privacy_service import privacy  # noqa: E402
 from app.ui.framework import install_app_theme, install_tooltips  # noqa: E402
@@ -148,6 +149,8 @@ def _bootstrap_data() -> None:
         seed(session)
         migrate_layout(session)
         migrate_uncategorized(session)
+        # 分类即目录：按库文件夹里的真实目录整理分类树（新建分类、对齐归属、收掉空壳）
+        reconcile_categories(session)
 
 
 def _configure_optional_tools() -> None:

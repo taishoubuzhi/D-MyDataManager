@@ -51,7 +51,14 @@ from ...repositories import (
 )
 from ...sdk import ExtensionPoint
 from ...sdk.items import SelectionContext
-from ...services import ExportService, ItemService, TaxonomyService, UserService, is_uncategorized
+from ...services import (
+    ExportService,
+    ItemService,
+    TaxonomyService,
+    UserService,
+    is_uncategorized,
+    reconcile_categories,
+)
 from ...services.item_api import to_ref
 from ..framework import (
     icon_label,
@@ -282,6 +289,13 @@ class ManagePage(Page):
         add_button = IconTextButton(FluentIcon.ADD, "新建分类", card)
         add_button.clicked.connect(lambda: self._on_tree_action("add", None))
         layout.addWidget(add_button)
+        sync_button = IconTextButton(FluentIcon.SYNC, "按目录同步", card)
+        sync_button.setToolTip(
+            "分类就是库文件夹里的目录：这里按磁盘上的真实目录刷新分类树"
+            "（新目录变成分类、被删掉的目录连同空分类一起收掉、找不到位置的文件重新对齐）"
+        )
+        sync_button.clicked.connect(self._on_category_sync)
+        layout.addWidget(sync_button)
         return card
 
     def _build_center(self) -> QWidget:
@@ -1516,6 +1530,18 @@ class ManagePage(Page):
             self.toast_success("已删除分类", message)
         self._checked_categories.clear()
         self.refresh()
+
+    def _on_category_sync(self) -> None:
+        """按库文件夹里的真实目录刷新分类树（分类即目录，见 category_sync.py）。"""
+        stats = reconcile_categories(self.session)
+        self.session.commit()
+        signalBus.categoriesChanged.emit()
+        signalBus.itemsChanged.emit()
+        self.toast_success(
+            "已按目录同步分类",
+            f"新建分类 {stats['created']}、调整归属 {stats['recategorized']}、"
+            f"重新对齐文件 {stats['relinked']}、收掉空分类 {stats['pruned']}",
+        )
 
     def _on_category_selected(self, category_id) -> None:
         if self._syncing_tree:

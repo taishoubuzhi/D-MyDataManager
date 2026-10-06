@@ -128,6 +128,9 @@ class UserService:
         user = self.users.create(name, password_hash=hash_password(password) if password else "")
         self.session.flush()
         seed_user_defaults(self.session, user)
+        # 分类即目录：新用户的默认分类要在磁盘上有同名目录
+        libraries = _library_service(self.session)
+        libraries.ensure_category_dirs(libraries.ensure_default(), user.id)
         return user
 
     def rename(self, user: User, name: str) -> bool:

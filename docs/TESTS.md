@@ -39,6 +39,7 @@
 | 文件 | 覆盖范围 |
 | --- | --- |
 | `services/test_batch_rename.py` | 批量改名规则与关键词批量增减的用例：四种改名方式、重名序号、扩展名保护。 |
+| `services/test_category_sync.py` | 分类与库目录的双向同步：分类增 / 改 / 移 / 删都要落到目录上、「未分类」= 用户名文件夹根目录、按磁盘目录刷新分类树（含旧「未分类」目录回迁与空壳分类清理）。 |
 | `services/test_hidden.py` | 隐藏数据（`.hiddens/`）的用例：搬动、回搬、清理、扫描与过滤。 |
 | `services/test_item_api.py` | 数据接口（`app.sdk.items` + `app.services.item_api`）的用例。 |
 | `services/test_item_rename.py` | 数据改名用例：改显示名时库内文件一起改名，重名加序号，文件不在库里也不报错。 |
