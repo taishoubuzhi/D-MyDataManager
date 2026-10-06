@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import sys
 
 from PyQt6.QtCore import QProcess, QTimer
+
+from ...core.runtime.shell import open_default
 
 
 def restart_application(delay_ms: int = 400) -> None:
@@ -23,13 +24,12 @@ def _start_detached() -> None:
 
 
 def open_path(path) -> bool:
-    """用系统默认程序打开路径，失败返回 False。"""
-    target = str(path)
-    try:
-        os.startfile(target)  # noqa: S606
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    """用系统默认程序打开路径（文件或文件夹），失败返回 False。
+
+    与「数据管理」里的打开走同一条路（`app.core.runtime.shell.open_default`）：
+    系统拒绝 `os.startfile()` 时会自动改由资源管理器代开。
+    """
+    return open_default(path)
 
 
 __all__ = ["open_path", "restart_application"]

@@ -21,7 +21,7 @@
 
 > 新增用例前先在这里查：**已有模块覆盖同一被测对象时，追加到那个模块**，不要新建重复模块（规范第 3 条）。
 
-### core/ —— 对应 `src/app/core` 与 `src/app/db`：配置、模块数据、清单机制、数据库、JSON / 编码 / MIME、口令散列、能力探测
+### core/ —— 对应 `src/app/core` 与 `src/app/db`：配置、模块数据、清单机制、数据库、JSON / 编码 / MIME、口令散列、能力探测、系统默认打开
 
 | 文件 | 覆盖范围 |
 | --- | --- |
@@ -33,8 +33,9 @@
 | `core/test_manifest.py` | 清单机制：读取 / 查询 / 对照 / 变更 / 重置 / 备份，以及 SDK 面。 |
 | `core/test_mime.py` | MIME 与编码探测（批 J4）：内容嗅探优先于扩展名，但同类时扩展名更具体。 |
 | `core/test_security.py` | 口令散列：argon2id 首选、PBKDF2 兜底、老散列惰性升级（批 J3）。 |
+| `core/test_shell.py` | 系统默认打开：参数模板拼命令行、文件不存在直接失败、`os.startfile()` 被系统拒绝时回退资源管理器代开。 |
 
-### services/ —— 对应 `src/app/services`：条目与批量改名、标签、存档、隐私、用户与权限、布局迁移
+### services/ —— 对应 `src/app/services`：条目与批量改名、标签、存档、隐私、用户与权限、布局迁移、查看器调度
 
 | 文件 | 覆盖范围 |
 | --- | --- |
@@ -48,6 +49,7 @@
 | `services/test_tag_permissions.py` | 标签权限：默认用户（管理员）可管理任意标签，其他用户只能管理自己创建的标签；仍被他人数据使用的标签不能转为个人。 |
 | `services/test_tag_shadows.py` | 标签重名：个人标签不得与全局标签同名，重名时并入全局标签（含启动修复）。 |
 | `services/test_user_delete.py` | 用户删除：不能删除当前用户；被删用户的数据、标签、存档条目与创建者一并转移。 |
+| `services/test_viewer_fallback.py` | 系统默认程序打不开时的退路：改用能打开该格式的内置查看器；没有查看器就如实报失败（用户 m08240）。 |
 
 ### sdk/ —— 对应 `src/app/sdk`：插件 SDK 门面
 

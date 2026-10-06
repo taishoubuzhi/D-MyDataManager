@@ -102,10 +102,23 @@ def open_viewer_with(path: Path | str, viewer, parent=None) -> tuple[bool, str]:
 
 
 def open_system(path: Path | str, ask: bool = False) -> tuple[bool, str]:
-    """绕过内置查看器：`ask=False` 用系统默认程序，`ask=True` 弹出系统的选择框。"""
+    """绕过内置查看器：`ask=False` 用系统默认程序，`ask=True` 弹出系统的选择框。
+
+    系统把默认程序拒了（本机实测 `os.startfile()` 对任何路径都 `[WinError 5]`，Store 版记事本
+    这类 AppX 关联连资源管理器代开都起不来）时不硬撑：有能打开这个格式的内置查看器就直接用它
+    打开，并在说明里写清原因，别让用户点了没反应（用户 m08240）。
+    """
     target = Path(path)
     if not target.exists():
         return False, _missing(target)
+    ok, message = _system_once(target, ask)
+    if ok:
+        return True, message
+    return _viewer_backup(target, message)
+
+
+def _system_once(target: Path, ask: bool) -> tuple[bool, str]:
+    """真正走「系统程序」那一步：有查看器插件就交给它，没有就程序自己调。"""
     api = open_api()
     if api is not None:
         try:
@@ -120,6 +133,18 @@ def open_system(path: Path | str, ask: bool = False) -> tuple[bool, str]:
     if ui.open_default(target):
         return True, "已交给系统默认程序打开"
     return False, "系统无法打开该文件"
+
+
+def _viewer_backup(target: Path, reason: str) -> tuple[bool, str]:
+    """系统打不开时的退路：用能打开这个格式的内置查看器打开（没有就用系统那句话）。"""
+    views = viewers_for(target.suffix)
+    if not views:
+        return False, reason
+    viewer = views[0]
+    ok, message = open_viewer_with(target, viewer)
+    if not ok:
+        return False, message or reason
+    return True, f"系统默认程序打不开，已改用内置查看器「{viewer.name}」"
 
 
 # --------------------------------------------------------------- 规则读写

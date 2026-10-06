@@ -129,7 +129,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 `tests\verify.py` 把整套门禁收成一个入口：编译 → 插件桩 `--check` → `unittest discover` → 自检四层 →
 `pytest` → 可选依赖验收（`verify_optional_absence.py`）→ 打包冒烟（`smoke_checkout.py`），逐步打印
 `ok` / `FAIL`、末行 `RESULT failures=N`；它自动带上 `PYTHONIOENCODING=utf-8` 与 `QT_QPA_PLATFORM=offscreen`，
-并把 `pages` 层按 12 项一组拆进独立进程（该层 73 项 Qt 检查在同一长驻进程里偶发原生崩溃）；selfcheck 各步遇到
+并把 `pages` 层按 12 项一组拆进独立进程（该层 72 项 Qt 检查在同一长驻进程里偶发原生崩溃）；selfcheck 各步遇到
 「原生崩溃且没有任何 FAIL 行」会自动重跑一次（本机 Qt offscreen 的已知环境问题，不是检查失败）。
 脚本与自检套件的完整清单、分层与扩展方式见 [`SCRIPTS.md`](SCRIPTS.md)，单元测试的范式见 [`TESTS.md`](TESTS.md)。
 
@@ -138,7 +138,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 重复入库 966 MB/s、`read_content` 629–638 MB/s、`iter_content` 747 MB/s、`verify(quick)` 5170 MB/s、`verify(deep)` 558 MB/s。
 不把 `pytest-benchmark` 放进常跑门禁：它拖慢 `pytest -q`，而基准的用途是同一台机器上的前后对照。
 
-**基线（改动后不得劣化）**：`unittest discover` 与 `pytest -q` 全绿（当前 unittest 620 项、pytest 622 项）、`selfcheck` 四层 151 项全绿、
+**基线（改动后不得劣化）**：`unittest discover` 与 `pytest -q` 全绿（当前 unittest 635 项、pytest 637 项）、`selfcheck` 四层 151 项全绿、
 `plugin_stubs.py --check` 一致、`compileall` rc 0、`verify_optional_absence.py` = `PROBLEMS: 0`、`smoke_checkout.py` = `PACKAGE-SMOKE OK`。
 
 旧套件（`scripts/dev_check.py`、`dev_check_services.py`、`dev_check_flow.py`、`dev_check_ui.py`）在功能对等后已删除：
@@ -634,6 +634,11 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 （`plugins/builtin.lib.viewer/.plugin/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。
 数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开（`Layout/Double-Click-Action` 选成「打开编辑器」时改走 `app.services.editor_service` 的 `edit_path()`，`ManagePage._open_in_editor()`；没装编辑器插件时编辑器门面自己退回系统默认程序）；
 右键「查看器」里的点名查看器与「系统默认程序 / 交给系统选择…」分别走 `open_viewer_with()` 与 `open_system()`。
+「系统默认程序」最终落到 `app.core.runtime.shell.open_default()`：本进程的 `os.startfile()` 在本机对**任何**路径都返回
+`[WinError 5] 拒绝访问`（Store 版记事本这类 AppX 关联无法从本进程激活），被拒后自动回退 `explorer.exe <路径>`，并按它的退出码确认到底有没有接手
+（交出去后退 1 才算成功；起不来死在 `0xC0000142`、或一直不退都算没接手）。没接手就返回 False，不再假装成功：
+`app.services.viewer_service.open_system()` 这时改用**能打开这个格式的内置查看器**打开，并说明原因——「设置 → 资源文件夹 / 日志 / 备份」这类
+打开文件夹的按钮拿到的也是 False，会如实提示。
 
 查看器由 `plugins/builtin.lib.viewer/.plugin/registry.py` 的 `ViewerRegistry` 按扩展名索引（同一扩展名取最后注册者），模块级实例 `viewer_registry`
 随 `viewer.open` 扩展接口一起由插件持有。`PluginService.load()`（`src/main.py` 启动时调用；历史命名 `load_viewers()`）先取旧接口调
