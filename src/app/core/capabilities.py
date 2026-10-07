@@ -79,7 +79,11 @@ class Capability:
 
 @dataclass(frozen=True)
 class _Spec:
-    """探测项：`module` 与 `dist` 是 python 包；`tools` 是外部可执行文件的候选路径。"""
+    """探测项：`module` 与 `dist` 是 python 包；`tools` 是外部可执行文件的候选路径。
+
+    `alt_module` 是备选模块：主 `module` 探测不到时再看它一眼（当前只有 `zstd` 用得上——
+    3.14+ 是标准库 `compression.zstd`，3.13 及更早由 pip 装的 `backports.zstd` 顶上）。
+    """
 
     name: str
     kind: str
@@ -89,6 +93,7 @@ class _Spec:
     tools: tuple[str, ...] = ()
     tool_hint: str = ""
     fallback: str = ""
+    alt_module: str = ""
 
 
 _SPECS: tuple[_Spec, ...] = (
@@ -137,9 +142,9 @@ _SPECS: tuple[_Spec, ...] = (
     _Spec("hf_transfer", KIND_PYTHON, "HuggingFace 下载提速（大文件多线程）",
           module="hf_transfer", dist="hf-transfer",
           fallback="下载走普通单连接，大文件慢一些（不影响能不能下）"),
-    _Spec("zstd", KIND_STDLIB, "标准库 compression.zstd：内容仓库默认压缩编码",
-          module="compression.zstd",
-          fallback="内容仓库退回 deflate：功能不丢，压缩率差一点（Python 3.14+ 自带，正常不会缺）"),
+    _Spec("zstd", KIND_STDLIB, "内容仓库默认压缩编码（比 deflate 更快更小）",
+          module="compression.zstd", alt_module="backports.zstd", dist="backports.zstd",
+          fallback="内容仓库退回 deflate：功能不丢，压缩率差一点（3.14+ 走标准库；3.13 及更早由随依赖装的 backports.zstd 顶上，两者帧格式互通）"),
     _Spec("ffmpeg", KIND_TOOL, "视频抽帧 / 转码（缩略图、向量化前的解码）",
           tools=("ffmpeg", "ffmpeg.exe"), tool_hint="装 ffmpeg 并加进 PATH（或 pip install imageio-ffmpeg）",
           fallback="视频不能抽帧 / 转码，视频缩略图与视频向量化不可用"),
@@ -204,6 +209,8 @@ def _probe(spec: _Spec) -> Capability:
             hint=hint,
         )
     available, origin = _module_available(spec.module)
+    if not available and spec.alt_module:
+        available, origin = _module_available(spec.alt_module)
     version = _dist_version(spec.dist) if available else ""
     hint = "" if available else f"缺 {spec.name}：{_pip_command(spec)}"
     return Capability(
@@ -279,7 +286,8 @@ def install_commands() -> list[str]:
     commands: list[str] = []
     for spec in _SPECS:
         item = _CACHE.get(spec.name) or capability(spec.name)
-        if item.available or spec.kind != KIND_PYTHON:
+        # 标准库能力也可能由 pip 包顶上（zstd → backports.zstd），所以带 dist 的也要给命令
+        if item.available or (spec.kind != KIND_PYTHON and not spec.dist):
             continue
         command = _pip_command(spec)
         if command not in commands:

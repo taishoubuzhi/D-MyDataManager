@@ -1234,7 +1234,12 @@ def archive_empty_dirs(case: Case) -> None:
 
 @check("archive_recompress", "services")
 def archive_recompress(case: Case) -> None:
-    """编码升级：旧编码内容按当前方案重写，身份不变、字节仍可读、占用下降。"""
+    """编码升级：旧编码内容按当前方案重写，身份不变、字节仍可读、占用下降。
+
+    这条检查要求首选编码比 deflate 更好（也就是解释器有 zstd：3.14+ 的标准库，
+    或 3.13 及更早随依赖装的 `backports.zstd`）。首选就是 deflate 时没有更优编码可升级，
+    只断言「没有内容需要升级」。
+    """
     import zlib
 
     from sqlalchemy import select
@@ -1248,6 +1253,9 @@ def archive_recompress(case: Case) -> None:
     checksum, rel_path, _size = store.put_bytes(text, name="legacy.txt", mime="text/plain")
     session.commit()
     assert store.needs_recode() == 0, "刚入库的内容不该需要升级"
+    if preferred_codec() == CODEC_DEFLATE:
+        assert store.needs_recode() == 0, "首选编码就是 deflate 时不该有内容需要升级"
+        return
 
     packed = zlib.compress(text, 6)
     store.path_of(rel_path).write_bytes(packed)

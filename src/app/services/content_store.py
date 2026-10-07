@@ -32,10 +32,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
-try:  # Python 3.14 起标准库自带 zstd；更早的解释器回退到 deflate
+# zstd 分两级来源：Python 3.14 起是标准库 `compression.zstd`；3.10–3.13 用官方回移版
+# `backports.zstd`（API 与标准库同名，帧格式互通，随 requirements.txt 一起装，py7zr 也要它）。
+# 两级都没有时才退回 deflate —— 功能不丢，只是压缩率差一点。
+try:  # pragma: no cover - 取决于解释器版本
     from compression import zstd as _zstd
 except ImportError:  # pragma: no cover - 取决于解释器版本
-    _zstd = None
+    try:
+        from backports import zstd as _zstd
+    except ImportError:
+        _zstd = None
 
 from loguru import logger
 from sqlalchemy import delete, func, select
@@ -263,7 +269,7 @@ def is_textual(name: str = "", mime: str = "") -> bool:
 
 
 def zstd_available() -> bool:
-    """当前解释器是否自带 zstd（Python 3.14 起的标准库 compression.zstd）。"""
+    """当前解释器有没有 zstd：3.14+ 是标准库，3.13 及更早是随依赖装的 backports.zstd。"""
     return _zstd is not None
 
 
@@ -349,7 +355,7 @@ def decode_stored(codec: str, data: bytes) -> bytes:
         return zlib.decompress(data)
     if codec == CODEC_ZSTD:
         if _zstd is None:
-            raise ValueError("这份内容以 zstd 压缩，需要 Python 3.14+ 才能读取")
+            raise ValueError("这份内容以 zstd 压缩，但当前解释器没有 zstd（3.14+ 自带，或 3.13 及更早装 backports.zstd）")
         return _zstd.decompress(data)
     if codec == CODEC_LZMA:
         return lzma.decompress(data)
@@ -359,14 +365,14 @@ def decode_stored(codec: str, data: bytes) -> bytes:
 def iter_decoded(path: str | Path, codec: str, chunk: int = READ_CHUNK) -> Iterator[bytes]:
     """把落盘文件按编码流式还原成原始字节（每次最多 `chunk` 字节）。
 
-    四种编码都支持：`raw` 直接读文件，`zstd` 走标准库的 `ZstdFile`，
+    四种编码都支持：`raw` 直接读文件，`zstd` 走 `ZstdFile`（标准库或 backports.zstd），
     `deflate` / `lzma` 用各自的一次性解码器分批喂。解压失败会抛异常，
     调用方决定是「这份内容坏了」还是「整场中断」。
     """
     target = Path(path)
     if codec == CODEC_ZSTD:
         if _zstd is None:
-            raise ValueError("这份内容以 zstd 压缩，需要 Python 3.14+ 才能读取")
+            raise ValueError("这份内容以 zstd 压缩，但当前解释器没有 zstd（3.14+ 自带，或 3.13 及更早装 backports.zstd）")
         with _zstd.ZstdFile(target, "rb") as handle:
             for data in iter(lambda: handle.read(chunk), b""):
                 yield data

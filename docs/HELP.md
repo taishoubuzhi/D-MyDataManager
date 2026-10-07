@@ -362,7 +362,7 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 头部摘要会写明「其中没有可回档的变更」。
 
 所有内容都**整份压缩**后按内容寻址存一个文件（一份内容一个文件、一条内容记录，同一内容不重复占空间）。
-压缩优先用 **zstd**（Python 3.14 起进入标准库 `compression.zstd`），解释器没有它时自动退回 deflate（zlib）；
+压缩优先用 **zstd**（3.14+ 是标准库 `compression.zstd`，3.13 及更早是随依赖装的 `backports.zstd`，两者帧格式互通），两处都没有时自动退回 deflate（zlib）；
 文本类用更高级别，已压缩格式（视频 / 音频 / 图片 / 压缩包等）与压不动的内容直接原样保存 —— 方案由
 `content_store.policy_for()` 按文件名与 MIME 挑选，两种编码的旧内容都能正常读取。旧编码的内容会在
 **自动清理**与「优化空间」时重新压缩（`needs_recode()` 数出待升级内容，`recompress()` 重压），无需重建存档。

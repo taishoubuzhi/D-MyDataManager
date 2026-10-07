@@ -1,7 +1,7 @@
 # 个人数据管理器（D-MyDataManager）
 
 [![license](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-![python](https://img.shields.io/badge/python-3.14%2B-blue)
+![python](https://img.shields.io/badge/python-3.13%2B-blue)
 ![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.11.0-41cd52)
 ![tests](https://img.shields.io/badge/tests-per--topic-blue)
@@ -74,11 +74,13 @@
 ### 环境要求
 
 - **Windows 10 / 11**（打包脚本与路径处理按 Windows 设计）
-- **Python 3.14**（开发、单测与打包都用 3.14.5；标准库 `compression.zstd` 让内容仓库默认用 zstd，
-  退回 3.13 只会改用 deflate，功能不丢、压缩率差一点）
+- **Python 3.13 / 3.14**（开发与单测用 3.13.5；**打包必须用 3.13**——pyappify 启动器的发行包表
+  `KNOWN_PATCHES` 只到 3.13.5，写 3.14 会在 setup 阶段直接失败；3.13 没有标准库 `compression.zstd`，
+  由 `requirements.txt` 里的官方回移版 `backports.zstd` 顶上，压缩行为与 3.14 一致）
 - 依赖见 [`requirements.txt`](requirements.txt)：界面与基础 5 条（PyQt6 6.11.0、PyQt6-Fluent-Widgets 1.11.3、
   SQLAlchemy 2.0.52、loguru 0.7.3、Pillow 12.3.0）+ 随程序一起装的加速 / 容错 / 功能库（orjson、fastjsonschema、
-  argon2-cffi、watchdog、puremagic、charset-normalizer、pymupdf、jieba、usearch、sqlite-vec、py7zr、pyzipper、rarfile）
+  argon2-cffi、watchdog、puremagic、charset-normalizer、pymupdf、jieba、usearch、sqlite-vec、py7zr、pyzipper、rarfile、
+  以及 3.13 上补 zstd 的 `backports.zstd`）
   —— 装完即可用，不需要再手动补包；只有 `huggingface_hub` / `hf-transfer` 刻意不装（只影响模型下载快不快），
   每项库提供什么能力、没装会有什么结果见 `docs/DEPENDENCIES.md`
 
@@ -204,8 +206,9 @@ icons/                        打包用图标（icon.ico / icon.png）
   或数据项引用的内容文件，并收掉删空后遗留的哈希空目录；有内容还在用旧的压缩编码时会一并按当前方案重压
   （存档页的「优化空间」按钮可手动做同一件事）。
 - 所有内容都**整份压缩**后按内容寻址存一个文件（不分块、不打包），压缩方案按数据类型挑选：文本类优先
-  **zstd**（Python 3.14 起进标准库 `compression.zstd`），解释器没有它时自动退回 deflate；已压缩格式与
-  压不动的内容直接原样保存，旧编码内容由 `needs_recode()` / `recompress()` 升级。
+  **zstd**（3.14+ 是标准库 `compression.zstd`，3.13 及更早是随依赖装的 `backports.zstd`，两者帧格式互通），
+  两处都没有时才退回 deflate；已压缩格式与压不动的内容直接原样保存，旧编码内容由
+  `needs_recode()` / `recompress()` 升级。
 - 存档只收录**未删除**的数据项（回收站项不进新快照），快照建好后被删掉的项在还原时按「撤销删除」恢复。
 - 回档有**恢复式**（默认，保留现有数据）与**覆盖式**（以存档为镜像，把多出来的现有项收进回收站，仅默认用户）两种；
   整档回档的「回档变更」对话框里可直接切换，切换会重新预演并刷新清单；关闭 `Archive/Restore-Preview` 后只走恢复式。
@@ -286,7 +289,9 @@ $env:DM_KEEP_TMP=1                                                              
 创建独立 venv 并安装 `requirements.txt`；之后的更新是增量拉取，通常一两秒完成。因此**发布新版本就是打标签**。
 
 - 配置：[`pyappify.yml`](pyappify.yml)（应用名、图标，以及 `profiles`：仓库地址、入口 `src/main.py`、
-  `requires_python: "3.14"`、依赖文件；取不到 3.14 的独立发行包时改回 `"3.13"`，代码两条路都支持）。
+  `requires_python: "3.13"`、依赖文件）。启动器 pyappify 的发行包表 `KNOWN_PATCHES` 目前硬编码到
+  3.13.5，写 `"3.14"`/`"3.14.5"` 都会在 setup 阶段报 `Unsupported major.minor version for resolving
+  latest patch`，所以打包锁 3.13；zstd 在 3.13 由 `backports.zstd` 提供，两条路行为一致。
 - 图标：`icons/icon.ico`、`icons/icon.png`（与窗口图标 `src/app/resource/images/logo.png` 同源，均由本地原图 `icons/数据管理器软件图标生成.png`（未纳入版本库）裁圆、去水印、透明背景后生成；ico 含 16/24/32/48/64/128/256 多分辨率）。
 - 自动打包：推送 `v*` 标签会触发 [`.github/workflows/build.yml`](.github/workflows/build.yml)，
   由 `ok-oldking/pyappify-action` 构建 `D-MyDataManager-win32-release-setup.exe`（在线安装包）、
@@ -333,7 +338,7 @@ LGPL 三类都不构成障碍（LGPL 在 Python 里以模块动态导入，且 L
 | [PyQt6](https://pypi.org/project/PyQt6/) | 6.11.0 | GPL-3.0-only / 商业授权 | 决定本项目采用 GPL-3.0 |
 | [PyQt6-Fluent-Widgets](https://github.com/zhiyiYo/PyQt-Fluent-Widgets) | 1.11.3 | GPL-3.0 / 商业授权 | 同上 |
 | [PyQt6-Qt6](https://pypi.org/project/PyQt6-Qt6/)（Qt 运行库） | 6.11.2 | LGPL-3.0 | 动态加载，保留用户可替换 Qt 的能力即可 |
-| [PyQt6-sip](https://pypi.org/project/PyQt6-sip/) | 13.12.0 | BSD-2-Clause | 宽松 |
+| [PyQt6-sip](https://pypi.org/project/PyQt6-sip/) | 13.13.0 | BSD-2-Clause | 宽松 |
 | [PyMuPDF](https://pypi.org/project/PyMuPDF/) | 1.28.2 | **AGPL-3.0** / 商业授权 | 见上；只用于 PDF 抽取与渲染 |
 | [SQLAlchemy](https://www.sqlalchemy.org/) | 2.0.52 | MIT | 宽松 |
 | [loguru](https://github.com/Delgan/loguru) | 0.7.3 | MIT | 宽松 |
@@ -350,8 +355,9 @@ LGPL 三类都不构成障碍（LGPL 在 Python 里以模块动态导入，且 L
 | [py7zr](https://github.com/miurahr/py7zr) | 1.1.3 | LGPL-2.1-or-later | 以模块动态导入；LGPL 允许升级到 GPL |
 | [pyzipper](https://github.com/danifus/pyzipper) | 0.4.0 | MIT | 宽松 |
 | [rarfile](https://github.com/markokr/rarfile) | 4.5 | ISC | 宽松；解包用的 `bsdtar` / `unrar` 由系统提供，不随本包分发 |
+| [backports.zstd](https://github.com/rogdham/backports.zstd) | 1.7.0 | PSF-2.0 | 3.13 及更早的 zstd 来源（3.14+ 由标准库提供）；与 CPython 同许可 |
 
-其余随解释器分发的组件（`sqlite3` / `zlib` / `lzma` / `bz2` / `compression.zstd` 等）按 CPython 的 PSF 许可提供。
+其余随解释器分发的组件（`sqlite3` / `zlib` / `lzma` / `bz2` / `compression.zstd`（3.14 起）等）按 CPython 的 PSF 许可提供。
 依赖的用途与「缺了会怎样」见 [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md)。
 
 ## 致谢

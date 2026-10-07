@@ -12,7 +12,8 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        # v5 起改为 node24，避免 "Node.js 20 is deprecated" 里 checkout 这一条
+        uses: actions/checkout@v5
 
       - name: Build with PyAppify Action
         uses: ok-oldking/pyappify-action@master

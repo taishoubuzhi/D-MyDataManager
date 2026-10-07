@@ -39,7 +39,7 @@
 | `py7zr` | `py7zr` | 7z 压缩包直接列举与解包 | 7z 只能交给系统 bsdtar 兜底 |
 | `pyzipper` | `pyzipper` | 加密 zip 的读取 | 加密 zip 读不了（普通 zip 不受影响） |
 | `rarfile` | `rarfile` | rar 压缩包列举（配合系统 bsdtar） | rar 列不出内容（bsdtar 也帮不上，rarfile 才是入口） |
-| `zstd` | 标准库 `compression.zstd` | 内容仓库默认压缩编码 | 退回 deflate：功能不丢，压缩率差一点（Python 3.14+ 自带，正常不会缺） |
+| `zstd` | 标准库 `compression.zstd`（3.13 及更早：`backports.zstd`） | 内容仓库默认压缩编码 | 退回 deflate：功能不丢，压缩率差一点（3.14+ 用标准库；3.13 及更早用随 `requirements.txt` 装的 `backports.zstd`，两者 API 同名、帧格式互通） |
 
 ```powershell
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir

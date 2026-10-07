@@ -27,3 +27,8 @@ sqlite-vec>=0.1         # 把向量检索下推到 SQLite
 py7zr>=0.21             # 7z 压缩包列举与解包
 pyzipper>=0.3           # 加密 zip 读取
 rarfile>=4.1            # rar 压缩包列举（配合系统 bsdtar，见 docs/DEPENDENCIES.md）
+
+# —— 压缩编码（3.14+ 用标准库 compression.zstd；3.13 及更早用这个官方回移版，
+# 两者 API 同名、帧格式互通。py7zr 也会带它，这里显式声明为直接依赖，
+# 免得哪天 py7zr 不再依赖它，内容仓库的 zstd 就被一起带走了）
+backports.zstd>=1.0.0; python_version < "3.14"

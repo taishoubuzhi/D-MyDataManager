@@ -116,7 +116,7 @@ class IsolatedCase(unittest.TestCase):
         """确定性地销毁页面控件：先关闭它自己的会话，再立刻销毁控件。
 
         这里不用 `deleteLater()`：把整棵控件树的销毁排进事件队列后再由后续用例的
-        `processEvents()` 执行，在本机 PyQt6 + Python 3.14 上会以 0xC0000005 崩在 Qt 内部
+        `processEvents()` 执行，在本机 PyQt6 + CPython 3.14 上实测会以 0xC0000005 崩在 Qt 内部
         （只 `deleteLater()` 单个控件没事，整页一起排队才会崩），因此改为立即销毁。
         """
         if widget is None:

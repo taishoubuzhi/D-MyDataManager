@@ -10,7 +10,7 @@
    `app.sdk.storage` / `app.ui.components.library_watcher` 都导入成功；
 2. `app.core.capabilities` 把它们报成「缺失」，且每条都带中文安装提示与 pip 命令；
 3. JSON 走标准库回退仍能读写；口令退回 PBKDF2 仍能校验；
-4. 内容仓库仍能整份入库 / 读回 / 深校验（zstd 是标准库，不受影响；旧 deflate 数据也能读）；
+4. 内容仓库仍能整份入库 / 读回 / 深校验（zstd 也一起藏起来时退回 deflate；旧 deflate 数据也能读）；
 5. `LibraryWatcher` 退回 Qt 的 `QFileSystemWatcher`（`watchdog_available()` 为假）。
 
 跑法（仓库根目录）：
@@ -49,6 +49,7 @@ HIDDEN = (
     "rarfile",
     "hf_transfer",
     "imageio_ffmpeg",
+    "backports",
     "zstandard",
 )
 

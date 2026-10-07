@@ -14,9 +14,12 @@ profiles:
     # 用户端从这里按标签克隆代码，并在本机创建独立 venv 安装依赖
     git_url: "https://github.com/taishoubuzhi/D-MyDataManager.git"
     main_script: "src/main.py"
-    # 程序按 3.14 开发：标准库 compression.zstd 让内容仓库默认用 zstd（3.13 会自动退回
-    # deflate，功能不丢、只是压缩率差一点）。注意 pyappify / pyappify-action 的 README
-    # 目前仍写「supports python 3.7 - 3.13」——首次正式打包要确认启动器能取到 3.14 的
-    # 独立发行包，取不到就把这里改回 "3.13"（代码两条路都支持）。
-    requires_python: "3.14"
+    # 打包解释器必须落在 pyappify 启动器硬编码的 KNOWN_PATCHES 表里：v1.2.3（master 也
+    # 一样）只有 3.7 / 3.8 / 3.9 / 3.10 / 3.11 / 3.12 / 3.13，最高 3.13.5，没有 3.14。
+    # 写 "3.14" 或 "3.14.5" 都会在 setup 阶段报 "Unsupported major.minor version for
+    # resolving latest patch: 3.14" —— python_env.rs 的 parse_version 会把 patch 段丢掉，
+    # get_latest_known_patch_for_major_minor 只按主次版本查表。
+    # 因此打包锁 3.13：标准库没有 compression.zstd，由 requirements.txt 里的官方回移版
+    # backports.zstd 顶上（API 与帧格式都和标准库互通，见 src/app/services/content_store.py）。
+    requires_python: "3.13"
     requirements: "requirements.txt"

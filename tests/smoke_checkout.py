@@ -136,8 +136,12 @@ def _check_payload(copy: Path, files: list[Path], problems: list[str]) -> None:
         if found is None:
             problems.append(f"pyappify.yml 缺少 {key}")
     version = re.search(r'requires_python:\s*"([^"]+)"', text)
-    if version is not None and version.group(1) != "3.14":
-        problems.append(f"pyappify.yml 的 requires_python 应为 3.14，实际 {version.group(1)}")
+    # pyappify 启动器的 KNOWN_PATCHES 硬编码到 3.13（最高 3.13.5），写 3.14 会在 setup 阶段
+    # 直接失败（Unsupported major.minor version for resolving latest patch: 3.14）。
+    if version is not None and not version.group(1).startswith(("3.13", "3.12", "3.11")):
+        problems.append(
+            f"pyappify.yml 的 requires_python 需是 pyappify 支持的系列（3.13/3.12/3.11），实际 {version.group(1)}"
+        )
 
 
 def _run(label: str, args: list[str], cwd: Path) -> tuple[bool, str]:
