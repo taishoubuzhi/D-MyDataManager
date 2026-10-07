@@ -681,6 +681,12 @@ def superuser_permissions(case: Case) -> None:
                 ("批量停用", lambda: plugin_page._on_batch_toggle(True)),
                 ("启用 / 停用插件", plugin_page._on_toggle),
                 ("安装插件", lambda: plugin_page._install(str(case.root), "自检")),
+                (
+                    "批量安装插件",
+                    lambda: plugin_page._install_many(
+                        [str(case.root), str(case.root)], "自检"
+                    ),
+                ),
             ):
                 try:
                     action()

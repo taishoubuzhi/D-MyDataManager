@@ -6,10 +6,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QAbstractItemView,
+    QFileDialog,
+    QHBoxLayout,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 from qfluentwidgets import (
     CaptionLabel,
     CardWidget,
@@ -75,9 +83,11 @@ class PluginPage(Page):
         self._current = ""
 
         self._zip_button = IconTextPrimaryButton(FluentIcon.ADD, "导入插件包", self)
+        self._zip_button.setToolTip("选择一个或多个插件 .zip（可多选，一次全导进来）")
         self._zip_button.clicked.connect(self._on_import_zip)
         self.header.add_action(self._zip_button)
         self._folder_button = IconTextButton(FluentIcon.FOLDER, "导入插件目录", self)
+        self._folder_button.setToolTip("选择插件目录；按住 Ctrl / Shift 可多选（每个目录里要有 plugin.json）")
         self._folder_button.clicked.connect(self._on_import_dir)
         self.header.add_action(self._folder_button)
         refresh_button = IconTextButton(FluentIcon.SYNC, "刷新", self)
@@ -745,9 +755,87 @@ class PluginPage(Page):
         self.toast_success("已导入插件", f"{info.name}（{label}）")
 
     def _on_import_zip(self) -> None:
-        path, _filter = QFileDialog.getOpenFileName(self, "选择插件压缩包", "", "插件包 (*.zip);;所有文件 (*)")
-        self._install(path, "压缩包")
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self, "选择插件压缩包（可多选）", "", "插件包 (*.zip);;所有文件 (*)"
+        )
+        self._install_many(paths, "压缩包")
 
     def _on_import_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "选择插件目录")
-        self._install(path, "目录")
+        self._install_many(self._choose_directories("选择插件目录（可多选）"), "目录")
+
+    def _choose_directories(self, title: str) -> list[str]:
+        """多选插件目录。
+
+        系统自带的选目录对话框只能选一个，所以这里用 Qt 自带的对话框：把内部视图的选中模式
+        改成 `ExtendedSelection`，就能按住 Ctrl / Shift 一次选多个目录。
+        """
+        dialog = QFileDialog(self, title)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        for view in dialog.findChildren(QAbstractItemView):
+            view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        if not dialog.exec():
+            return []
+        return [str(path) for path in dialog.selectedFiles()]
+
+    def _install_many(self, sources: Sequence[str], label: str) -> None:
+        """批量导入：先一个个装，装不上的记下来；「已存在」的攒到最后一次性问要不要覆盖。
+
+        单个来源仍走 `_install()`（自检脚本也用它），多个来源才走这条批量路径：一个坏包不会
+        拖垮整批，末尾给一份「装好了哪些、哪些没装上、为什么」的汇总。
+        """
+        if not self._require_admin("导入插件"):
+            return
+        items = [str(source) for source in sources if source]
+        if not items:
+            return
+        if len(items) == 1:
+            self._install(items[0], label)
+            return
+        installed: list[str] = []
+        existing: list[str] = []
+        failed: list[str] = []
+        for source in items:
+            try:
+                info = self.service.import_plugin(source)
+            except Exception as exc:  # noqa: BLE001 - 一个坏包不该拖垮整批
+                message = str(exc)
+                if "已存在" in message:
+                    existing.append(source)
+                else:
+                    failed.append(f"{Path(source).name}：{message}")
+                continue
+            installed.append(f"{info.name}（{info.id}）")
+        if existing:
+            listed = "\n".join(f"· {Path(source).name}" for source in existing)
+            if confirm(
+                self,
+                "插件已存在",
+                f"下列 {len(existing)} 个插件已经装过：\n\n{listed}\n\n要覆盖安装吗？",
+            ):
+                for source in existing:
+                    try:
+                        info = self.service.import_plugin(source, overwrite=True)
+                    except Exception as exc:  # noqa: BLE001 - 同上，继续装下一个
+                        failed.append(f"{Path(source).name}：{exc}")
+                        continue
+                    installed.append(f"{info.name}（{info.id}）")
+            else:
+                failed.extend(f"{Path(source).name}：插件已存在，没有覆盖" for source in existing)
+        self._refresh_viewers()
+        self._reload()
+        self._report_install_many(installed, failed, label)
+
+    def _report_install_many(self, installed: list[str], failed: list[str], label: str) -> None:
+        """批量导入的汇总提示：成功一个条、失败一个条，失败明细最多列 5 条。"""
+        if installed:
+            self.toast_success(
+                f"已导入 {len(installed)} 个插件",
+                f"{'、'.join(installed)}\n（来源：{label}）",
+            )
+        if failed:
+            detail = "\n".join(failed[:5])
+            if len(failed) > 5:
+                detail = f"{detail}\n……还有 {len(failed) - 5} 条，详见日志"
+            self.toast_error(f"{len(failed)} 个插件没导入", detail)
