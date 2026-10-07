@@ -1,5 +1,6 @@
 # —— 运行期数据（真实数据 / 本地设置，不随代码分发）
 /.logs/
+/.errors/
 /.resources/
 /.configs/
 /exports/
@@ -34,3 +35,4 @@ _*.log
 
 # —— 本地任务清单
 TODO.md
+
