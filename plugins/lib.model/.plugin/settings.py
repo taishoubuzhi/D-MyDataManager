@@ -9,7 +9,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.sdk import storage
+from app.sdk import storage as sdk_storage
 
 from .constants import DEFAULT_CONCURRENT, DEFAULT_HEARTBEAT_SEC, DEFAULT_IDLE_UNLOAD_SEC, DEFAULT_MAX_RESIDENT
 from .paths import settings_file
@@ -162,11 +162,13 @@ def mask_secret(value: str) -> str:
 
 @dataclass
 class ModelSettings:
-    """插件设置的内存视图：三段配置 + 密钥表。"""
+    """插件设置的内存视图：四段配置 + 密钥表。"""
 
     download: dict[str, Any] = field(default_factory=dict)
     runtime: dict[str, Any] = field(default_factory=dict)
+    storage: dict[str, Any] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
+    #: 注意：字段名叫 `storage`（JSON 里也是这个键），SDK 那个模块在这里叫 `sdk_storage`
 
     # ------------------------------------------------------------- 读
     @classmethod
@@ -174,22 +176,29 @@ class ModelSettings:
         data = payload if isinstance(payload, dict) else {}
         download = data.get("download") if isinstance(data.get("download"), dict) else {}
         runtime = data.get("runtime") if isinstance(data.get("runtime"), dict) else {}
+        storage_section = data.get("storage") if isinstance(data.get("storage"), dict) else {}
         secrets = data.get("secrets") if isinstance(data.get("secrets"), dict) else {}
         return cls(
             download=dict(download),
             runtime=dict(runtime),
+            storage=dict(storage_section),
             secrets={str(key): str(value) for key, value in secrets.items()},
         )
 
     @classmethod
     def load(cls) -> "ModelSettings":
-        return cls.parse(storage.read_json(settings_file(), {}))
+        return cls.parse(sdk_storage.read_json(settings_file(), {}))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"download": dict(self.download), "runtime": dict(self.runtime), "secrets": dict(self.secrets)}
+        return {
+            "download": dict(self.download),
+            "runtime": dict(self.runtime),
+            "storage": dict(self.storage),
+            "secrets": dict(self.secrets),
+        }
 
     def save(self) -> bool:
-        return storage.write_json(settings_file(), self.to_dict())
+        return sdk_storage.write_json(settings_file(), self.to_dict())
 
     # ------------------------------------------------------------- 下载段
     @property
@@ -347,6 +356,36 @@ class ModelSettings:
     def index_url(self) -> str:
         """最终拼进 pip 安装命令的索引地址；空串表示用 pip 默认源。"""
         return pip_mirror_url(self.pip_mirror, self.pip_mirror_custom)
+
+    # ------------------------------------------------------------- 存储段
+    @property
+    def models_root(self) -> str:
+        """用户指定的模型根目录；空串表示用默认位置（程序目录下的 `.models`）。"""
+        return str(self.storage.get("models_root") or "").strip()
+
+    @models_root.setter
+    def models_root(self, value: str) -> None:
+        text = str(value or "").strip()
+        if text:
+            self.storage["models_root"] = text
+        else:
+            self.storage.pop("models_root", None)
+
+    @property
+    def pending_cleanup(self) -> tuple[str, ...]:
+        """搬走后没删干净的老模型目录，下次进页面/启动时再清一次。"""
+        raw = self.storage.get("pending_cleanup")
+        if isinstance(raw, str):
+            raw = [raw]
+        return tuple(str(item).strip() for item in (raw or ()) if str(item).strip())
+
+    @pending_cleanup.setter
+    def pending_cleanup(self, values) -> None:
+        items = [str(item).strip() for item in values or () if str(item).strip()]
+        if items:
+            self.storage["pending_cleanup"] = items
+        else:
+            self.storage.pop("pending_cleanup", None)
 
     # ------------------------------------------------------------- 密钥
     def secret(self, ref: str) -> str:

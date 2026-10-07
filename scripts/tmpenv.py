@@ -96,6 +96,10 @@ def redirect_paths(root: Path) -> None:
     from app.core.runtime import paths
 
     data = paths.apply_resource_root(root / paths.RESOURCE_ROOT_NAME)
+    # 程序根目录本身也指向临时根：`paths.ROOT` 是「跟着程序走」的那批文件的落点
+    # （模型插件新版本的模型目录 `<根>/.models` 就是这么算的），不重定向的话
+    # 测试与自检会往真实仓库里写权重与运行环境。
+    paths.ROOT = root
     paths.LOG_DIR = root / paths.LOG_DIR_NAME
     paths.DEFAULT_EXPORT_DIR = root / "exports"
     paths.CONFIG_DIR = root / paths.CONFIG_DIR_NAME
@@ -117,6 +121,8 @@ def _check_redirected(root: Path) -> None:
     expected = Path(root) / paths.RESOURCE_ROOT_NAME
     if paths.DATA_DIR != expected:
         raise RuntimeError(f"资源目录重定向失败（{paths.DATA_DIR} ≠ {expected}），拒绝在真实数据上继续")
+    if Path(paths.ROOT) != Path(root):
+        raise RuntimeError(f"程序根目录重定向失败（{paths.ROOT} ≠ {root}），拒绝在真实数据上继续")
 
 
 def reset_config(root: Path) -> None:

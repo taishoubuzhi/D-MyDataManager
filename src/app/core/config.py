@@ -215,9 +215,9 @@ def _migrate_legacy_resource_path() -> None:
     if library.is_dir() and not destination.exists():
         paths.make_dir(target)
         shutil.move(str(library), str(destination))
-        logger.info("已把库文件夹迁入资源文件夹：{}", destination)
+        logger.info("已把库文件夹迁入资源文件夹：%s", destination)
     elif library.is_dir() and library.resolve() != destination.resolve():
-        logger.warning("旧库文件夹仍在 {}，未自动迁移到 {}", library, destination)
+        logger.warning("旧库文件夹仍在 %s，未自动迁移到 %s", library, destination)
     config.set(config.resourcePath, str(target))
 
 
@@ -229,8 +229,80 @@ def release_resource_root() -> None:
     paths.release_locked_root()
 
 
-def set_resource_root(folder: str | Path) -> Path:
-    """把资源文件夹（库数据 + 数据库）迁到 folder 并立即生效。"""
+#: 搬迁后旧资源文件夹可能还有被占用的文件（数据库、正在写的日志）删不掉，
+#: 把待删路径记在配置目录（不在资源文件夹里，不会跟着搬），下次启动补删。
+PENDING_CLEANUP_FILE = paths.CONFIG_DIR / "pending-resource-cleanup.json"
+
+
+def _remember_pending_cleanup(previous: Path) -> None:
+    from .manifest.kit import write_json_atomic  # 与清单机制共用原子写
+
+    try:
+        write_json_atomic(PENDING_CLEANUP_FILE, {"path": str(previous)})
+    except OSError as exc:
+        logger.warning("无法记录待清理的旧资源文件夹 %s：%s", previous, exc)
+
+
+def cleanup_pending_resource_root() -> None:
+    """启动时补删上次搬迁留下的旧资源文件夹（此时占用它的文件已经关闭）。"""
+    try:
+        payload = jsonio.loads(PENDING_CLEANUP_FILE.read_bytes())
+    except (OSError, ValueError):
+        return
+    previous = str(payload.get("path", "") or "") if isinstance(payload, dict) else ""
+    if not previous:
+        PENDING_CLEANUP_FILE.unlink(missing_ok=True)
+        return
+    old = Path(previous)
+    try:
+        if old.resolve() == resources_root().resolve():
+            PENDING_CLEANUP_FILE.unlink(missing_ok=True)
+            return
+    except OSError:
+        pass
+    if old.exists():
+        try:
+            shutil.rmtree(old)
+        except OSError as exc:
+            logger.warning("旧资源文件夹仍被占用，留着下次启动再清理：%s —— %s", old, exc)
+            return
+        logger.info("已清理搬迁前的旧资源文件夹：%s", old)
+    PENDING_CLEANUP_FILE.unlink(missing_ok=True)
+
+
+class ResourceRootExists(FileExistsError):
+    """目标位置里已经有一个资源文件夹（多半是上次搬到一半留下的）。
+
+    继承 `FileExistsError`：老的调用方和测试仍按「目标已存在」处理；界面拿到它之后可以问
+    用户要不要删掉重搬。
+    """
+
+    def __init__(self, target: str | Path) -> None:
+        self.target = Path(target)
+        super().__init__(f"目标位置里已经有一个资源文件夹：{self.target}")
+
+
+def _copied_ok(source: Path, target: Path) -> bool:
+    """复制完粗查一遍：源里有的关键标记，目标里也得有（不逐个文件比对）。"""
+    for name in ("data.db", "library"):
+        if (source / name).exists() and not (target / name).exists():
+            return False
+    return True
+
+
+def set_resource_root(folder: str | Path, *, replace: bool = False) -> Path:
+    """把资源文件夹（库数据 + 数据库）迁到 folder 并立即生效。
+
+    顺序刻意做成「先落新位置、再改配置、最后删旧目录」：同一卷上先试原子改名（瞬间完成、
+    要么成功要么原样）；跨卷或目录被占用时退回整份复制，复制完粗查一遍关键标记，确认没问题
+    才把配置切过去。任何一步失败都会清掉搬迁途中产生的新目录、把数据库引擎恢复到旧位置，
+    然后原样抛错——绝不会留下「配置指着新位置、数据还在旧地方」或半份新目录。旧目录里若还
+    有被占用的文件（数据库、正在写的日志），删除会失败——那就记下来，下次启动补删。
+
+    目标位置已经有资源文件夹时（多半是上次没搬完留下的）：
+    - `replace=False`（默认）抛 `ResourceRootExists`，交给界面去问用户；
+    - `replace=True` 先把旧目标整份删掉再搬（数据以当前资源文件夹为准）。
+    """
     from ..db import database  # 局部导入，避免与数据库模块循环依赖
 
     target = paths.resource_root(folder)
@@ -240,17 +312,65 @@ def set_resource_root(folder: str | Path) -> Path:
         paths.apply_resource_root(target)
         return target
     if target.exists():
-        raise FileExistsError(f"目标资源文件夹已存在：{target}")
+        if not replace:
+            logger.info("目标位置已存在资源文件夹，先不动任何东西：%s", target)
+            raise ResourceRootExists(target)
+        logger.warning("目标位置已存在资源文件夹，按用户选择先删掉再搬：%s", target)
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            logger.error("目标位置里那个资源文件夹删不掉：%s —— %s", target, exc)
+            raise OSError(f"目标位置里那个资源文件夹删不掉（{exc}）：{target}") from exc
     database.dispose_engine()
     release_resource_root()  # 旧位置可能锁着，搬迁前先放行
+    renamed = False
+    created = False
     if current.exists():
         paths.make_dir(target.parent)
-        shutil.move(str(current), str(target))
-    config.set(config.resourcePath, str(target))
-    paths.apply_resource_root(target)
-    paths.ensure_dirs()
-    database.init_db()
+        try:
+            current.rename(target)
+            renamed = True
+        except OSError as exc:
+            logger.info("资源文件夹不能直接改名（%s），改为整份复制：%s → %s", exc, current, target)
+            try:
+                shutil.copytree(current, target)
+                created = True
+            except BaseException as copy_error:  # 包括 Ctrl-C / 取消：都把半份新目录清掉
+                logger.error("复制资源文件夹失败：%s → %s：%s", current, target, copy_error)
+                shutil.rmtree(target, ignore_errors=True)
+                database.init_db()  # 让引擎恢复到旧位置，程序还能继续用
+                raise OSError(f"迁移失败，原资源文件夹保持原样：{copy_error}") from copy_error
+            if not _copied_ok(current, target):
+                logger.error("复制过去的内容不完整，原资源文件夹保持原样：%s", target)
+                shutil.rmtree(target, ignore_errors=True)
+                database.init_db()
+                raise OSError(f"迁移失败（复制过去的内容不完整），原资源文件夹保持原样：{target}")
+    try:
+        config.set(config.resourcePath, str(target))
+        paths.apply_resource_root(target)
+        paths.ensure_dirs()
+        database.init_db()
+    except BaseException:
+        logger.exception("把资源文件夹切到新位置失败，正在恢复原状：%s → %s", target, current)
+        try:
+            if renamed and target.is_dir() and not current.exists():
+                target.rename(current)  # 改过名就改回去
+            elif created:
+                shutil.rmtree(target, ignore_errors=True)  # 复制来的半份不要了，原目录还在
+        except OSError as undo_error:
+            logger.error("恢复原状也失败了，数据可能在 %s：%s", target, undo_error)
+        config.set(config.resourcePath, str(current))
+        paths.apply_resource_root(current)
+        paths.ensure_dirs()
+        database.init_db()
+        raise
     _rebase_library_paths(current / "library", target / "library")
+    if current.exists() and not renamed:
+        try:
+            shutil.rmtree(current)
+        except OSError as exc:
+            logger.warning("旧资源文件夹暂时删不掉（文件被占用），已记下待下次启动清理：%s —— %s", current, exc)
+            _remember_pending_cleanup(current)
     return target
 
 
@@ -303,6 +423,7 @@ def load_config() -> None:
     paths.apply_resource_root(resources_root())
     paths.migrate_legacy_dir(paths.DATA_DIR)
     paths.ensure_dirs()
+    cleanup_pending_resource_root()
 
 
 load_config()

@@ -3,7 +3,7 @@
   "id": "lib.model.runtime_profiles",
   "version": "1",
   "kind": "profiles",
-  "description": "运行环境（profile）：每个 profile 一个独立 venv，装在 .resources/models/runtime/<id>/venv。CUDA 运行库（cudart / cuBLAS / cuDNN）走 nvidia-*-cu12 这几个 pip 包，装进哪个环境就只有哪个环境有。装包前页面会弹确认，不会静默安装。带 -gpu 的 profile 只是把索引指向 CUDA 轮子（torch 的 CUDA 版自带 CPU 内核，不需要装两份）；OCR 的 onnxruntime 与 onnxruntime-gpu 是两个发行包，GPU 版没 CUDA 时自动退回 CPU，只用装其中一个。",
+  "description": "运行环境（profile）：每个 profile 一个独立 venv，装在模型目录（默认 <程序目录>/.models，可在「模型」页设置里改位置）下的 runtime/<id>/venv。模型目录路径太长、顶破 Windows 260 字符上限且系统没开长路径支持时，装 torch 这类环境会整包失败；页面会在开装前提示用户先把「模型目录」换到更浅的位置，用户不改就取消这次安装，程序绝不静默换盘。CUDA 运行库（cudart / cuBLAS / cuDNN）走 nvidia-*-cu12 这几个 pip 包，装进哪个环境就只有哪个环境有。装包前页面会弹确认，不会静默安装。带 -gpu 的 profile 只是把索引指向 CUDA 轮子（torch 的 CUDA 版自带 CPU 内核，不需要装两份）；OCR 的 onnxruntime 与 onnxruntime-gpu 是两个发行包，GPU 版没 CUDA 时自动退回 CPU，只用装其中一个。",
   "items": [
     {
       "key": "llama-cpp",

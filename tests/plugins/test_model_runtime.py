@@ -47,10 +47,15 @@ def _register_namespace() -> None:
 _register_namespace()
 
 runtime = importlib.import_module(PACKAGE + ".runtime")
+model_paths = importlib.import_module(PACKAGE + ".paths")
+model_settings = importlib.import_module(PACKAGE + ".settings")
 worker_pkg = importlib.import_module(PACKAGE + ".worker")
 worker_adapters = importlib.import_module(PACKAGE + ".adapters.worker")
 
 WORKER_SCRIPT: Path = worker_pkg.WORKER_SCRIPT
+
+#: 造一条「深到顶破 Windows 260 上限」的运行环境路径（只用于验证长路径判断）
+_DEEP_ROOT = Path("C:/") / "/".join(f"level{index}" for index in range(12)) / ".models/runtime"
 
 _FAKE_WORKER = '''
 import json
@@ -134,6 +139,191 @@ class _Ctx:
         return self.payload
 
 
+class ModelPathsCase(IsolatedCase):
+    """模型根目录的落点：程序目录下的 `.models`、用户指定、旧位置自动搬过来。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.models = Path(self.root) / ".models"
+        self.legacy = Path(self.root) / ".resources" / "models"
+        shutil.rmtree(self.models, ignore_errors=True)
+        shutil.rmtree(self.legacy, ignore_errors=True)
+        settings = model_settings.load_settings()
+        settings.models_root = ""
+        settings.pending_cleanup = ()
+        settings.save()
+        model_paths.take_migration_note()  # 别把上一条用例的迁移说明带过来
+        self.addCleanup(shutil.rmtree, self.models, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, self.legacy, ignore_errors=True)
+
+    def test_defaults_to_hidden_dir_under_program_root(self) -> None:
+        """不设置就用程序目录下的 `.models`，而不是资源文件夹下的 `models`。"""
+        self.assertEqual(model_paths.default_models_root(), self.models)
+        self.assertEqual(model_paths.models_root(), self.models)
+        self.assertTrue(self.models.is_dir())
+        self.assertEqual(model_paths.legacy_models_root(), self.legacy)
+        self.assertEqual(model_paths.registry_file(), self.models / "registry.json")
+        self.assertEqual(model_paths.runtime_root(), self.models / "runtime")
+
+    def test_configured_dir_wins(self) -> None:
+        """设置里指定了目录：模型目录是它下面的 `.models`，登记表、运行环境全跟着走。"""
+        chosen = Path(self.root) / "models-custom"
+        settings = model_settings.load_settings()
+        settings.models_root = str(chosen)
+        self.assertTrue(settings.save())
+        self.assertEqual(model_paths.configured_models_root(), str(chosen))
+        custom = chosen / ".models"
+        self.assertEqual(model_paths.model_dir_candidate(chosen), custom)
+        self.assertEqual(model_paths.models_root(), custom)
+        self.assertTrue(custom.is_dir())
+        self.assertEqual(model_paths.registry_file(), custom / "registry.json")
+        self.assertEqual(model_paths.runtime_root(), custom / "runtime")
+
+    def test_configured_dir_that_is_already_models_is_used_as_is(self) -> None:
+        """老配置存的是模型目录本身（名字就叫 `.models`），不能再往下套一层。"""
+        chosen = Path(self.root) / "old" / ".models"
+        settings = model_settings.load_settings()
+        settings.models_root = str(chosen)
+        self.assertTrue(settings.save())
+        self.assertEqual(model_paths.models_root(), chosen)
+        self.assertTrue(chosen.is_dir())
+
+    def test_ensure_models_dir_probes_that_it_can_write(self) -> None:
+        """搬移前先探一次目标能不能写；返回模型目录本身，探针文件不留下。"""
+        chosen = Path(self.root) / "chosen"
+        kept = model_paths.ensure_models_dir(chosen / ".models")
+        self.assertEqual(kept, chosen / ".models")
+        self.assertEqual(list(kept.glob(".write-probe-*")), [])
+
+    def test_models_root_says_so_when_the_dir_cannot_be_created(self) -> None:
+        """目录建不出来（权限 / 被同名的文件占着）要说清是哪个位置，不装作成功。"""
+        blocked = Path(self.root) / "blocked" / ".models"
+        blocked.parent.mkdir(parents=True, exist_ok=True)
+        blocked.write_text("我是文件，不是目录", encoding="utf-8")
+        settings = model_settings.load_settings()
+        settings.models_root = str(blocked.parent)
+        self.assertTrue(settings.save())
+        with self.assertRaises(model_paths.ModelsDirUnusable) as caught:
+            model_paths.models_root()
+        self.assertIn(str(blocked), str(caught.exception))
+
+    def test_migrates_legacy_location_on_first_use(self) -> None:
+        """升级上来的老用户：旧位置有东西就整体搬到 `.models`，登记表与权重原地可用。"""
+        (self.legacy / "local" / "qwen").mkdir(parents=True, exist_ok=True)
+        (self.legacy / "registry.json").write_text('{"models": []}', encoding="utf-8")
+        (self.legacy / "local" / "qwen" / "w.gguf").write_bytes(b"x")
+
+        self.assertEqual(model_paths.models_root(), self.models)
+        self.assertEqual(model_paths.registry_file(), self.models / "registry.json")
+        self.assertEqual((self.models / "registry.json").read_text(encoding="utf-8"), '{"models": []}')
+        self.assertEqual((self.models / "local" / "qwen" / "w.gguf").read_bytes(), b"x")
+        self.assertFalse(self.legacy.exists())
+        moved, note = model_paths.take_migration_note()
+        self.assertTrue(moved, note)
+        self.assertIn(str(self.models), note)
+        self.assertEqual(model_paths.take_migration_note(), (True, ""))  # 只报一次
+
+    def test_prefers_new_location_once_it_exists(self) -> None:
+        """两个位置都有时用新位置，且不碰旧位置里的东西。"""
+        self.legacy.mkdir(parents=True, exist_ok=True)
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self.models.mkdir(parents=True, exist_ok=True)
+        self.assertEqual(model_paths.models_root(), self.models)
+        self.assertTrue((self.legacy / "registry.json").is_file())
+        self.assertEqual(model_paths.take_migration_note(), (True, ""))
+
+    def test_keeps_legacy_and_moves_in_background_when_rename_fails(self) -> None:
+        """改名搬不动（跨盘 / 有程序占着）：先用旧位置，后台再整份复制。"""
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        with mock.patch.object(Path, "rename", side_effect=OSError("busy")), mock.patch.object(
+            model_paths, "_start_background_migration"
+        ) as started:
+            self.assertEqual(model_paths.models_root(), self.legacy)
+            started.assert_called_once()
+        self.assertFalse(self.models.exists())
+
+    def test_move_models_dir_renames_in_one_go(self) -> None:
+        """同盘搬移只是改名：内容跟着走，旧目录消失，`moved` 为真且不用再清。"""
+        (self.legacy / "local").mkdir(parents=True, exist_ok=True)
+        (self.legacy / "local" / "w.bin").write_bytes(b"y")
+        result = model_paths.move_models_dir(self.legacy, self.models)
+        self.assertTrue(result.moved, result)
+        self.assertEqual(result.leftover, "")
+        self.assertFalse(self.legacy.exists())
+        self.assertEqual((self.models / "local" / "w.bin").read_bytes(), b"y")
+
+    def test_move_models_dir_refuses_non_empty_target(self) -> None:
+        """目标里已经有东西：不合并，说明原因，来源一个文件都不动。"""
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self.models.mkdir(parents=True, exist_ok=True)
+        (self.models / "keep.txt").write_text("x", encoding="utf-8")
+        result = model_paths.move_models_dir(self.legacy, self.models)
+        self.assertFalse(result.moved, result)
+        self.assertIn("已经有文件", result.reason)
+        self.assertTrue((self.legacy / "registry.json").is_file())
+        self.assertEqual((self.models / "keep.txt").read_text(encoding="utf-8"), "x")
+
+    def test_move_models_dir_cleans_up_half_copied_target(self) -> None:
+        """改名与复制都不成：半份新目录清掉，原目录原样留着，并把原因带出来。"""
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        with mock.patch.object(Path, "rename", side_effect=OSError("busy")), mock.patch.object(
+            model_paths.shutil, "copytree", side_effect=OSError("no space")
+        ):
+            result = model_paths.move_models_dir(self.legacy, self.models)
+        self.assertFalse(result.moved, result)
+        self.assertEqual(result.leftover, str(self.legacy))
+        self.assertIn("no space", result.reason)
+        self.assertFalse(self.models.exists())
+        self.assertTrue((self.legacy / "registry.json").is_file())
+
+    def test_move_models_dir_cleans_up_when_landing_fails(self) -> None:
+        """复制到了临时目录、但落位时目标被占住：临时目录清掉，来源不动。"""
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+
+        def fake_copy(source, target, **kwargs):
+            Path(target).mkdir(parents=True, exist_ok=True)
+            (Path(target) / "registry.json").write_text("{}", encoding="utf-8")
+            Path(self.models).mkdir(parents=True, exist_ok=True)  # 落位前目标被别的东西占住
+
+        with mock.patch.object(Path, "rename", side_effect=OSError("busy")), mock.patch.object(
+            model_paths.shutil, "copytree", side_effect=fake_copy
+        ):
+            result = model_paths.move_models_dir(self.legacy, self.models)
+        self.assertFalse(result.moved, result)
+        self.assertIn("占住", result.reason)
+        self.assertFalse(self.models.with_name(".models.moving").exists())
+        self.assertTrue((self.legacy / "registry.json").is_file())
+
+    def test_background_migration_reports_what_it_could_not_do(self) -> None:
+        """后台搬移的三种结局都要能告诉用户：成功 / 搬完但没删干净 / 根本没搬动。"""
+        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+
+        # 1) 复制失败：仍用旧位置，报「没能搬走」并带上原因
+        failed = model_paths.MoveResult(False, str(self.legacy), "复制失败：no space")
+        with mock.patch.object(model_paths, "move_models_dir", return_value=failed):
+            model_paths._background_migration(self.legacy, self.models)
+        moved, note = model_paths.take_migration_note()
+        self.assertFalse(moved)
+        self.assertIn("没能搬走", note)
+        self.assertIn("no space", note)
+
+        # 2) 复制成功但旧目录删不掉：搬到了新位置，把没删干净的路径记进设置等下次清
+        leftover = model_paths.MoveResult(True, str(self.legacy))
+        with mock.patch.object(model_paths, "move_models_dir", return_value=leftover):
+            model_paths._background_migration(self.legacy, self.models)
+        moved, note = model_paths.take_migration_note()
+        self.assertTrue(moved, note)
+        self.assertIn("没删干净", note)
+        self.assertIn(str(self.legacy), model_settings.load_settings().pending_cleanup)
+
+        # 3) 干净搬完
+        with mock.patch.object(model_paths, "move_models_dir", return_value=model_paths.MoveResult(True)):
+            model_paths._background_migration(self.legacy, self.models)
+        moved, note = model_paths.take_migration_note()
+        self.assertTrue(moved, note)
+        self.assertIn(str(self.models), note)
+
+
 class ModelRuntimeCase(IsolatedCase):
     """runtime 的路径与 profile 解析。"""
 
@@ -147,6 +337,46 @@ class ModelRuntimeCase(IsolatedCase):
         self.assertEqual(runtime.requirements_path("gpu").name, "requirements.txt")
         self.assertEqual(runtime.log_file("gpu").name, "runtime-gpu.log")
         self.assertFalse(runtime.installed("gpu"))
+
+    def test_path_limit_info_flags_deep_models_root(self) -> None:
+        """模型目录太深时报告「会顶破 260 上限」，并给出当前路径与模型目录。"""
+        with mock.patch.object(runtime, "runtime_root", return_value=_DEEP_ROOT), mock.patch.object(
+            runtime, "_long_paths_ok", return_value=False
+        ):
+            self.assertTrue(runtime.path_too_long("transformers"))
+            info = runtime.path_limit_info("transformers")
+            self.assertTrue(info["too_long"])
+            self.assertEqual(info["current"], str(_DEEP_ROOT / "transformers" / "venv"))
+            self.assertTrue(info["models_root"])
+            self.assertEqual(info["limit"], 260)
+            # 不管多深都不擅自改道：运行环境永远待在模型目录下面
+            self.assertEqual(runtime.profile_root("transformers"), _DEEP_ROOT / "transformers")
+            self.assertEqual(runtime.venv_dir("transformers"), _DEEP_ROOT / "transformers" / "venv")
+
+    def test_path_limit_info_is_quiet_when_path_fits(self) -> None:
+        """模型目录够短：不提示，也不改道。"""
+        with mock.patch.object(runtime, "_long_paths_ok", return_value=False):
+            self.assertFalse(runtime.path_too_long("transformers"))
+            self.assertFalse(runtime.path_limit_info("transformers")["too_long"])
+            self.assertEqual(runtime.profile_root("transformers"), runtime.runtime_root() / "transformers")
+
+    def test_path_limit_info_is_quiet_when_long_paths_enabled(self) -> None:
+        """系统开了长路径支持：再深也不算问题。"""
+        with mock.patch.object(runtime, "runtime_root", return_value=_DEEP_ROOT), mock.patch.object(
+            runtime, "_long_paths_ok", return_value=True
+        ):
+            self.assertFalse(runtime.path_too_long("transformers"))
+            self.assertEqual(runtime.profile_root("transformers"), _DEEP_ROOT / "transformers")
+
+    def test_uninstall_clears_profile_dir(self) -> None:
+        """卸载删掉这个 profile 的整个目录（venv、requirements、安装标记都在里面）。"""
+        deep = Path(self.root) / "/".join(["deep" * 5] * 5) / ".models/runtime"
+        target = deep / "transformers"
+        (target / "venv").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(runtime, "runtime_root", return_value=deep):
+            self.assertEqual(runtime.profile_root("transformers"), target)
+            self.assertTrue(runtime.uninstall("transformers"))
+        self.assertFalse(target.exists())
 
     def test_profiles_from_ctx(self) -> None:
         ctx = _Ctx(
@@ -580,6 +810,21 @@ class RuntimeControlCase(IsolatedCase):
         ok.write_text("Successfully installed demo-1.0\n", encoding="utf-8")
         self.assertEqual(runtime._network_hint(ok), "")
         self.assertEqual(runtime._network_hint(self.root / "missing.log"), "")
+
+    def test_long_path_hint_reads_install_log(self) -> None:
+        """路径超限的 `[Errno 2]` 要说人话，别的失败不掺和。"""
+        deep = self.root / "deep.log"
+        deep.write_text(
+            "ERROR: Could not install packages due to an OSError: [Errno 2] No such file or directory: "
+            "'C:/x/Lib/site-packages/torch/include/ATen/native/transformers/cuda/mem_eff_attention/"
+            "iterators/predicated_tile_access_iterator_residual_last.h'\n",
+            encoding="utf-8",
+        )
+        self.assertIn("安装路径太长", runtime._long_path_hint(deep))
+        other = self.root / "other.log"
+        other.write_text("ERROR: No matching distribution found for torch\n", encoding="utf-8")
+        self.assertEqual(runtime._long_path_hint(other), "")
+        self.assertEqual(runtime._long_path_hint(self.root / "missing-hint.log"), "")
 
     def test_dist_name_normalises(self) -> None:
         self.assertEqual(runtime._dist_name("llama_cpp_python>=0.3.2"), "llama-cpp-python")

@@ -1633,6 +1633,9 @@ class ManagePage(Page):
             self.session.commit()
             signalBus.categoriesChanged.emit()
             self.toast_success("已创建分类", node.name)
+            hint = self.taxonomy.category_dir_hint(node, self.user_service.current_id())
+            if hint:
+                self.toast_warning("分类目录太深", hint)
         elif action == "rename":
             category = self.category_repo.get(category_id)
             if category is None:

@@ -1,7 +1,7 @@
 """模型登记表、记录、调度器与设置：离线用例，不联网、不装包。
 
-用 `IsolatedCase` 把 `.resources/` 与 `.configs/` 重定向到 `tests/.tmp/`，
-所以 `.resources/models/registry.json` 写的是临时目录。适配器用假实现替换，
+用 `IsolatedCase` 把程序根目录（`paths.ROOT`）、`.resources/` 与 `.configs/` 重定向到
+`tests/.tmp/`，所以模型目录（默认 `<根>/.models`）与 `.configs/models.json` 写的都是临时目录。适配器用假实现替换，
 `acquire()` 的真实加载路径（worker 子进程 / 独立 venv）由 `test_model_runtime.py` 覆盖。
 """
 

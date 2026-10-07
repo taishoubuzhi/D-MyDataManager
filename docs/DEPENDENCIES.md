@@ -75,8 +75,16 @@ pip install pytest pytest-benchmark pyinstrument -i https://pypi.tuna.tsinghua.e
 
 ## 3. 模型运行环境（模型插件自己的 venv）
 
-模型推理不装进程序 venv：每个 profile 一套独立 venv，落在
-`.resources/models/runtime/<profile>/venv`，**装之前界面会二次确认，绝不静默安装**。
+模型推理不装进程序 venv：每个 profile 一套独立 venv，落在**模型目录**下的
+`runtime/<profile>/venv`（模型目录默认 `<程序目录>/.models`，可在「模型」页设置里改到别处——换位置时选的是容器目录，
+模型目录是它下面的 `.models`），
+**装之前界面会二次确认，绝不静默安装**。
+模型目录还是深到让 venv 顶破 Windows 单条 260 字符上限（打包版默认布局就会）而系统又没开
+长路径支持时，界面会提示你**把「模型目录」换到更浅的位置**；你不改就取消这次安装——不会自己
+换盘去装。不这么处理，pip 解包 torch 这类环境时报 `[Errno 2] No such file or directory`，整包装不上。
+（模型目录不在资源文件夹下，所以改「资源文件夹」不会再搬走权重，资源文件夹上锁也不会牵连这些 venv；
+升级前留在 `.resources/models/` 里的东西会在第一次用到模型目录时自动整体搬过来，
+同盘只是改名、跨盘先整份复制到临时目录再落位（落位成功才删旧目录），真搬不动才继续用旧位置并在页面上说明原因。）
 清单在 `plugins/lib.model/.data/runtime_profiles.json`（统一清单格式，可直接改）。
 
 | profile | 内容 | 体积 |

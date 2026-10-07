@@ -4,7 +4,7 @@
 门面 `dm_plugin.lib.model.api` 属于本插件自己（协议 v2 之前它叫 `app.sdk.models`），程序本体只保留扩展接口 `model.open` 的登记位，**不实现任何模型调用、也不保存模型数据**：
 没启用本插件时 `list_models()` 返回空、`acquire()` / `invoke()` 直接抛 `ModelError`。
 
-权重与运行环境全部落在**资源文件夹**（`.resources/models/`），插件自己的 `.data/` 只放只读模板 —— 插件覆盖安装时插件目录会被整个删掉重建。
+权重与运行环境都落在**模型根目录**（默认 `<程序目录>/.models/`，可在「模型」页的设置里改到别处；换位置时**选的目录只当容器，模型目录是它下面的 `.models`**，和「资源文件夹」一个规矩 —— 目标建不出来 / 写不进去会明说是哪个位置、不装作成功），插件自己的 `.data/` 只放只读模板 —— 插件覆盖安装时插件目录会被整个删掉重建。模型目录**不在**资源文件夹（`.resources`）下：改「资源文件夹」不会再搬走几个 GB 的权重，资源文件夹上锁也不会牵连运行环境里十几万个文件；升级前留在旧位置 `.resources/models/` 里的东西，第一次用到模型目录时自动整体搬过来（同盘只是改名、瞬间完成；跨盘先整份复制到临时目录、复制完整了才落位，落位成功才删旧目录），搬不动就继续用旧位置并在页面上说明原因。
 
 ## 目录
 
@@ -14,15 +14,15 @@
 | plugin.py | 库模块（也是入口文件）：ModelLibraryPlugin（注册 `model.open` 接口与「模型」页）、模块级 `model_manager`、`data_templates(ctx, key)` |
 | constants.py | 常量：页面键 / 标题 / 图标 / 排序、模型类型、状态与标签、任务与能力、能力→后端映射、适配器名、默认值 |
 | record.py | `ModelRecord`（记录）与 `slugify()` / `make_id()`：id 一旦创建不可改，改名只改 `name` |
-| registry.py | `ModelRegistry`：读写 `.resources/models/registry.json`（`load()` / `save()` / `all()` / `ids()` / `get()` / `find()` / `add()` / `update()` / `remove()` / `clear()`） |
-| settings.py | `ModelSettings`（下载 / 运行 / 密钥三段）与 `load_settings()` / `mask_secret()`；设置文件是 `.configs/models.json` |
-| paths.py | 路径：registry.json、`local/<模型id>/`、`download/<模型id>/`、`logs/`、`runtime/<profile>/venv`、`.configs/models.json` |
+| registry.py | `ModelRegistry`：读写 `<模型目录>/registry.json`（`load()` / `save()` / `all()` / `ids()` / `get()` / `find()` / `add()` / `update()` / `remove()` / `clear()`） |
+| settings.py | `ModelSettings`（下载 / 运行 / 存储 / 密钥四段）与 `load_settings()` / `mask_secret()`；设置文件是 `.configs/models.json`（`storage.models_root` 存用户指定的模型目录） |
+| paths.py | 路径：模型根目录（`models_root()`，默认 `<程序目录>/.models`，可用 `configured_models_root()` 看用户指定值、`legacy_models_root()` 看旧位置）、registry.json、`local/<模型id>/`、`download/<模型id>/`、`logs/`、`runtime/<profile>/venv`、`.configs/models.json`；换位置时用户选的目录只当容器（`model_dir_candidate()` 补上 `.models` 一层，`ensure_models_dir()` 先探一下能不能写）、搬移由 `move_models_dir()` 做并回一个 `MoveResult(moved, leftover, reason)`（搬不动绝不假装成功），目录建不出来 / 写不进去抛 `ModelsDirUnusable`；旧位置首次用到时的自动迁移也在这里（`move_models_dir()` 搬移、`take_migration_note()` 取走给用户看的说明，搬不动就继续用旧位置），失败会经 `app.sdk.console` 写进 `.logs/app-*.log` |
 | manager.py | `ModelManager` 与 `Lease`：加载 / 卸载 / 引用计数 / 常驻上限 LRU / 空闲卸载 / 单飞排队 |
 | provider.py | 扩展接口实现 `ModelOpenApi`：对外成员都是薄转发，转发给 `manager` |
 | batch.py | 批量调度 `run_batch(manager, requests, ...)`：按模型分组、同组只加载一次、组间并行、单条失败隔离 |
 | adapters/ | 适配器：`base.py`（`Adapter` 抽象与 `AdapterError`）、`http.py`（OpenAI 兼容 / Ollama / llama-server）、`worker.py`（独立进程）、`inprocess.py`（默认拒绝） |
 | download/ | 下载器：`downloader.py`（任务与队列、续传、镜像回退、sha256、原子落盘）、`hub.py`（HF 仓库探测与地址展开） |
-| runtime/ | 运行环境：`profiles/profile_of/venv_dir/python_path/installed/marker_path/requirements_path/ensure/ensure_system/discard/uninstall/uninstall_system/package_versions/log_file/has_dir/clear_logs/Control/check_wheels/install_wheels`；`installed()` 要求 `runtime/<id>/installed.json`（装成功才写），暂停 / 中断留下的半成品不会被当成已安装；`Control` 是页面持有的停止开关（`cancel()` / `pause()` 直接收掉绑定的 pip 子进程，`ensure*` 收 `control=`）；`install_wheels()` 用本地 `.whl` 离线装（`check_wheels()` 先校验文件名里的 python / 平台） |
+| runtime/ | 运行环境：`profiles/profile_of/profile_root/venv_dir/python_path/installed/marker_path/requirements_path/ensure/ensure_system/discard/uninstall/uninstall_system/package_versions/log_file/has_dir/clear_logs/Control/check_wheels/install_wheels`；运行环境就在模型目录的 `runtime/<profile>/` 下，路径太长时**不会**自己换个地方装：`path_too_long()/path_limit_info()` 供页面提示「去把模型目录改浅一点」，用户不改就取消安装；`installed()` 要求 `runtime/<id>/installed.json`（装成功才写），暂停 / 中断留下的半成品不会被当成已安装；`Control` 是页面持有的停止开关（`cancel()` / `pause()` 直接收掉绑定的 pip 子进程，`ensure*` 收 `control=`）；`install_wheels()` 用本地 `.whl` 离线装（`check_wheels()` 先校验文件名里的 python / 平台） |
 | worker/ | worker 子进程：`worker_main.py`（JSON-Lines over stdio 的服务端）与后端实现 |
 | ui/ | 界面：`cards.py`（`ModelCard`）、`dialogs.py`（模板选择 / 新建本地 / 新建外部）、`page.py`（`ModelPage`） |
 
@@ -127,12 +127,13 @@ for result in results:
 
 | 位置 | 内容 |
 | --- | --- |
-| `.resources/models/registry.json` | 模型登记表（本地 + 外部） |
-| `.resources/models/local/<模型id>/` | 本地权重（扫描登记的文件可以留在用户自己的目录，记录里用 `source.path` 指向它） |
-| `.resources/models/download/<模型id>/` | 下载中的 `.part` 与断点信息 |
-| `.resources/models/logs/` | worker 与运行环境安装日志；模型日志一个模型一份（`<slug>.log`，每次运行重写、删模型连日志删） |
-| `.resources/models/runtime/<profile>/venv` | 每个运行环境一套独立虚拟环境 |
-| `.configs/models.json` | 插件设置：下载源（模型）（`download_source`：HuggingFace官方 / HF-Mirror镜像 / 自定义）、自定义下载列表（`custom_urls`）、代理、并发、常驻上限、空闲卸载秒数、设备、密钥、安装源（`pip_mirror` / `pip_mirror_custom`）、下载源（GitHub）（`github_source`：Github官方 / ghproxy镜像 / gh-proxy镜像 / ghfast镜像 / 自定义网址，`github_custom` 存自定义前缀） |
+| `<模型目录>/registry.json` | 模型登记表（本地 + 外部）；模型目录默认 `<程序目录>/.models/`，可在「模型」页设置里改（换位置时选的目录只当容器，模型目录是它下面的 `.models`，用户直接选了 `.models` 本身则原样用） |
+| `<模型目录>/local/<模型id>/` | 本地权重（扫描登记的文件可以留在用户自己的目录，记录里用 `source.path` 指向它） |
+| `<模型目录>/download/<模型id>/` | 下载中的 `.part` 与断点信息 |
+| `<模型目录>/logs/` | worker 与运行环境安装日志；模型日志一个模型一份（`<slug>.log`，每次运行重写、删模型连日志删） |
+| `<模型目录>/runtime/<profile>/venv` | 每个运行环境一套独立虚拟环境；路径太长（顶破 Windows 单条 260 字符上限）而系统又没开长路径支持时，页面提示用户去把「模型目录」换到更浅的位置，用户不改就取消这次安装（不会自己换盘装） |
+| `.resources/models/` | **旧位置**（升级前）：登记表、权重、运行环境都还在这里的话，第一次用到模型目录时自动整体搬到 `<程序目录>/.models/`（同盘改名瞬间完成、跨盘整份复制；登记表与权重不用重新登记，运行环境跟着目录走、一般不用重建）。真搬不动（有程序占着、复制失败）才继续用旧位置，并在页面上说明原因 |
+| `.configs/models.json` | 插件设置：模型目录（`storage.models_root`）、下载源（模型）（`download_source`：HuggingFace官方 / HF-Mirror镜像 / 自定义）、自定义下载列表（`custom_urls`）、代理、并发、常驻上限、空闲卸载秒数、设备、密钥、安装源（`pip_mirror` / `pip_mirror_custom`）、下载源（GitHub）（`github_source`：Github官方 / ghproxy镜像 / gh-proxy镜像 / ghfast镜像 / 自定义网址，`github_custom` 存自定义前缀） |
 
 ## 运行时体系
 

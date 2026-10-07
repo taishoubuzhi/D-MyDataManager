@@ -2,15 +2,20 @@
 
 设计约束（见 MODEL_PLUGIN.md §6）：
 
-- venv 落在 `.resources/models/runtime/<profile>/venv`，随「资源文件夹」设置一起移动；
+- venv 落在**模型根目录**的 `runtime/<profile>/venv` 下（默认 `<程序目录>/.models/runtime/...`，
+  可在插件设置里改「模型目录」），不再挂在资源文件夹下面，改资源文件夹也不会把它搬走；
+- 万一模型目录还是深到让 venv 顶破 Windows 单条 260 字符上限（`path_too_long()`，系统又没开
+  长路径支持），这里**不会**自作主张换个地方装：页面用 `path_limit_info()` 说明情况，请用户把
+  「模型目录」改浅；用户不改就取消这次安装（`ensure()` 只负责执行安装，从不静默改路径）；
 - `ensure()` 只负责**执行**安装，是否安装由页面弹确认后决定，这里绝不静默安装；
 - profile 清单来自插件 `.data/runtime_profiles.json`（统一清单格式，页面通过
   `ctx.data("runtime_profiles")` 读）；没有 ctx 时（测试 / 脚本）直接读插件目录里的
   同名文件，文件不存在就返回空元组。
 
-public API：`profiles / profile_of / venv_dir / python_path / installed / marker_path /
+public API：`profiles / profile_of / profile_root / venv_dir / python_path / installed / marker_path /
 requirements_path / ensure / ensure_system / discard / system_python / system_requirements_path /
-system_log_file / uninstall / package_versions / log_file / github_asset_urls / mirror_github_urls`。
+system_log_file / uninstall / package_versions / log_file / github_asset_urls / mirror_github_urls /
+path_too_long / path_limit_info`。
 
 `ensure()` / `ensure_system()` 都接受 `should_cancel` 与 `should_pause` 两个回调：页面上的
 「取消」和「暂停」各自置位，安装线程每读到一行 pip 输出就查一次，命中就收掉 pip 子进程并抛
@@ -36,7 +41,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from app.sdk import storage
 from app.sdk.manifest import items_of
 
-from ..paths import logs_dir, runtime_root
+from ..paths import logs_dir, models_root, runtime_root
 
 __all__ = [
     "Control",
@@ -59,8 +64,11 @@ __all__ = [
     "marker_path",
     "mirror_github_urls",
     "package_versions",
+    "path_limit_info",
+    "path_too_long",
     "pending_path",
     "profile_of",
+    "profile_root",
     "profiles",
     "python_path",
     "requirements_path",
@@ -207,10 +215,93 @@ def profile_of(profile_id: str, ctx: Any = None) -> RuntimeProfile | None:
 
 # ------------------------------------------------------------------ 路径
 
+#: Windows 单条路径的硬上限（老 API，不含 `\\?\` 前缀）。超限后 `os.makedirs` 抛
+#: `FileNotFoundError`（`[Errno 2] No such file or directory`），pip 解包就直接整包失败。
+_WINDOWS_PATH_LIMIT = 260
+
+#: 包解包后包内最深的成员还要占的余量：torch 的
+#: `Lib\site-packages\torch\include\ATen\native\transformers\cuda\mem_eff_attention\`
+#: `iterators\predicated_tile_access_iterator_residual_last.h` 一共 137 字符，取 140。
+_PACKAGE_MEMBER_BUDGET = 140
+
+#: venv 目录本身超过这个长度就不该再往下装（260 − 140，再留 5 给别的变数）。
+_VENV_PATH_LIMIT = _WINDOWS_PATH_LIMIT - _PACKAGE_MEMBER_BUDGET - 5
+
+#: 「系统有没有开长路径支持」查一次就记住
+_LONG_PATHS_CACHE: list[bool] = []
+
+
+def _long_paths_ok() -> bool:
+    """系统开没开 Windows 长路径支持（`LongPathsEnabled`）；非 Windows 一律当作开了。
+
+    开了的话 260 上限不再是问题，运行环境放哪都不会被路径长度卡住。
+    """
+    if not sys.platform.startswith("win"):
+        return True
+    if _LONG_PATHS_CACHE:
+        return _LONG_PATHS_CACHE[0]
+    enabled = False
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\FileSystem",
+        )
+    except (ImportError, OSError):
+        key = None
+    if key is not None:
+        try:
+            enabled = bool(winreg.QueryValueEx(key, "LongPathsEnabled")[0])
+        except OSError:
+            enabled = False
+        finally:
+            winreg.CloseKey(key)
+    _LONG_PATHS_CACHE.append(enabled)
+    return enabled
+
+
+def _fits(path: Path) -> bool:
+    """这个 venv 路径短到不会顶破 Windows 上限吗。"""
+    return len(str(path)) <= _VENV_PATH_LIMIT
+
+
+def path_too_long(profile_id: str) -> bool:
+    """这个 profile 的 venv 会不会顶破 Windows 260 上限。
+
+    非 Windows、或系统开了长路径支持时一律返回假。真的时候不要再自作主张换个地方装
+    ——运行环境就放在模型根目录下，页面应当请用户把「模型目录」改到更浅的位置
+    （见 `path_limit_info()`）。
+    """
+    if _long_paths_ok():
+        return False
+    return not _fits(profile_root(profile_id) / "venv")
+
+
+def path_limit_info(profile_id: str) -> dict[str, Any]:
+    """给页面弹窗用的路径长度信息（`too_long` 为假时其余字段只作展示参考）。"""
+    key = _text(profile_id)
+    return {
+        "too_long": path_too_long(key),
+        "current": str(profile_root(key) / "venv"),
+        "models_root": str(models_root()),
+        "limit": _WINDOWS_PATH_LIMIT,
+        "limit_for_venv": _VENV_PATH_LIMIT,
+    }
+
+
+def profile_root(profile_id: str) -> Path:
+    """某个 profile 的目录：venv、`requirements.txt`、安装标记都放它下面。
+
+    就在模型根目录的 `runtime/<id>` 下，跟着「模型目录」设置走（见 `paths.models_root()`）：
+    模型目录默认为程序目录下的 `.models`，比资源文件夹浅，也就不再顶破 260 上限。
+    """
+    return runtime_root() / _text(profile_id)
+
 
 def venv_dir(profile_id: str) -> Path:
     """某个 profile 的 venv 目录。"""
-    return runtime_root() / _text(profile_id) / "venv"
+    return profile_root(profile_id) / "venv"
 
 
 def python_path(profile_id: str) -> Path:
@@ -251,7 +342,7 @@ def installed_ids() -> tuple[str, ...]:
 
 def requirements_path(profile_id: str) -> Path:
     """venv 同级的 `requirements.txt`（安装清单留档，便于查看/复现）。"""
-    return runtime_root() / _text(profile_id) / "requirements.txt"
+    return profile_root(profile_id) / "requirements.txt"
 
 
 def log_file(profile_id: str) -> Path:
@@ -265,7 +356,7 @@ def marker_path(profile_id: str) -> Path:
     有了它才能把「已装好」和「暂停 / 中断留下的半成品 venv」分开——只看解释器在不在的话，
     pip 刚建完 venv 就被暂停也会被当成已安装。
     """
-    return runtime_root() / _text(profile_id) / "installed.json"
+    return profile_root(profile_id) / "installed.json"
 
 
 def pending_path(profile_id: str, *, system: bool = False) -> Path:
@@ -278,7 +369,7 @@ def pending_path(profile_id: str, *, system: bool = False) -> Path:
     name = _text(profile_id)
     if system:
         return runtime_root() / "system" / f"installing-{name}.json"
-    return runtime_root() / name / "installing.json"
+    return profile_root(name) / "installing.json"
 
 
 def interrupted(profile_id: str, *, system: bool = False) -> bool:
@@ -347,7 +438,7 @@ def has_dir(profile_id: str) -> bool:
     没有完成标记，但目录是有内容的——页面据此把它当成「手工装好的」，
     免得出现「显示未安装、卸载却是亮的」这种自相矛盾。
     """
-    target = runtime_root() / _text(profile_id)
+    target = profile_root(profile_id)
     try:
         if not target.is_dir():
             return False
@@ -775,7 +866,9 @@ def ensure(
                 control=control,
             )
     if code != 0:
-        raise RuntimeError_(f"安装依赖失败（退出码 {code}），详见 {log}" + _network_hint(log))
+        raise RuntimeError_(
+            f"安装依赖失败（退出码 {code}），详见 {log}" + _network_hint(log) + _long_path_hint(log)
+        )
     _check_stop(should_cancel, should_pause)
     _write_marker(profile_id)
     _clear_pending(profile_id)
@@ -811,6 +904,24 @@ def _network_hint(log: Path) -> str:
     if "github.com" not in text or "TimeoutError" not in text:
         return ""
     return "｜提示：这个环境的轮子托管在 github.com 上，当前网络连不上——可在设置里把「GitHub 下载源」换成镜像，或用「本地 whl…」装一份离线轮子"
+
+
+def _long_path_hint(log: Path) -> str:
+    """pip 说「`[Errno 2] No such file or directory`」时，多半是路径太长顶破了 Windows 上限。
+
+    报错里那个「找不到」的文件其实是 pip 正要写出来的**包内文件**（例如 torch 里长达
+    137 字符的 CUDA 头文件），Windows 上超限后 `makedirs` 就抛 `FileNotFoundError`，
+    于是看起来像是「源里的包不完整」。
+    """
+    text = _read_log(log)
+    if "No such file or directory" not in text or "site-packages" not in text:
+        return ""
+    return (
+        f"｜提示：安装路径太长，顶破了 Windows 单条路径 {_WINDOWS_PATH_LIMIT} 字符的上限"
+        "（报错里那个「找不到」的文件其实是 pip 正要写出来的包内文件）。"
+        "在模型插件设置里把「模型目录」换到更浅的位置，"
+        "或用管理员权限开启系统「长路径支持」后重启程序"
+    )
 
 
 #: pip 输出里 GitHub 资源的直链（wheel / sdist / 压缩包）
@@ -1017,7 +1128,11 @@ def install_wheels(
                 control=control,
             )
     if code != 0:
-        raise RuntimeError_(f"从本地 whl 安装失败（退出码 {code}），详见 {log}" + _network_hint(log))
+        raise RuntimeError_(
+            f"从本地 whl 安装失败（退出码 {code}），详见 {log}"
+            + _network_hint(log)
+            + _long_path_hint(log)
+        )
     _check_stop(should_cancel, should_pause)
     _write_marker(profile_id)
     _clear_pending(profile_id)
@@ -1092,11 +1207,14 @@ def ensure_system(
                 control=control,
             )
     if code != 0:
-        raise RuntimeError_(f"装进程序环境失败（退出码 {code}），详见 {log}" + _network_hint(log))
+        raise RuntimeError_(
+            f"装进程序环境失败（退出码 {code}），详见 {log}"
+            + _network_hint(log)
+            + _long_path_hint(log)
+        )
     _check_stop(should_cancel, should_pause)
     _clear_pending(profile_id, system=True)
     return target
-
 
 
 def uninstall_system(
@@ -1151,8 +1269,9 @@ def uninstall_system(
 
 def uninstall(profile_id: str) -> bool:
     """整目录删除这个 profile 的 venv 与 requirements；不存在也算成功。"""
-    target = runtime_root() / _text(profile_id)
+    key = _text(profile_id)
     _clear_pending(profile_id)
+    target = profile_root(key)
     if not target.exists():
         return True
     shutil.rmtree(target, ignore_errors=True)

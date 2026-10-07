@@ -8,6 +8,7 @@ from loguru import logger
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from ..core.runtime import paths
 from ..db.models import Category, DataItem, Tag
 from ..db.seed import UNCATEGORIZED_NAME
 from ..repositories import CategoryRepository, TagRepository
@@ -116,6 +117,22 @@ class TaxonomyService:
         # 分类即目录：新建分类的同时在库文件夹里建出同名目录
         self._ensure_dirs(category)
         return category
+
+    def category_dir_hint(self, category: Category | None, user_id: int | None = None) -> str:
+        """新建分类后，它的目录路径深不深（太深时给提示文案，否则空串）。
+
+        分类每多一层就多一段目录名，套得深了再往里放文件就会顶破 Windows 单条路径
+        260 字符的上限，表现成「文件写不进去」。这里只提示，不拦着建。
+        """
+        if category is None or is_uncategorized(category):
+            return ""
+        try:
+            library = self.libraries.ensure_default()
+            directory = self.libraries.directory_for(library, category.id, user_id)
+        except Exception as exc:  # noqa: BLE001 - 算路径失败不该拦住建分类
+            logger.warning("算分类目录失败：{}", exc)
+            return ""
+        return paths.long_path_hint(directory)
 
     def update_category(self, category: Category, **fields) -> Category:
         for key, value in fields.items():

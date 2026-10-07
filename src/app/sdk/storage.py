@@ -21,6 +21,7 @@ from typing import Any
 from loguru import logger
 
 __all__ = [
+    "app_root",
     "config_dir",
     "config_file",
     "data_dir",
@@ -51,6 +52,16 @@ def dumps(payload: Any, *, indent: int | None = None) -> str:
     需要好看的文件内容请用 `write_json()`。
     """
     return _jsonio().dumps(payload, indent=indent)
+
+
+def app_root() -> Path:
+    """程序文件根目录（放程序自己那一堆文件的地方，资源文件夹之外）。
+
+    改「资源文件夹」不会动它，所以放「跟着程序走、不该被资源迁移牵连」的大文件时用它。
+    """
+    from ..core.runtime import paths
+
+    return paths.ROOT
 
 
 def config_dir() -> Path:

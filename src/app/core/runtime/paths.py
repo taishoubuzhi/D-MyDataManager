@@ -73,8 +73,11 @@ LIBRARY_META_DIR = ".datamanager"
 UNASSIGNED_DIR_NAME = "未归属"
 # 隐藏数据的物理存放目录：<分类目录>/.hiddens/
 HIDDEN_DIR_NAME = ".hiddens"
-# 资源文件夹下不做 ACL 保护的子目录：程序自己下载/安装的运行环境权重（models/runtime 的
-# venv 有十几万个文件），锁它会让 Windows 把 ACE 传播到整棵子树，退出/启动都要好几分钟
+# 资源文件夹下不做 ACL 保护的子目录：只有升级前留下来的旧模型目录 `.resources/models`
+# 会落在这里（新版本模型在程序目录下的 `.models`，本来就不在资源文件夹里；旧位置第一次
+# 用到模型目录时会被整体搬走，搬不动才会留着），而它底下
+# 有运行环境 venv 那种十几万个文件，锁它会让 Windows 把 ACE 传播到整棵子树，
+# 退出 / 启动都要好几分钟
 UNPROTECTED_DIRS = ("models",)
 LAYOUT_VERSION = 2
 LAYOUT_MARKER_FILE = "layout-2.json"
@@ -174,6 +177,28 @@ def resource_root(value: str | Path | None = None) -> Path:
     if path.name == RESOURCE_ROOT_NAME:
         return path
     return path / RESOURCE_ROOT_NAME
+
+
+#: Windows 单条路径上限（260 字符）；目录本身超过「上限 - 60」就该提醒用户，
+#: 因为真正的上限算的是整条路径（目录 + 后面的文件名）。
+WINDOWS_PATH_LIMIT = 260
+LONG_DIR_WARN_LENGTH = WINDOWS_PATH_LIMIT - 60
+
+
+def long_path_hint(directory: str | Path) -> str:
+    """目录路径过长时的提示文案（不长时返回空串）。
+
+    新建分类会往下再建一层目录，层数一多就会顶到 Windows 的 260 字符上限，
+    最后表现为「文件写不进去」。这里只给提示，不阻止操作。
+    """
+    target = Path(directory)
+    length = len(str(target))
+    if length < LONG_DIR_WARN_LENGTH:
+        return ""
+    return (
+        f"这个目录已经 {length} 个字符，接近 Windows 单条路径 {WINDOWS_PATH_LIMIT} 字符的上限，"
+        "再往里放文件就可能写不进去。建议把「资源文件夹」或分类层级改浅一些。"
+    )
 
 
 def apply_resource_root(root: Path) -> Path:

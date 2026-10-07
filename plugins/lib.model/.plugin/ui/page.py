@@ -41,7 +41,22 @@ from dm_plugin.builtin.lib.ui.plugin import (
 )
 
 from ..constants import BACKEND_LABELS, PAGE_TITLE, PLUGIN_ID, STATE_INCOMPLETE, STATE_READY
-from ..paths import clear_model_logs, download_dir, local_dir, local_root, model_log_file, model_log_files
+from ..paths import (
+    clear_model_logs,
+    configured_models_root,
+    default_models_root,
+    download_dir,
+    ensure_models_dir,
+    legacy_models_root,
+    local_dir,
+    local_root,
+    model_dir_candidate,
+    model_log_file,
+    model_log_files,
+    models_root,
+    move_models_dir,
+    take_migration_note,
+)
 from ..plugin import data_templates
 from ..record import WEIGHT_SUFFIXES, ModelRecord
 from ..settings import DOWNLOAD_SOURCES, GITHUB_SOURCES, PIP_MIRRORS, github_prefixes, load_settings, pip_mirror_url
@@ -493,10 +508,35 @@ class ModelPage(ScrollPageTemplate):
             spacing=4,
         )
 
+        # 模型目录：权重、下载临时文件、日志、运行环境都放它下面。默认在程序目录下的
+        # `.models`（资源文件夹之外），所以改「资源文件夹」不会再搬走几个 GB 的权重，
+        # 资源文件夹上锁也不会牵连运行环境里十几万个文件。
+        # 换位置时和「资源文件夹」一个规矩：用户选的目录只当容器，模型目录是它下面的
+        # `.models`（见 `paths.model_dir_candidate()`）。
+        self.models_root_edit = line_edit(card)
+        self.models_root_edit.setReadOnly(True)
+        self.models_root_edit.setToolTip("权重、下载临时文件、日志和每个运行环境的 venv 都在这下面。")
+        self.models_root_browse_button = push_button(card, "更改位置…", self._change_models_root)
+        self.models_root_browse_button.setToolTip("换一个位置；会在所选目录下建 .models（和资源文件夹一个规矩）。")
+        self.models_root_reset_button = push_button(card, "恢复默认", self._reset_models_root)
+        self._models_root_hint = caption(card, "")
+        models_column = widget_column(
+            card,
+            widget_row(
+                card,
+                self.models_root_edit,
+                self.models_root_browse_button,
+                self.models_root_reset_button,
+                stretches=(1, 0, 0),
+            ),
+            self._models_root_hint,
+        )
+
         # 这些行的控件是多行高块（选择框 + 提示 + 列表），标签必须贴行顶，
         # 否则默认的垂直居中会把标签顶到中间，看着跟选择项没对齐。
-        tall_rows = {"下载源（模型）", "安装源（pip）", "下载源（GitHub）", "推理设备"}
+        tall_rows = {"模型目录", "下载源（模型）", "安装源（pip）", "下载源（GitHub）", "推理设备"}
         for label, widget in (
+            ("模型目录", models_column),
             ("代理", self.proxy_edit),
             ("下载源（模型）", source_column),
             ("安装源（pip）", mirror_column),
@@ -522,6 +562,14 @@ class ModelPage(ScrollPageTemplate):
 
     # ============================================================ 刷新
     def refresh(self) -> None:
+        self._report_models_root_migration()
+        if not getattr(self, "_models_cleanup_started", False):
+            # 上次搬移没能删干净的旧模型目录：进页面时后台再清一次
+            self._models_cleanup_started = True
+            try:
+                self._cleanup_pending_models_root()
+            except Exception as exc:  # noqa: BLE001 - 清理失败不该拦住页面
+                self._console_error(f"清理旧模型目录失败：{exc}")
         try:
             self._api.reload()
         except Exception as exc:  # pragma: no cover - 登记表损坏时不应该让页面崩
@@ -529,6 +577,21 @@ class ModelPage(ScrollPageTemplate):
         self._render_cards()
         self._fill_runtime()
         self._refresh_queue()
+
+    def _report_models_root_migration(self) -> None:
+        """把「旧模型目录已自动搬过来」告诉用户（只报一次，界面不弹哑谜）。"""
+        try:
+            moved, note = take_migration_note()
+        except Exception as exc:  # noqa: BLE001 - 提示读不到不该拦住页面
+            self._console_error(f"读迁移说明失败：{exc}")
+            return
+        if not note:
+            return
+        self._console_info(note)
+        if moved:
+            toast_info(self, "模型目录已迁移", note)
+        else:
+            toast_warning(self, "模型目录没能搬走", note)
 
     def _render_cards(self) -> None:
         records = list(self._api.list_models())
@@ -1228,7 +1291,11 @@ class ModelPage(ScrollPageTemplate):
             return None
         from ..paths import local_dir
 
-        return local_dir(record.id)
+        try:
+            return local_dir(record.id)
+        except OSError as exc:
+            toast_error(self, "模型目录用不了", str(exc))
+            return None
 
     def _delete(self, record: ModelRecord) -> None:
         folder = self._deletable_dir(record)
@@ -1385,6 +1452,11 @@ class ModelPage(ScrollPageTemplate):
         manager = self._download_manager()
         if manager is None:
             toast_warning(self, "下载模块未就绪", "插件里的 download 模块没加载成功，先手动放权重再扫描。")
+            return
+        try:
+            local_dir(record.id)
+        except OSError as exc:
+            toast_error(self, "模型目录用不了", str(exc))
             return
         # 「下载」只补缺的文件（已有的不动）；要换一整组权重走卡片上的「更换权重」按钮。
         try:
@@ -1565,14 +1637,22 @@ class ModelPage(ScrollPageTemplate):
             "或换一个能连上的下载源。",
         )
 
+    def _local_root_start(self) -> str:
+        """文件对话框的起始目录；模型目录用不了就报一声并返回空串（对话框自己找位置）。"""
+        try:
+            return str(local_root())
+        except OSError as exc:
+            toast_error(self, "模型目录用不了", str(exc))
+            return ""
+
     def _pick_files(self) -> None:
-        start = str(local_root())
+        start = self._local_root_start()
         chosen, _filter = QFileDialog.getOpenFileNames(self, "选择本地模型文件（会复制进插件权重目录）", start, _WEIGHT_FILTER)
         if chosen:
             self._import_paths(list(chosen))
 
     def _scan(self) -> None:
-        start = str(local_root())
+        start = self._local_root_start()
         chosen = QFileDialog.getExistingDirectory(self, "选择权重目录（也可以直接把目录拖进窗口）", start)
         if chosen:
             self._import_paths([chosen])
@@ -1741,7 +1821,12 @@ class ModelPage(ScrollPageTemplate):
     def _cleanup_candidates(self) -> list[dict]:
         """没人登记的权重目录 + 下载临时目录（正在下载的不算）。"""
         records = list(self._api.list_models())
-        keep = {local_dir(item.id).name for item in records if item.is_local}
+        try:
+            keep = {local_dir(item.id).name for item in records if item.is_local}
+            bases = ((local_root(), "权重目录"), (download_dir(), "下载临时目录"))
+        except OSError as exc:
+            self._console_error(f"模型目录用不了，跳过多余文件检查：{exc}")
+            return []
         busy = set()
         if self._downloads is not None:
             # `DownloadManager.active()` 返回的是条数，不是任务对象；正在跑的才占住目录。
@@ -1751,7 +1836,7 @@ class ModelPage(ScrollPageTemplate):
                 busy.add(str(getattr(job, "model_id", "") or ""))
                 busy.add(str(getattr(job, "target", "") or ""))
         entries: list[dict] = []
-        for base, kind in ((local_root(), "权重目录"), (download_dir(), "下载临时目录")):
+        for base, kind in bases:
             try:
                 children = sorted(item for item in base.iterdir() if item.is_dir())
             except OSError:
@@ -1995,6 +2080,41 @@ class ModelPage(ScrollPageTemplate):
                 return
         self._install_profile(profile, wheels=list(files))
 
+    def _ensure_install_path(self, profile: dict, key: str, module, *, system_mode: bool) -> bool:
+        """模型目录太深、运行环境会顶破 Windows 260 上限时，劝用户先去改「模型目录」。
+
+        返回真表示可以接着装；返回假表示这次安装取消。这里**不会**自作主张换个盘去装：
+        运行环境永远待在模型目录下面，位置由用户自己定。
+        """
+        if system_mode:
+            return True  # 装进程序自己的环境，和模型目录的位置无关
+        reader = getattr(module, "path_limit_info", None)
+        if not callable(reader):
+            return True
+        try:
+            info = reader(key)
+        except Exception as exc:  # noqa: BLE001
+            self._console_error(f"检查安装路径失败：{exc}")
+            return True
+        if not info.get("too_long"):
+            return True
+        name = str(profile.get("name") or key)
+        limit = int(info.get("limit") or 260)
+        go = self.confirm(
+            "模型目录太深，这次安装会失败",
+            f"「{name}」的运行环境要建在：\n{info.get('current')}\n\n"
+            f"这个路径已经超过 Windows 单条路径 {limit} 字符的上限：装 torch 这类大包时，"
+            "pip 解包到一半就会报「找不到文件」（其实是那个文件写不进去），整个安装都会失败。\n\n"
+            f"模型目录现在是：\n{info.get('models_root')}\n\n"
+            "请到本页「设置 → 模型目录」把它换到一个短一点的位置，再回来点安装。\n\n"
+            "现在就去改？（选「否」则本次安装取消，不会下载任何东西）",
+        )
+        if go:
+            toast_info(self, "请先改「模型目录」", "在「设置 → 模型目录」换一个短路径，再回来点安装。")
+        else:
+            self._console_error(f"已取消安装「{name}」：模型目录太深，装到一半会失败。")
+        return False
+
     def _install_profile(
         self, profile: dict, *, resume: bool = False, auto: bool = False, wheels: list[str] | None = None
     ) -> None:
@@ -2036,6 +2156,14 @@ class ModelPage(ScrollPageTemplate):
         packages = "、".join(str(item) for item in (profile.get("packages") or [])) or "（清单为空）"
         # 本地 whl 一律装进这个运行环境自己的 venv：不碰程序环境（和上面的开关无关）
         system_mode = bool(getattr(self._settings, "allow_system_env", False)) and not wheels
+        if not self._ensure_install_path(profile, key, module, system_mode=system_mode):
+            # 用户不肯先改「模型目录」：整个取消，连下载都不开始
+            self._console_error(
+                f"已取消安装「{profile.get('name') or key}」：模型目录太深，装到一半会失败。"
+            )
+            if auto:
+                self._pump_complete_queue()
+            return
         target = module.system_python() if system_mode else module.venv_dir(key)
         index = self._effective_index_url(found)
         if not resume and not auto:
@@ -2787,6 +2915,7 @@ class ModelPage(ScrollPageTemplate):
             self.system_env_box.blockSignals(True)
             self.system_env_box.setChecked(settings.allow_system_env)
             self.system_env_box.blockSignals(False)
+            self._sync_models_root_row()
         finally:
             self._loading_settings = False
 
@@ -2851,6 +2980,193 @@ class ModelPage(ScrollPageTemplate):
         self._probe_pending.clear()
         self._fill_runtime()
         toast_info(self, "依赖安装方式已更新", "运行环境区已按新设置刷新。")
+
+    # ------------------------------------------------------------ 模型目录
+    def _sync_models_root_row(self) -> None:
+        """把当前生效的模型目录填进设置行（只读展示 + 一行说明）。"""
+        try:
+            current = models_root()
+        except OSError as exc:
+            self.models_root_edit.setText("")
+            self._models_root_hint.setText(f"读不到模型目录：{exc}")
+            return
+        self.models_root_edit.setText(str(current))
+        configured = configured_models_root()
+        if configured:
+            self._models_root_hint.setText(
+                f"已自定义位置（选的目录下面的 .models）：{current}；权重、运行环境都装在这里。"
+            )
+            return
+        if current == legacy_models_root():
+            self._models_root_hint.setText(
+                f"旧位置没搬动（多半有程序占着），暂时还在用它：{current}；"
+                f"默认位置是 {default_models_root()}，腾出手来可以点「恢复默认」再搬一次。"
+            )
+            return
+        self._models_root_hint.setText(f"默认位置：{default_models_root()}")
+
+    def _change_models_root(self) -> None:
+        """把模型目录换到别处；可以连现有文件一起搬。
+
+        和「资源文件夹」同一个规矩：**选的目录只当容器，模型目录是它下面的 `.models`**。
+        先探一次目标能不能写，再搬；只有搬成功了才改设置——搬不动就继续用原来的目录并把
+        原因说清楚（以前不管搬没搬成都会切设置，于是设置指向一个空目录、数据留在旧地方）。
+        """
+        try:
+            current = models_root()
+        except OSError as exc:
+            toast_error(self, "模型目录用不了", str(exc))
+            return
+        start = configured_models_root() or str(current)
+        chosen = QFileDialog.getExistingDirectory(
+            self, "选择模型目录的位置（会在它下面建 .models，和资源文件夹一样）", start
+        )
+        if not chosen:
+            return
+        target = model_dir_candidate(chosen)
+        if target == current:
+            toast_info(self, "还是同一个目录", str(target))
+            return
+        if target.is_dir() and any(target.iterdir()):
+            # 目标里已经有东西：不做两份模型目录的合并（登记表会打架），让用户挑空目录
+            toast_warning(
+                self,
+                "这个目录里已经有文件",
+                f"模型目录会落在 {target}。请选一个空目录（或先建一个新的），"
+                "这样才不会和原来的模型登记表混在一起。",
+            )
+            return
+        try:
+            target = ensure_models_dir(target)
+        except OSError as exc:
+            toast_error(self, "这个位置用不了", str(exc))
+            return
+        has_files = current.is_dir() and any(current.iterdir())
+        move = bool(has_files) and self.confirm(
+            "把现有模型文件一起搬过去吗？",
+            f"现在的模型目录：\n{current}\n\n新位置：\n{target}\n\n"
+            "选「是」＝连权重、运行环境、日志一起搬过去（同盘瞬间完成，跨盘要复制，"
+            "可能要等一会儿）。\n选「否」＝只把设置改成新位置，旧文件原地不动，"
+            "界面里就看不到它们了。",
+        )
+        if not move:
+            if self._apply_models_root(target):
+                toast_info(self, "模型目录已切换", "旧目录里的文件没有动。")
+            return
+        self._console_info(f"正在搬移模型目录：{current} → {target}")
+        self._run_async(
+            lambda: move_models_dir(current, target),
+            on_done=self._models_root_moved(current, target),
+            on_failed=lambda exc: toast_error(self, "迁移模型目录失败", str(exc)),
+        )
+
+    def _models_root_moved(
+        self,
+        current,
+        target,
+        *,
+        apply_value=None,
+        success_title: str = "模型目录已迁移",
+        leftover_title: str = "模型目录已切换",
+    ):
+        """搬完之后的收尾：只有真搬成功了才切设置，搬不动就原地不动并把原因说清楚。"""
+        value = target if apply_value is None else apply_value
+
+        def done(result) -> None:
+            if not result.moved:
+                self._console_error(f"搬移模型目录失败：{current} → {target}：{result.reason}")
+                toast_error(
+                    self,
+                    "没能搬过去，模型目录没变",
+                    f"{result.reason or '原因见日志'}\n\n现在还在用：\n{current}",
+                )
+                return
+            if not self._apply_models_root(value):
+                return
+            if result.leftover:
+                toast_warning(
+                    self,
+                    leftover_title,
+                    f"旧目录没删干净（有程序占着），下次进这一页会自动再清一次：\n{result.leftover}",
+                )
+                return
+            toast_success(self, success_title, str(target))
+
+        return done
+
+    def _reset_models_root(self) -> None:
+        """恢复默认模型目录（程序目录下的 `.models`）。"""
+        try:
+            current = models_root()
+        except OSError as exc:
+            toast_error(self, "模型目录用不了", str(exc))
+            return
+        target = default_models_root()
+        if not configured_models_root() and current != legacy_models_root():
+            toast_info(self, "已经是默认位置", str(target))
+            return
+        has_files = current.is_dir() and any(current.iterdir())
+        move = bool(has_files) and current != target and self.confirm(
+            "把现有模型文件搬回默认位置吗？",
+            f"现在的模型目录：\n{current}\n\n默认位置：\n{target}\n\n"
+            "选「是」＝连权重、运行环境一起搬回去。\n选「否」＝只把设置清掉，旧文件原地不动。",
+        )
+        if not move or current == target:
+            if self._apply_models_root(""):
+                toast_info(self, "已恢复默认模型目录", str(target))
+            return
+        self._console_info(f"正在把模型目录搬回默认位置：{current} → {target}")
+        self._run_async(
+            lambda: move_models_dir(current, target),
+            on_done=self._models_root_moved(
+                current,
+                target,
+                apply_value="",
+                success_title="已恢复默认模型目录",
+                leftover_title="已恢复默认",
+            ),
+            on_failed=lambda exc: toast_error(self, "搬回默认位置失败", str(exc)),
+        )
+
+    def _apply_models_root(self, value: Path | str) -> bool:
+        """写设置并刷新界面；返回是否成功。"""
+        settings = self._settings
+        settings.models_root = str(value or "")
+        if not settings.save():
+            toast_error(self, "保存失败", "写配置文件出错，看看日志。")
+            return False
+        try:
+            self._api.reload()
+        except Exception as exc:  # noqa: BLE001 - 登记表读不到不该拦住设置
+            self._console_error(f"重新读模型登记表失败：{exc}")
+        self._sync_models_root_row()
+        self._fill_runtime()
+        return True
+
+    def _cleanup_pending_models_root(self) -> None:
+        """清掉上次没删干净的旧模型目录（后台线程，删不掉就留着下次再试）。"""
+        settings = self._settings
+        pending = settings.pending_cleanup
+        if not pending:
+            return
+        targets = [Path(item) for item in pending]
+        keep: list[str] = []
+
+        def work():
+            for target in targets:
+                try:
+                    shutil.rmtree(target)
+                except OSError:
+                    keep.append(str(target))
+
+        def done(_result=None) -> None:
+            settings.pending_cleanup = keep
+            settings.save()
+            for item in pending:
+                if item not in keep:
+                    self._console_info(f"已清理旧模型目录：{item}")
+
+        self._run_async(work, on_done=done)
 
     # ============================================================ 线程与拖拽
     def _run_async(self, work, on_done=None, on_finally=None, on_failed=None) -> None:

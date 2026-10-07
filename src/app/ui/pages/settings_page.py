@@ -25,6 +25,7 @@ from ...core.runtime import logging_setup, paths
 from ...core.config import (
     DOUBLE_CLICK_EDITOR,
     DOUBLE_CLICK_VIEWER,
+    ResourceRootExists,
     config,
     export_dir,
     resources_root,
@@ -799,10 +800,33 @@ class SettingsPage(ScrollPage):
             f"将把资源文件夹（库数据与数据库）\n{current}\n移动到\n{target}\n继续吗？",
         ):
             return
+        # 页面自己的会话占着 data.db，Windows 会因此拒绝改名/删除，先放掉连接
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             moved = set_resource_root(directory)
+        except ResourceRootExists as exc:
+            # 目标位置里已经有一个资源文件夹（多半是上次搬到一半留下的），问一句再决定
+            if not confirm(
+                self,
+                "目标位置里已经有资源文件夹",
+                f"{exc.target}\n\n"
+                f"这里已经有一个 {paths.RESOURCE_ROOT_NAME}（可能是上一次搬迁留下的，数据可能不完整）。\n\n"
+                "删掉它、把当前资源文件夹重新搬过去吗？\n"
+                "（只删目标位置那一份；当前资源文件夹里的数据不受影响。）",
+            ):
+                self._reload_session()
+                return
+            try:
+                moved = set_resource_root(directory, replace=True)
+            except Exception as retry_exc:  # noqa: BLE001
+                self._reload_session()
+                self.toast_warning("无法更改位置", str(retry_exc))
+                return
         except Exception as exc:  # noqa: BLE001
-            self.session.rollback()
+            self._reload_session()
             self.toast_warning("无法更改位置", str(exc))
             return
         # 引擎已指向新位置，各页面持有的会话随之失效：重启程序最稳妥。
