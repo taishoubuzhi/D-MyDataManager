@@ -367,8 +367,8 @@ class ManifestCase(unittest.TestCase):
             ("lib.autolabel", "lib.model", "builtin.lib.ui"),
         )
 
-    def test_no_conflicts(self) -> None:
-        self.assertEqual(tuple(self.manifest.conflicts), ())
+    def test_conflicts_with_rule_plugin(self) -> None:
+        self.assertEqual(tuple(self.manifest.conflicts), ("auto_keyword.rule",))
 
     def test_options(self) -> None:
         keys = sorted(option.key for option in self.manifest.options)

@@ -417,6 +417,59 @@ def fit_columns(
             table.setColumnWidth(column, table.columnWidth(column) + int(available * weight))
 
 
+def wrap_table(
+    table: TableWidget,
+    *,
+    min_width: int = 88,
+    max_width: int = 320,
+    fit_rows: bool = True,
+) -> None:
+    """让表格里的长文本换行显示，而不是被省略号截断。
+
+    `prepare_table()` 给的是「单行 + 右侧省略号」（适合成百上千行的数据网格），这里刚好
+    相反：关掉省略、打开自动换行、列宽按内容自适应（夹在 `min_width` ～ `max_width` 之间，
+    末列吃满剩余宽度），需要整段看到长文件名 / 长路径的小表格用这个。行高交给
+    `fit_rows` 随内容长高；行数很多、只想换行不想逐行算高度时传 `fit_rows=False`。
+    换行表格记着在内容变化后调 `fit_table_height()` 重算高度，否则多出来的行会被裁掉。
+    """
+    table.setWordWrap(True)
+    table.setTextElideMode(Qt.TextElideMode.ElideNone)
+    if fit_rows:
+        table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    head = table.horizontalHeader()
+    head.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    head.setMinimumSectionSize(min_width)
+    head.setMaximumSectionSize(max_width)
+    head.setStretchLastSection(True)
+
+
+def fit_table_height(
+    table: TableWidget,
+    *,
+    max_height: int = 420,
+    min_height: int = 0,
+    extra: int = 8,
+) -> None:
+    """按当前内容重算表格的最小高度（换行后的表格必须重算，否则行会被裁在可视区外）。
+
+    先把每行的实际内容高度兜进来（`sizeHintForRow()` 认换行后的高度），再让 Qt 自己
+    `resizeRowsToContents()`；最后把最小高度设成「表头 + 所有行」，夹在 `min_height` ～
+    `max_height` 之间——不低于 `min_height`（内容还少的时候别把表格缩成一条），超过
+    `max_height` 就交给表格自己的滚动条。行数很多时逐行量高度的开销不小，按需调用即可。
+    """
+    for row in range(table.rowCount()):
+        current = table.rowHeight(row)
+        hint = max(current, table.sizeHintForRow(row))
+        if hint > current:
+            table.setRowHeight(row, hint)
+    table.resizeRowsToContents()
+    content = table.horizontalHeader().height() + sum(
+        table.rowHeight(row) for row in range(table.rowCount())
+    )
+    table.setMinimumHeight(max(int(min_height), min(content + extra, int(max_height))))
+    table.updateGeometry()
+
+
 def match_filters(
     values: Mapping[str, str],
     filters: Mapping[str, object],
@@ -469,6 +522,8 @@ __all__ = [
     "check_cell",
     "prepare_table",
     "fit_columns",
+    "wrap_table",
+    "fit_table_height",
     "match_filters",
     "hit_range",
     "parse_number",

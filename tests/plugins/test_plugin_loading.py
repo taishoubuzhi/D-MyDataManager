@@ -29,6 +29,8 @@ from app.services.plugin_service import PluginService  # noqa: E402
 PLUGIN_DIR = REPO / "plugins"
 RULE_ID = "auto_tag.rule"
 TAG_ID = "auto_tag"
+KEY_RULE_ID = "auto_keyword.rule"
+KEY_ID = "auto_keyword"
 
 
 def _info(plugin_id: str, *, conflicts=(), enabled=True) -> PluginInfo:
@@ -105,6 +107,24 @@ class ConflictCase(unittest.TestCase):
         self.assertIn(TAG_ID, [info.id for info in order])
         self.assertIn(RULE_ID, [info.id for info in order], "冲突的插件照常载入，只是不能启用")
 
+    def test_real_manifests_conflict_for_the_keyword_pair(self) -> None:
+        """真实清单：auto_keyword 与 auto_keyword.rule 也不能同时启用（用户 m43110）。"""
+        infos = _scan_real_plugins()
+        order, errors, yielded = resolve_dependencies(infos, enabled_ids={KEY_RULE_ID, KEY_ID})
+        self.assertEqual(errors, {})
+        self.assertEqual(sorted(yielded), [KEY_RULE_ID], "载入顺序靠前的 auto_keyword 胜出")
+        self.assertEqual(yielded[KEY_RULE_ID], (KEY_ID,))
+        self.assertIn(KEY_ID, [info.id for info in order])
+        self.assertIn(KEY_RULE_ID, [info.id for info in order], "冲突的插件照常载入，只是不能启用")
+
+    def test_real_manifests_also_allow_either_keyword_plugin_alone(self) -> None:
+        infos = _scan_real_plugins()
+        for enabled in ({KEY_RULE_ID}, {KEY_ID}):
+            order, errors, yielded = resolve_dependencies(infos, enabled_ids=enabled)
+            self.assertEqual(errors, {}, f"只启用 {enabled} 时不该有冲突：{errors}")
+            self.assertEqual(yielded, {}, f"只启用 {enabled} 时不该让位：{yielded}")
+            self.assertIn(next(iter(enabled)), [info.id for info in order])
+
 
 class DiscoverCase(unittest.TestCase):
     """走真实清单的发现流程：只启用一个能干净通过，两个都启用只有后者让位。"""
@@ -118,7 +138,7 @@ class DiscoverCase(unittest.TestCase):
         return PluginService(plugin_dir=PLUGIN_DIR, state_file=state)
 
     def test_either_plugin_can_be_the_enabled_one(self) -> None:
-        for enabled in (RULE_ID, TAG_ID):
+        for enabled in (RULE_ID, TAG_ID, KEY_RULE_ID, KEY_ID):
             with self.subTest(enabled=enabled):
                 infos = {info.id: info for info in self._service({enabled}).discover()}
                 self.assertEqual(infos[enabled].error, "", f"{enabled} 单独启用时不该报错")
@@ -145,6 +165,28 @@ class DiscoverCase(unittest.TestCase):
         self.assertIn(f"插件启用失败：{RULE_ID}（与插件冲突：{TAG_ID}）", text)
         infos = {info.id: info for info in service.discover()}
         self.assertFalse(infos[RULE_ID].enabled, "被拒绝后必须保持禁用")
+
+    def test_keyword_pair_conflicts_the_same_way(self) -> None:
+        """关键词那一对与标签那一对同一套机制：靠前者胜出，后者显示「与插件冲突」。"""
+        infos = {info.id: info for info in self._service({KEY_RULE_ID, KEY_ID}).discover()}
+        self.assertEqual(infos[KEY_ID].error, "")
+        self.assertTrue(infos[KEY_ID].enabled)
+        self.assertEqual(infos[KEY_ID].conflict_with, ())
+        self.assertEqual(infos[KEY_ID].state_label, "已启用")
+        self.assertEqual(infos[KEY_RULE_ID].error, "", "冲突不是载入失败，不该记 error")
+        self.assertEqual(infos[KEY_RULE_ID].conflict_with, (KEY_ID,))
+        self.assertEqual(infos[KEY_RULE_ID].state_label, "与插件冲突")
+        self.assertFalse(infos[KEY_RULE_ID].enabled)
+
+    def test_enabling_the_keyword_rule_plugin_is_refused_and_logged(self) -> None:
+        service = self._service({KEY_ID})
+        records: list[str] = []
+        sink = logger.add(lambda message: records.append(message), level="INFO")
+        self.addCleanup(logger.remove, sink)
+        self.assertFalse(service.set_enabled(KEY_RULE_ID, True), "与已启用插件冲突时必须拒绝启用")
+        self.assertIn(f"插件启用失败：{KEY_RULE_ID}（与插件冲突：{KEY_ID}）", "".join(records))
+        infos = {info.id: info for info in service.discover()}
+        self.assertFalse(infos[KEY_RULE_ID].enabled, "被拒绝后必须保持禁用")
 
     def test_enable_and_disable_changes_are_logged(self) -> None:
         service = self._service(set())

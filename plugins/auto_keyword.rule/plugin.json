@@ -1,0 +1,17 @@
+{
+  "id": "auto_keyword.rule",
+  "name": "自动关键词（规则）",
+  "version": "1.0.0",
+  "api_version": ">=1.0 <2.0",
+  "description": "按规则给文件挂关键词：只用规则匹配，不调用模型。插件自带关键词库（可扫描现有条目里的关键词、手工增删），配规则时能从库里挑词。提供自动关键词页、导入页预填关键词、数据管理页工具栏与条目菜单入口。",
+  "author": "D-MyDataManager",
+  "builtin": false,
+  "enabled": false,
+  "entry": "plugin.py",
+  "class": "AutoKeywordRulePlugin",
+  "depends": [
+    {"id": "lib.autolabel"},
+    {"id": "builtin.lib.ui"}
+  ],
+  "conflicts": ["auto_keyword"]
+}

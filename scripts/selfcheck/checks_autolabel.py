@@ -1,9 +1,9 @@
-"""自动标签 / 自动关键词三个插件（任务 2–4）的红线检查。
+"""自动标签 / 自动关键词四个插件（任务 2–4）的红线检查。
 
 覆盖方案 `docs/AUTOLABEL_PLAN.md` §5 里的两条：
 
 1. 插件界面只许走集成界面工具库（`qfluentwidgets` 只放行 `FluentIcon`，与 `model_ui_via_tool_library` 同一条判据）；
-2. 三个插件都是外部插件（`builtin: false`）且默认不启用（`enabled: false`），互斥关系成对声明。
+2. 四个插件都是外部插件（`builtin: false`）且默认不启用（`enabled: false`），互斥关系成对声明。
 """
 
 from __future__ import annotations
@@ -14,9 +14,12 @@ from pathlib import Path
 
 from .harness import ROOT, Case, check
 
-#: 三个功能插件，以及它们共用的库插件（界面目录过同一条红线）。
-PLUGIN_IDS = ("auto_tag.rule", "auto_tag", "auto_keyword")
+#: 四个功能插件，以及它们共用的库插件（界面目录过同一条红线）。
+PLUGIN_IDS = ("auto_tag.rule", "auto_tag", "auto_keyword", "auto_keyword.rule")
 SHARED_LIB = "lib.autolabel"
+
+#: 界面代码所在目录（`plugins/<id>/.plugin/ui/`，与插件核心的 `CODE_DIR_NAME` 一致）。
+CODE_DIR = ".plugin"
 
 #: 允许从 `qfluentwidgets` 直接拿的东西（图标是纯数据，不算界面控件）。
 ALLOWED = {"FluentIcon"}
@@ -24,6 +27,7 @@ ALLOWED = {"FluentIcon"}
 #: 必须成对出现的互斥关系。
 MUTEX_PAIRS = (
     ("auto_tag.rule", "auto_tag"),
+    ("auto_keyword.rule", "auto_keyword"),
 )
 
 
@@ -56,19 +60,19 @@ def _dependency_ids(data: dict) -> set[str]:
 
 @check("autolabel_ui_via_tool_library", "pages")
 def autolabel_ui_via_tool_library(case: Case) -> None:
-    """三个插件与共享库的界面都只用 UI 工具库（`qfluentwidgets` 只放行 `FluentIcon`）。"""
+    """四个插件与共享库的界面都只用 UI 工具库（`qfluentwidgets` 只放行 `FluentIcon`）。"""
     problems: list[str] = []
     for plugin_id in (*PLUGIN_IDS, SHARED_LIB):
         plugin_dir = ROOT / "plugins" / plugin_id
         assert plugin_dir.is_dir(), f"缺少插件目录：plugins/{plugin_id}"
-        for path in sorted((plugin_dir / "ui").glob("*.py")):
+        for path in sorted((plugin_dir / CODE_DIR / "ui").glob("*.py")):
             problems.extend(_ui_problems(path))
     assert not problems, "自动标签 / 关键词插件界面没走 UI 工具库：" + "；".join(problems[:8])
 
 
 @check("autolabel_manifests", "data")
 def autolabel_manifests(case: Case) -> None:
-    """三个插件是外部插件、默认不启用，依赖共享库，冲突关系成对声明。"""
+    """四个插件是外部插件、默认不启用，依赖共享库，冲突关系成对声明。"""
     manifests: dict[str, dict] = {}
     problems: list[str] = []
     for plugin_id in PLUGIN_IDS:
@@ -89,7 +93,4 @@ def autolabel_manifests(case: Case) -> None:
             declared = manifests[one].get("conflicts") or ()
             if other not in declared:
                 problems.append(f"{one}：冲突关系应声明 conflicts: [{other}]，实际 {declared!r}")
-    keyword = manifests["auto_keyword"]
-    if keyword.get("conflicts"):
-        problems.append(f"auto_keyword：关键词与标签插件互不冲突，不该声明 conflicts，实际 {keyword['conflicts']!r}")
     assert not problems, "自动标签 / 关键词插件清单：" + "；".join(problems[:8])

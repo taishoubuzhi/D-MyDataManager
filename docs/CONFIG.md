@@ -65,7 +65,7 @@
 | 资源文件夹 | `Resource-Path` | 空 | 路径 | 空表示用默认的 `.resources/`；存的是**资源文件夹本身**（用户在设置页选的是容器目录，程序会把 `.resources` 接在后面）。改这个要用设置页的「迁移资源文件夹」：目标位置已有 `.resources` 时抛 `ResourceRootExists`（`FileExistsError` 子类）、界面问用户要不要删掉重搬后带 `replace=True` 再来一次 |
 | 资源保护 | `Resource-Protected` | `false` | 布尔 | 静态模型：运行期整场放行、退出时锁定（`.resources` 与库文件夹） |
 | 隐藏保护 | `Hidden-Protected` | `false` | 布尔 | 隐藏文件夹 + 清理 Windows 的「最近使用的文件」记录 |
-| 导出目录 | `Export-Path` | 空 | 路径 | 空表示用默认导出目录 |
+| 导出目录 | `Export-Path` | 空 | 路径 | 空表示用默认导出目录；「导出到文件夹」与「导出为压缩包」的保存框都从这里起步（压缩包在保存框里可临时改到别处） |
 | 封面尺寸 | `Cover-Size` | `256` | 64 – 1024 | 生成的封面图边长 |
 
 ## 7. Import（导入）

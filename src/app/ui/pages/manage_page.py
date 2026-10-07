@@ -58,6 +58,7 @@ from ...services import (
     UserService,
     is_uncategorized,
     reconcile_categories,
+    timestamp_name,
 )
 from ...services.item_api import to_ref
 from ..framework import (
@@ -84,7 +85,7 @@ from ..dialogs import (
     TagManagerDialog,
     TextInputDialog,
 )
-from ...core.config import DOUBLE_CLICK_EDITOR, config
+from ...core.config import DOUBLE_CLICK_EDITOR, config, export_dir
 from ..components.category_tree import CategoryTree
 from ..components.filter_panel import FilterPanel
 from ..components.item_card import ItemCard, ItemListRow
@@ -119,6 +120,7 @@ MENU_LABELS: dict[str, tuple[str, str]] = {
     "rename": ("批量重命名…", "批量重命名…（{count} 项）"),
     "hidden": ("隐藏 / 取消隐藏", "隐藏 / 取消隐藏"),
     "export": ("导出选中项", "导出选中项（{count}）"),
+    "export_zip": ("导出为压缩包", "导出为压缩包（{count} 项）"),
     "delete": ("移入回收站", "移入回收站（{count}）"),
     "restore": ("从回收站还原", "从回收站还原"),
     "purge": ("彻底删除", "彻底删除（{count}）"),
@@ -136,6 +138,7 @@ MENU_ICONS: dict[str, FluentIcon] = {
     "rename": FluentIcon.FONT,
     "hidden": FluentIcon.VIEW,
     "export": FluentIcon.SAVE,
+    "export_zip": FluentIcon.ZIP_FOLDER,
     "delete": FluentIcon.DELETE,
     "restore": FluentIcon.SYNC,
     "purge": FluentIcon.CLOSE,
@@ -390,6 +393,7 @@ class ManagePage(Page):
             ("restore", FluentIcon.SYNC, "还原", self._on_restore),
             ("purge", FluentIcon.CLOSE, "彻底删除", self._on_purge),
             ("export", FluentIcon.SAVE, "导出", self._on_export),
+            ("export_zip", FluentIcon.ZIP_FOLDER, "导出为 ZIP", self._on_export_zip),
             ("duplicates", FluentIcon.COPY, "重复项", self._on_duplicates),
             ("refresh", FluentIcon.SYNC, "刷新", self.refresh),
         ]
@@ -1102,6 +1106,7 @@ class ManagePage(Page):
             "rename": self._on_batch_rename,
             "hidden": self._on_toggle_hidden,
             "export": self._on_export,
+            "export_zip": self._on_export_zip,
             "delete": self._on_delete,
             "restore": self._on_restore,
             "purge": self._on_purge,
@@ -1425,6 +1430,43 @@ class ManagePage(Page):
             self.toast_success("导出完成", f"{result.summary()}，目录：{result.directory}")
         else:
             self.toast_warning("没有可导出的文件", result.summary())
+
+    def _on_export_zip(self) -> None:
+        """把选中的数据打包成一个 zip：默认落在设置里的导出目录，也可以在保存框里改地方。"""
+        items = self._require_selection()
+        if not items:
+            return
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "导出为 ZIP 压缩包",
+            str(self._export_zip_target(items)),
+            "Zip 压缩包 (*.zip);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            result = ExportService(self.session).export_archive(items, path)
+        except Exception as exc:  # noqa: BLE001 - 没写权限 / 磁盘满都要如实说出来
+            self.toast_error("导出失败", str(exc))
+            return
+        if result.exported:
+            self.toast_success("导出完成", f"{result.summary()}（{result.path}）")
+        else:
+            self.toast_warning("没有可导出的文件", result.summary())
+
+    def _export_zip_target(self, items: list) -> Path:
+        """压缩包的默认位置与名字：单个数据用它的名字，多项用带时间戳的总包名。"""
+        if len(items) == 1:
+            stem = Path(Path(items[0].name).name).stem or "数据"
+            name = f"{stem}.zip"
+        else:
+            name = f"数据导出-{timestamp_name()}.zip"
+        try:
+            folder = export_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder / name
+        except OSError:  # 导出目录建不出来：至少给个像样的文件名，让用户自己挑位置
+            return Path(name)
 
     def _on_duplicates(self) -> None:
         groups = self.item_service.duplicate_map(self._duplicate_scope())

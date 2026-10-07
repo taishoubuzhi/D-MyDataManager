@@ -63,6 +63,9 @@ __all__ = [
     "rule_rows",
 ]
 
+#: 「从库里挑一个」下拉框的占位项：选中它什么也不做，只是让下拉框能回到初始状态
+PICK_PROMPT = "从列表挑一个…"
+
 
 # --------------------------------------------------------------- 小工具
 def _labeled(labels: Mapping[str, str], keys: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -145,9 +148,19 @@ class RuleDialog(FormDialog):
         rule: Rule | None = None,
         taken: Sequence[str] = (),
         kinds: Sequence[str] | None = None,
+        target_label: str = "要挂的标签",
+        library: Sequence[str] = (),
     ) -> None:
-        """`kinds` 限定这个页面能选的规则类型：只给 `("match",)` 时不再出现「交模型判断」与提示词。"""
+        """`kinds` 限定这个页面能选的规则类型：只给 `("match",)` 时不再出现「交模型判断」与提示词。
+
+        `target_label` 是「规则命中的东西」在界面上的叫法（标签页用默认值，关键词页传
+        「要挂的关键词」）；`library` 给出一批候选词时，多一行下拉框可以连着挑几个填进去
+        （关键词页传它自己的关键词库）。
+        """
         super().__init__(parent, title=title, width=640, minimum_height=360)
+        self._target_label = str(target_label or "要挂的标签")
+        self._library = tuple(str(word) for word in library if str(word).strip())
+        self._pick = None
         self._taken = {str(key) for key in taken if str(key)}
         if rule is not None:
             self._taken.discard(rule.key)
@@ -184,10 +197,11 @@ class RuleDialog(FormDialog):
             value=(rule.op if rule else OP_IN),
         )
         self._pattern = line_edit(self, text=rule.pattern if rule else "", placeholder="doc,docx 或正则")
+        thing = self._target_label.removeprefix("要挂的")
         self._tags = line_edit(
             self,
             text="、".join(rule.tags) if rule else "",
-            placeholder="挂哪些标签，多个用顿号隔开",
+            placeholder=f"{thing}，多个用顿号隔开",
         )
         self._prompt = None
         if KIND_PROMPT in self._allowed:
@@ -214,7 +228,14 @@ class RuleDialog(FormDialog):
             self.add_row("匹配字段", self._field)
             self.add_row("匹配方式", self._op)
             self.add_row("匹配内容", self._pattern)
-        self.add_row("要挂的标签", self._tags)
+        self.add_row(self._target_label, self._tags)
+        if self._library:
+            self._pick = combo_box(
+                self,
+                items=(PICK_PROMPT, *self._library),
+                on_change=self._on_pick,
+            )
+            self.add_row(f"{thing}库", self._pick)
         if self._prompt is not None:
             self.add_row("提示词（交模型判断时用）", self._prompt)
         self.add_widget(self._enabled)
@@ -236,6 +257,12 @@ class RuleDialog(FormDialog):
             return
         current = self.rule()
         problems = list(current.problems)
+        if self._target_label != "要挂的标签":
+            # 共享库的 `problems` 是按标签写的；关键词页换个说法，别驴唇不对马嘴。
+            problems = [
+                f"没有{self._target_label}" if problem == "没有要挂的标签" else problem
+                for problem in problems
+            ]
         key = current.key.strip()
         if not key:
             problems.insert(0, "规则标识不能为空")
@@ -243,6 +270,18 @@ class RuleDialog(FormDialog):
             problems.insert(0, f"规则标识已存在：{key}")
         self._hint.setText("；".join(problems) if problems else "这条规则看起来没问题")
         self.yesButton.setEnabled(not problems)
+
+    def _on_pick(self, value) -> None:
+        """从库里挑一个：追加进「要挂的…」输入框，再回到占位项，方便连着挑几个。"""
+        word = str(value or "").strip()
+        if not word or word == PICK_PROMPT:
+            return
+        current = list(split_pattern(self._tags.text()))
+        if word not in current:
+            current.append(word)
+            self._tags.setText("、".join(current))
+        if self._pick is not None:
+            self._pick.setCurrentIndex(0)
 
     def rule(self) -> Rule:
         """当前表单内容（不校验唯一性，`problems` 里会提示）。"""
@@ -537,8 +576,9 @@ def align_rows(
     return table
 
 
-def fill_rule_table(table, rule_set: RuleSet) -> None:
-    fill_table(table, rule_rows(rule_set), headers=("名称", "类型", "匹配", "标签", "状态"))
+def fill_rule_table(table, rule_set: RuleSet, *, tag_header: str = "标签") -> None:
+    """填规则表；`tag_header` 让关键词页把「标签」列写成「要挂的关键词」。"""
+    fill_table(table, rule_rows(rule_set), headers=("名称", "类型", "匹配", tag_header, "状态"))
 
 
 def fill_align_table(

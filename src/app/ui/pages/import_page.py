@@ -50,7 +50,7 @@ from ..framework import (
 )
 from ..framework import contributions
 from ..framework.contributions import path_filters
-from ..components.data_table import fit_columns, prepare_table
+from ..components.data_table import fit_columns, fit_table_height, prepare_table, wrap_table
 from ..components.drop_area import DropArea
 from ..components.keyword_input import KeywordInput
 from ..components.tag_picker import TagPicker
@@ -59,6 +59,12 @@ from ..framework import IconTextButton, IconTextPrimaryButton, icon_text_label
 _STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败"}
 _MAX_DETAIL_ROWS = 500
 _DEDUPE_SCAN_LIMIT = 200
+#: 结果表格里「文件 / 说明」两列放的是文件名与库内路径，都比较长：换行显示、不省略。
+_RESULT_TABLE_MAX_WIDTH = 360
+#: 结果表格长高的上限（超过就靠表格自己的滚动条）、保底高度，以及导入过程中每隔几行重算一次。
+_RESULT_TABLE_MAX_HEIGHT = 460
+_RESULT_TABLE_MIN_HEIGHT = 200
+_FIT_HEIGHT_EVERY = 20
 
 
 class ImportPage(ScrollPage):
@@ -302,7 +308,9 @@ class ImportPage(ScrollPage):
         self.result_table.setColumnCount(3)
         self.result_table.setHorizontalHeaderLabels(["文件", "状态", "说明"])
         prepare_table(self.result_table, movable=True)
-        self.result_table.setMinimumHeight(200)
+        # 结果表里的文件名与库内路径都很长：换行显示、不省略，行高随内容长高
+        wrap_table(self.result_table, max_width=_RESULT_TABLE_MAX_WIDTH)
+        self.result_table.setMinimumHeight(_RESULT_TABLE_MIN_HEIGHT)
         layout.addWidget(self.result_table)
 
         self.progress_card = card
@@ -585,6 +593,7 @@ class ImportPage(ScrollPage):
 
         self.progress_card.show()
         self.result_table.setRowCount(0)
+        self._fit_result_height()
         self.progress_bar.setValue(0)
         self._started_at = dt.datetime.now()
         self.progress_label.setText(f"准备导入 {len(sources) if kind == 'files' else len(self._tree_files)} 个文件…")
@@ -601,6 +610,14 @@ class ImportPage(ScrollPage):
         self.progress_bar.setValue(percent)
         self.progress_label.setText(f"{done}/{total} · 正在处理 {elide(name, 40)}")
 
+    def _fit_result_height(self) -> None:
+        """结果表是换行表格：内容变了就重算高度，长文件名 / 长路径才不会被裁掉。"""
+        fit_table_height(
+            self.result_table,
+            max_height=_RESULT_TABLE_MAX_HEIGHT,
+            min_height=_RESULT_TABLE_MIN_HEIGHT,
+        )
+
     def _on_event(self, source: str, status: str, detail: str) -> None:
         from PyQt6.QtWidgets import QTableWidgetItem
 
@@ -610,6 +627,9 @@ class ImportPage(ScrollPage):
             cell = QTableWidgetItem(str(text))
             cell.setToolTip(str(text))
             self.result_table.setItem(row, column, cell)
+        # 换行表格要重算高度：每隔几十行算一次，别让新行被裁在可视区外
+        if row % _FIT_HEIGHT_EVERY == 0:
+            self._fit_result_height()
         self.result_table.scrollToBottom()
 
     def _on_finished(self, payload: dict) -> None:
@@ -628,6 +648,7 @@ class ImportPage(ScrollPage):
             self._worker = None
 
         if payload.get("error"):
+            self._fit_result_height()
             self.toast_error("导入失败", str(payload["error"]))
             return
 
@@ -640,7 +661,7 @@ class ImportPage(ScrollPage):
             f"批量导入：{payload.get('category') or self.selected_label_text}"[:200]
         )
         self._clear_sources()
-        fit_columns(self.result_table, max_width=320, weights={0: 0.4, 2: 0.3})
+        self._fit_result_height()
         if payload.get("ok"):
             self.toast_success("导入完成", summary)
         elif failed:

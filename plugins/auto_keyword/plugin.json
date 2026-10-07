@@ -20,6 +20,7 @@
       "id": "builtin.lib.ui"
     }
   ],
+  "conflicts": ["auto_keyword.rule"],
   "options": [
     {
       "key": "min_keywords",

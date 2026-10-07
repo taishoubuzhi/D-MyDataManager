@@ -268,8 +268,8 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 （「每页条数」下拉、「分类栏默认展开」开关）；分类栏是否列出文件记在 `Layout/Only-Show-Categories`，开关就在分类栏下面。
 右键菜单由纯函数 `menu_items(count)` / `open_with_items(suffix)` / `editor_menu_items(suffix)` 生成、`ManagePage._build_menu()` 渲染：**直接打开**、
 **查看器**（系统默认程序 / 点名某个内置查看器 / 交给系统选择…）、**编辑器**（系统默认程序 / 点名某个内置编辑器 / 交给系统选择…）、
-插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」；「自动标签」「自动关键词」三个插件还有工具栏按钮与条目菜单项，
-每次运行都尊重当前选中范围，用法见下文「自动标签与自动关键词」）、在文件夹中显示、复制路径、移动到分类…、编辑信息、标签管理、关键词管理、批量重命名…、隐藏 / 取消隐藏、导出选中项、移入回收站、
+插件贡献项（一律排在「查看器」「编辑器」两个子菜单之后，样例见下文「编辑器机制」；「自动标签」「自动关键词」四个插件还有工具栏按钮与条目菜单项，
+每次运行都尊重当前选中范围，用法见下文「自动标签与自动关键词」）、在文件夹中显示、复制路径、移动到分类…、编辑信息、标签管理、关键词管理、批量重命名…、隐藏 / 取消隐藏、导出选中项、导出为压缩包、移入回收站、
 从回收站还原、彻底删除、详情；多选时「编辑信息」「详情」禁用（`MENU_SINGLE_ONLY`），其余批量操作作用于全部选中项（都走 `_require_selection()`）。
 「移入回收站」只在选中项里确有未删除项时可用（`ItemService.delete()` 也会先滤掉已在回收站里的项并返回真实条数），
 全部已删除时按钮禁用、即便误触发也只会提示「选中的数据都已在回收站里」。
@@ -291,6 +291,15 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 大小写可切换），插入 / 删除的位置按字符计。改完**先弹变更清单**（`条目：原名称 → 新名称`，每行可取消勾选），确认后逐个走
 `ItemService.update(name=...)`（文件同 `ItemEditDialog` 一起重命名）；重名自动在主干后加 `-1`、`-2`（本页未选中项的原名也算占用），
 取消则一项都不改。
+
+「导出选中项」与「导出为压缩包」（工具栏的「导出」/「导出为 ZIP」两个按钮，右键菜单同名两项）都作用于当前选中范围：
+**导出选中项**（`ManagePage._on_export()`）先弹「选择导出目录」，`ExportService.export_items()` 把每个条目复制成普通文件到该目录
+（文本项直接写为 `.txt`，其它从内容仓库取原始字节），同名文件自动加 `_1` / `_2`，最后生成一份清单
+（CSV 或 JSON，列见 `MANIFEST_FIELDS`：名称 / 类型 / 分类 / 标签 / 关键词 / 大小 / 校验和 / 导入时间等）；
+**导出为压缩包**（`ManagePage._on_export_zip()`）把选中项打进**一个 zip**（`ExportService.export_archive()`），
+文件名默认「单项用条目名、多项用 `数据导出-<时间戳>.zip`」并落在设置里的「导出目录」（配置项 `Export-Path`，见 [CONFIG.md](CONFIG.md)），
+保存框里可以临时改到任何位置；包里每个文件仍按原名存放、清单也一并打进去，写包时先在旁边写 `<包名>.zip.part`、
+成功后才改名落位，中断不会留下半份包。两者都没有可导出的文件时只提示、不建空文件。
 
 `PageBase.auto_refresh()` 只在页面可见（或整个窗口不可见）时刷新，否则记一个待刷新标记、`showEvent` 补刷；
 数据管理页的卡片 / 列表行改为复用控件池（`ItemCard.set_item()` / `ItemListRow.set_item()`），删除与回档后的整页重建从约 260ms 降到 30ms 量级。
@@ -425,7 +434,9 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 - `import_files(sources, *, on_event=None, **options)`：多文件导入所选分类；
 - `import_folder(directory, *, name="", user_id=None, parent_category_id=None, on_event=None, **options)`：把整个文件夹当作一个新分类（`ensure_category(name or 目录名)`）整体导入，`ImportResult.category_name` 回填分类名；
 - `import_tree()` 保留文件夹内的相对子目录（写进条目 `subdir`，再由 `LibraryService.unique_rel_path(..., subdir=...)` 决定落盘子目录）；
-- `on_event` 回调收到 `ImportEvent(index, total, source, status, detail)`（status 为 added / skipped / failed），界面据此实时刷新进度与结果表。
+- `on_event` 回调收到 `ImportEvent(index, total, source, status, detail)`（status 为 added / skipped / failed），界面据此实时刷新进度与结果表；
+- 进度下方的结果表（3 列：文件 / 状态 / 说明）用 `wrap_table()` 自动换行、不省略（长文件名与库内路径整段可见，完整文本仍挂 tooltip），
+  行高与表格高度靠 `fit_table_height()` 跟着内容长（上限 460 px，超过就用表格自己的滚动条），导入过程中每 20 行重算一次、结束后再算一次。
 
 进度与结果由 `_ImportWorker(QThread)` 在后台执行（工作线程里 `database.new_session()`，完成后 emit `itemsChanged` / `librariesChanged` / `categoriesChanged`），
 主线程只做界面更新；`ImportPage.refresh()` 与其它页面一致，用来在进入页面时重建用户 / 分类 / 标签候选项。
@@ -437,6 +448,8 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 - `TableFilterBar`（`configure([(键, 显示名, "text"|"choice"|"number"|"date"[, 选项]), ...])` + `set_options()` / `set_filter()` / `filters()` / `has_filters()` / `reset()`，`changed` 信号）：贴在表格上方的 Excel 式逐列筛选栏，文本列子串匹配、选项列精确匹配；数值列给「不限 / 等于 / 大于 / 小于 / 区间」模式（区间才显示第二个输入框，`解析数字` 时 `unit="size"` 接受 `512KB` / `1.5MB`），日期列给「不限 / 在该日 / 在该日之后 / 在该日之前 / 区间」模式（用 qfluentwidgets `DatePicker`，按天）；选项里 `row: 1` 可把该列排到筛选栏第二行；`reset()` 只在确有变化时发信号；
 - `prepare_table(table, *, movable=True)`：隐藏行号、整行多选、只读、表头可拖动（`setSectionsMovable`）、列宽 Interactive；
 - `fit_columns(table, *, min_width=72, max_width=260, weights=None)`：先按内容量宽再夹紧，权重列吃剩余宽度；
+- `wrap_table(table, *, min_width=88, max_width=320, fit_rows=True)`：与 `prepare_table()` 相反的一套——关掉省略号（`ElideNone`）、打开自动换行、列宽按内容夹在 `min_width` ～ `max_width` 之间且末列吃满剩余宽度，长文件名 / 长路径整段可见（导入页的结果表用它；成百上千行的数据网格仍然用单行省略的那套）；
+- `fit_table_height(table, *, max_height=420, min_height=0, extra=8)`：按当前内容重算最小高度（换行表格内容一变就得重算，否则多出来的行被裁在可视区外），夹在 `min_height` ～ `max_height` 之间，超上限交给表格自己的滚动条；
 - `match_filters(values, filters, numbers=None, sets=None)`：判断一行是否命中全部筛选条件——文本列忽略大小写的子串匹配、选项列精确匹配、数值 / 日期列命中 4 元区间 `(下限, 含下限, 上限, 含上限)`、集合条件（分类 / 标签）要求被勾选的值全在行内集合里；空条件一律跳过。
 
 动态重建列表时，摘掉旧控件必须走 `src/app/ui/framework/feedback.py` 的 `release_widget(widget)`（先 `hide()` 再 `setParent(None)` + `deleteLater()`）：
@@ -729,19 +742,23 @@ pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选
 扫描行还会报「不可用」的数量，并且每个不可用插件（清单有误 / 缺依赖 / 依赖未启用 / 载入失败）都单独打一条 `warning`「插件不可用：<id>（[阶段] 原因）」，汇总句尾再补「N 个插件不可用：<id>（原因）；…」——控制台能直接看到是谁、为什么；冲突插件不算不可用（照常载入，只是被挡住启用，见「插件冲突」）。查看器共用的纯函数在 SDK 里（`app.sdk.data`，插件可直接 import）：
 文本解码与截断、xlsx / csv 解析（xlsx 用 `zipfile` + `ElementTree` 自解析，不依赖 openpyxl）、压缩包成员列表与读取、图片信息（Pillow）。
 
-### 自动标签与自动关键词（三个外部插件）
+### 自动标签与自动关键词（四个外部插件）
 
-`auto_tag.rule`（规则自动标签）、`auto_tag`（模型自动标签）与 `auto_keyword`（自动关键词）是
+`auto_tag.rule`（规则自动标签）、`auto_keyword.rule`（规则自动关键词）、`auto_tag`（模型自动标签）与 `auto_keyword`（自动关键词）是
 **外部功能插件**：清单里 `builtin: false` **且** `enabled: false`，默认不启用，未启用时程序本体一个控件都不多（页面、工具栏、
 导入页按钮全都不出现，`.configs/plugins.json` 里也不会多出条目）。它们共用共享库插件 `lib.autolabel`（规则模型 + 匹配引擎、
 数据类型→模型对齐表、批处理管线、共用控件），方案、逐条需求映射与全部偏差记录见 [`../plugins/lib.autolabel/PLUGIN.md`](../plugins/lib.autolabel/PLUGIN.md)。
 
 - 数据文件：用户规则写 `.configs/autolabel.rules.json`（出厂默认 `plugins/lib.autolabel/.data/rules.json`，同名键用户覆盖，
-  坏正则只标红不炸）、各数据类型的模型对齐写 `.configs/autolabel.align.json` 的 `label`（标签）与 `keyword`（关键词）两段，各存各的。
+  坏正则只标红不炸）；**关键词规则单独一份** `.configs/autolabel.keyword-rules.json`（`auto_keyword.rule` 出厂自带的 9 条规则
+  写在插件代码里 `plugins/auto_keyword.rule/.plugin/store.py` 的 `FACTORY_RULES`，不占 `.data/`，用户只存自己那份）；
+  **关键词库**写 `.configs/autolabel.keywords.json`（`{"version": 1, "keywords": [...]}`，页面上可手输、可从现有条目扫描收进来）；
+  各数据类型的模型对齐写 `.configs/autolabel.align.json` 的 `label`（标签）与 `keyword`（关键词）两段，各存各的。
   `auto_tag.rule` 与 `auto_tag` 在清单里互指 `conflicts`：两者都能载入，但**不能同时启用**（用户 m42668）；`auto_tag` 自己也能按规则挂标签——页面上的「规则」卡共用同一份规则文件，`merge_rule_tags`（默认开）打开时规则标签与模型标签合并去重后一起挂，两边的新标签都会自动进标签库（用户 m42753）。
-- 页面：三个插件各有一个页面（`auto_tag_rule` / `auto_tag` / `auto_keyword`），一律用界面工具库 `builtin.lib.ui` 的构件
+  关键词那一对同理：`auto_keyword.rule` 与 `auto_keyword` 互指 `conflicts`（用户 m43110），都能载入、不能同时启用；两组方案之间（关键词 ↔ 标签）互不冲突，可以同时启用。
+- 页面：四个插件各有一个页面（`auto_tag_rule` / `auto_keyword_rule` / `auto_tag` / `auto_keyword`），一律用界面工具库 `builtin.lib.ui` 的构件
   （自检 `autolabel_ui_via_tool_library` 拦 `qfluentwidgets` / `PyQt6` 直连，只放行 `FluentIcon`）。`auto_tag` 页面只有模型方案（规则方案在 `auto_tag.rule` 页）；
-   它与关键词页面都有一张「数据类型对齐」表（5 列：数据类型 / 方案 / 主模型 / 对齐模型 / 状态）+
+   它与 `auto_keyword` 页都有一张「数据类型对齐」表（5 列：数据类型 / 方案 / 主模型 / 对齐模型 / 状态）+
   「方案」列三态 = `启用`（跟随系统）/ `自定义`（自己挑过）/ `已停用`（这一行被关掉）；「主模型 / 对齐模型」两列显示登记时起的名字
   （没登记才写「未登记：<方案 key>」）；保存后表格会自动选中刚改的那一行，该行的备注显示在表格下面的提示里。
   设置存在用户清单 `.configs/autolabel.align.json`（每个用途下全部数据类型一行，写全量），表格刷新时直接读清单，显示与设置不会脱节。
@@ -760,21 +777,29 @@ pip 要下的 GitHub Releases 轮子，比如 llama.cpp 的 CUDA 轮子）：选
   + `tokenizer.json`、`vocab.json`、`merges.txt` 等（分词器）——`from_pretrained(本地目录)` 按约定读它们，缺一个就跑不起来，所以都得下）。
   点确认就把主模型与对齐模型的这些文件交给模型工具库的下载队列（与「模型」页同一套：镜像回退、断点续传、可暂停 / 取消，进度看「模型」页）；
   不点确认不会下载。运行环境（pip 包）仍然只在「模型」页装，插件不静默安装。
-- **数量当场改**：标签页与关键词页的运行区都有「设置数量」按钮，直接改 `min_tags` / `max_tags`（标签页还含「规则标签与模型标签合并」）
+- **数量当场改**：模型标签页与关键词页（`auto_tag` / `auto_keyword`）的运行区都有「设置数量」按钮，直接改 `min_tags` / `max_tags`（标签页还含「规则标签与模型标签合并」）
   或 `min_keywords` / `max_keywords`，写进 `.configs/plugins.json` 的插件设置，等价于在「插件」页改。
 - **挂完标签界面立刻刷新**：整批挂标签结束后广播一次 `itemsChanged` + `notify_tags_changed()`（`app.sdk.items`），
   数据管理页的列表与标签页的标签清单当场就能看到新标签（含刚建出来的）；批处理**中途**的每一次写标签都不广播，
   免得标签页跟着重建很多遍——`ensure_tags()` / `tag_items()` 自己不发标签变更信号，由调用方在整批写完时调一次（用户 m07851）。
 - 批量统一走模型工具库：所有请求交 `models.run_batch()`（按模型分组、同组只加载一次模型、组间并行、单条失败隔离、带进度与取消）。
-- 入口与收敛（两处登记过的偏差）：`auto_tag.rule` 有导入页「按规则预填标签」+ 管理页工具栏 + 条目菜单三个入口；
+- 入口与收敛（两处登记过的偏差）：`auto_tag.rule` 与 `auto_keyword.rule` 都有导入页「按规则预填标签 / 关键词」+ 管理页工具栏 + 条目菜单三个入口
+  （导入页那一个就地按文件后缀预填，不写库）；
   `auto_tag` 没有导入页入口，工具栏与条目菜单**直接起后台任务挂标签**（完成提示并刷新列表；页面里还有带进度与取消的整批运行）；
   `auto_keyword` 没有导入页入口，另外两个入口只跳转到关键词页。原因都是：导入时文件还没入库、没有条目 id，构造不出
   `BatchRequest`；页面外的入口又没有地方放进度与取消。
 - `auto_tag.rule` 页面只有「规则」与「运行」两区：它不调用模型，所以规则编辑弹窗里没有「交模型判断」类型，
   也没有提示词输入框；按后缀配默认标签就是建一条 `field=suffix` / `op=is` 的普通规则（不再另设一张「数据格式」表）。
   编辑到出厂自带、类型为「交模型判断」的规则时，页面会说明本页不跑模型并禁用保存。
+- `auto_keyword.rule` 页面是「规则 / 关键词库 / 运行」三区，与标签规则页同构：规则的「匹配」列里挑的是**要挂的关键词**
+  （弹窗里的目标字段标题与「关键词库」下拉都由共享控件参数化，标签页行为不变）；关键词库区能手输加词 / 删词、
+  「扫描现有条目」把库里已经出现过的关键词（含出现次数）收进库里、「保存关键词库」才落盘；运行区可「预览（不写库）」
+  或直接「开始挂关键词」，挂完广播一次 `itemsChanged`（**不发**标签变更信号——关键词不是标签）。
+  它与 `auto_keyword` 在清单里互指 `conflicts`（用户 m43110）：都能载入，但**不能同时启用**——要先用规则挂一批、
+  再禁用本插件换成 `auto_keyword` 补其余条目。
 - 数量选项用清单的 `kind: "int"`（`min_tags` / `max_tags`、`min_keywords` / `max_keywords`），标签上限还不超过库里标签总数，
-  关键词只设上限（`0` = 不限）。`auto_keyword` 与两个标签插件**互不冲突**（产物不同）；`auto_tag.rule` 与 `auto_tag` 则**互斥**：清单里互指 `conflicts`，不能同时启用。
+  关键词只设上限（`0` = 不限）。两对同名方案各自**互斥**：`auto_tag.rule` 与 `auto_tag`、`auto_keyword.rule` 与 `auto_keyword` 都互指 `conflicts`，不能同时启用；
+  关键词插件与标签插件之间**互不冲突**（产物不同，宿主写库时会去重）。
 
 ### 插件选项与「插件」页
 

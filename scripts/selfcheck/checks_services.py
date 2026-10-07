@@ -517,6 +517,58 @@ def export_manifest_fields(case: Case) -> None:
     assert later.missing >= 1, f"内容缺失应计入 missing：{later.summary()}"
 
 
+@check("export_archive_zip", "services")
+def export_archive_zip(case: Case) -> None:
+    """导出为压缩包：数据与清单都进一个 zip、源文件缺失计入 missing、临时文件不残留。"""
+    import zipfile
+    from pathlib import Path
+
+    from sqlalchemy import text
+
+    from app.core.config import store_dir
+    from app.repositories import ItemFilter, ItemRepository
+    from app.services import BlobStore, ExportService, ImportService
+
+    session = case.session
+    importer = ImportService(session)
+    assert importer.import_text("压缩包笔记", "打包内容", keywords=["打包"], tags=["重要"]) is not None, "导入文本失败"
+    assert SAMPLE_IMAGE.exists(), f"缺少示例图片：{SAMPLE_IMAGE}"
+    assert importer.import_files([SAMPLE_IMAGE]).added, "导入图片失败"
+    session.commit()
+
+    items = ItemRepository(session).query(ItemFilter())
+    service = ExportService(session)
+    target = case.root / "bundle"  # 故意不给 .zip 后缀：服务该自己补上
+    result = service.export_archive(items, target)
+    session.commit()
+    assert result.path.name == "bundle.zip", f"没给压缩包补 .zip 后缀：{result.path}"
+    assert result.path.exists(), f"压缩包没生成：{result.path}"
+    assert result.exported >= 2, f"包里的文件数不对：{result.summary()}"
+    assert not result.path.with_name(result.path.name + ".part").exists(), "打包用的临时文件没清干净"
+    with zipfile.ZipFile(result.path) as archive:
+        names = archive.namelist()
+        assert "压缩包笔记.txt" in names, f"压缩包里没有文本项：{names}"
+        assert SAMPLE_IMAGE.name in names, f"压缩包里没有图片：{names}"
+        manifest = [name for name in names if name.startswith("清单-")]
+        assert manifest, f"压缩包里没有清单：{names}"
+        listing = archive.read(manifest[0]).decode("utf-8-sig")
+    assert "压缩包笔记" in listing, "压缩包里的清单没有文本项"
+
+    try:
+        service.export_archive([], case.root / "empty.zip")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("没有选中数据时应拒绝导出")
+    assert not Path(case.root / "empty.zip").exists(), "被拒绝的导出不该留下压缩包"
+
+    store = BlobStore(store_dir())
+    rel_paths = session.execute(text("select rel_path from blobs")).scalars().all()
+    assert any(store.remove(rel) for rel in rel_paths), "内容仓库里没有可删除的文件"
+    later = service.export_archive(items, case.root / "missing")
+    assert later.missing >= 1, f"内容缺失应计入 missing：{later.summary()}"
+
+
 @check("archive_diff_and_restore", "services")
 def archive_diff_and_restore(case: Case) -> None:
     """存档差异与整档还原：改内容记 changed、删数据记 removed、还原补回文件与分类。"""

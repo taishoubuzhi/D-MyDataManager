@@ -3,7 +3,7 @@
 from .archive_service import ArchiveDiff, ArchiveService
 from .blob_store import BlobStore, sha256_of, sha256_of_bytes
 from .category_sync import reconcile_categories
-from .export_service import ExportResult, ExportService
+from .export_service import ExportResult, ExportService, ZipExportResult
 from .feature_service import build_features, make_cover, replace_features
 from .import_service import ImportResult, ImportService, timestamp_name
 from .item_service import ItemService
@@ -40,6 +40,7 @@ __all__ = [
     "TaxonomyService",
     "UserInfo",
     "UserService",
+    "ZipExportResult",
     "build_features",
     "compact_database",
     "is_uncategorized",
