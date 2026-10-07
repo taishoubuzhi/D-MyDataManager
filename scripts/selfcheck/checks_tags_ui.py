@@ -668,6 +668,8 @@ def superuser_permissions(case: Case) -> None:
                 problems.append(f"普通用户仍可点击插件页的「{label}」")
         if not plugin_page.reveal_button.isEnabled():
             problems.append("普通用户应能定位插件文件夹")
+        if not plugin_page._export_button.isEnabled():
+            problems.append("普通用户应能导出插件（导出只读，不改变插件状态）")
         if plugin_page.permission_hint.isHidden():
             problems.append("普通用户看不到插件页的权限说明")
         plugin_module.TextInputDialog = _boom

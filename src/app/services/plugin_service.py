@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import time
 import uuid
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -83,6 +85,21 @@ PLUGIN_ORDERS = (
 CONTRIBUTION_FILTERS = (("", "全部贡献"),) + tuple(
     (point, ExtensionPoint.label(point)) for point in ExtensionPoint.values()
 )
+
+
+@dataclass
+class PluginExportResult:
+    """一次插件导出的结果：写到哪儿、带走了哪些插件、哪些没找到。"""
+
+    path: Path
+    exported: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+
+    def summary(self) -> str:
+        text = f"已导出 {len(self.exported)} 个插件到 {self.path}"
+        if self.skipped:
+            text += f"，{len(self.skipped)} 个插件的目录找不到了"
+        return text
 
 
 class PluginHost:
@@ -1251,6 +1268,70 @@ class PluginService:
             if cleanup is not None:
                 shutil.rmtree(cleanup, ignore_errors=True)
 
+    # ---------------------------------------------------------- 导出
+    def export_plugins(self, plugin_ids: Sequence[str], target: str | Path) -> PluginExportResult:
+        """把插件导出成一个 zip。
+
+        - 一个插件：zip 里直接就是这个插件目录的内容，能被「导入插件包」原样导回来。
+        - 多个插件：每个插件先各打一个 `<插件 id>.zip`，再把这些 zip 一起装进外层 zip。
+
+        插件目录里的 `__pycache__` 与 `.pyc` / `.pyo` 缓存不导出，其余（含插件自己的 `.data`）
+        原样带走；写不成一个完整 zip 时不会留下半个文件。
+        """
+        ids = list(dict.fromkeys(str(plugin_id) for plugin_id in plugin_ids if plugin_id))
+        if not ids:
+            raise PluginError("没有要导出的插件")
+        infos: list[PluginInfo] = []
+        skipped: list[str] = []
+        for plugin_id in ids:
+            info = self.get(plugin_id)
+            if info is None or info.path is None or not info.path.is_dir():
+                skipped.append(plugin_id)
+            else:
+                infos.append(info)
+        if not infos:
+            raise PluginError("勾选的插件目录都找不到了，没有可导出的内容")
+        path = Path(target)
+        if path.suffix.lower() != ".zip":
+            path = path.with_name(f"{path.name}.zip")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        staging = path.with_name(f"{path.name}.part")
+        try:
+            with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
+                if len(infos) == 1:
+                    self._zip_plugin(infos[0], archive)
+                else:
+                    for info in infos:
+                        buffer = io.BytesIO()
+                        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as inner:
+                            self._zip_plugin(info, inner)
+                        # 内层已经是压缩包，外层再压一遍只是白花时间
+                        archive.writestr(f"{info.id}.zip", buffer.getvalue(), zipfile.ZIP_STORED)
+            staging.replace(path)
+        except BaseException:
+            staging.unlink(missing_ok=True)
+            raise
+        result = PluginExportResult(
+            path=path,
+            exported=tuple(info.id for info in infos),
+            skipped=tuple(skipped),
+        )
+        logger.info("插件导出完成：{}", result.summary())
+        return result
+
+    def _zip_plugin(self, info: PluginInfo, archive: zipfile.ZipFile) -> None:
+        """把一个插件目录原样写进 zip（跳过 Python 缓存，顶层就是这个插件的目录内容）。"""
+        root = info.path
+        if root is None or not root.is_dir():
+            raise PluginError(f"插件目录找不到了：{info.id}")
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root)
+            if relative.name.endswith((".pyc", ".pyo")) or "__pycache__" in relative.parts:
+                continue
+            archive.write(path, relative.as_posix())
+
     @staticmethod
     def _mark_external(folder: Path) -> None:
         """导入进来的插件一律算外部插件，避免伪造内置标志。"""
@@ -1292,6 +1373,7 @@ __all__ = [
     "STATE_FILTERS",
     "STATE_VERSION",
     "PluginError",
+    "PluginExportResult",
     "PluginHost",
     "PluginInfo",
     "PluginService",

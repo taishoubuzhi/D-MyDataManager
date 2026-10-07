@@ -31,10 +31,11 @@ from qfluentwidgets import (
     SubtitleLabel,
 )
 
+from ...core.config import export_dir
 from ...core.runtime import shell
 from ...core.runtime.signals import signalBus
 from ...db import database
-from ...services import UserService
+from ...services import UserService, timestamp_name
 from ...services.plugin_service import (
     CONTRIBUTION_FILTERS,
     PLUGIN_ORDERS,
@@ -90,6 +91,13 @@ class PluginPage(Page):
         self._folder_button.setToolTip("选择插件目录；按住 Ctrl / Shift 可多选（每个目录里要有 plugin.json）")
         self._folder_button.clicked.connect(self._on_import_dir)
         self.header.add_action(self._folder_button)
+        self._export_button = IconTextButton(FluentIcon.SAVE, "导出插件", self)
+        self._export_button.setToolTip(
+            "把勾选的插件导出成 zip：一个插件就是一个 zip，多个插件各打一个 zip 再套一个总包；"
+            "保存框默认落在设置里的导出目录，也可以改到别处"
+        )
+        self._export_button.clicked.connect(self._on_export)
+        self.header.add_action(self._export_button)
         refresh_button = IconTextButton(FluentIcon.SYNC, "刷新", self)
         refresh_button.clicked.connect(self._reload)
         self.header.add_action(refresh_button)
@@ -100,7 +108,7 @@ class PluginPage(Page):
                 "启用 / 禁用会立即重建查看器注册表：禁用「查看器」插件后，对应格式会退回系统默认程序。"
             )
         self.permission_hint = CaptionLabel(
-            "只有默认用户可以导入、启用、编辑或删除插件；其他用户可以查看、筛选与打开插件目录。", self
+            "只有默认用户可以导入、启用、编辑或删除插件；其他用户可以查看、筛选、导出与打开插件目录。", self
         )
         self.add_widget(self.permission_hint)
 
@@ -839,3 +847,48 @@ class PluginPage(Page):
             if len(failed) > 5:
                 detail = f"{detail}\n……还有 {len(failed) - 5} 条，详见日志"
             self.toast_error(f"{len(failed)} 个插件没导入", detail)
+
+    # ------------------------------------------------------------------ 导出
+    def _on_export(self) -> None:
+        """把勾选的插件导出成 zip（没勾选就用当前选中的那一个）。"""
+        infos = self._export_infos()
+        if not infos:
+            self.toast_warning("未选择插件", "请先勾选要导出的插件，或先选中列表里的一行")
+            return
+        target, _filter = QFileDialog.getSaveFileName(
+            self,
+            "导出插件",
+            str(self._export_default_path(infos)),
+            "Zip 压缩包 (*.zip);;所有文件 (*)",
+        )
+        if not target:
+            return
+        try:
+            result = self.service.export_plugins([info.id for info in infos], target)
+        except Exception as exc:  # noqa: BLE001 - 没有写权限 / 磁盘满都要如实说出来
+            self.toast_error("导出失败", str(exc))
+            return
+        self.toast_success(f"已导出 {len(result.exported)} 个插件", str(result.path))
+        if result.skipped:
+            self.toast_warning(
+                "部分插件没有导出",
+                "这些插件的目录找不到了：" + "、".join(result.skipped),
+            )
+
+    def _export_infos(self) -> list:
+        """要导出的插件：优先用勾选的，一个都没勾就用当前选中的那一个。"""
+        checked = self.checked_infos()
+        if checked:
+            return checked
+        info = self._selected_info()
+        return [info] if info is not None else []
+
+    def _export_default_path(self, infos: list) -> Path:
+        """默认文件名与位置：一个插件用它的 id，多个插件用带时间戳的总包名；目录取设置里的导出目录。"""
+        name = f"{infos[0].id}.zip" if len(infos) == 1 else f"插件导出-{timestamp_name()}.zip"
+        directory = export_dir()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return Path(name)  # 导出目录建不出来就让保存框自己挑地方
+        return directory / name

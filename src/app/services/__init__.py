@@ -10,7 +10,13 @@ from .item_service import ItemService
 from .library_service import LibraryService, is_uncategorized_category, sanitize_dir_name
 from .maintenance import compact_database, reset_config, reset_runtime_data, reset_to_defaults
 from .content_store import ContentStore, preferred_codec
-from .plugin_service import PluginHost, PluginInfo, PluginService, plugin_service
+from .plugin_service import (
+    PluginExportResult,
+    PluginHost,
+    PluginInfo,
+    PluginService,
+    plugin_service,
+)
 from .stats_service import overview, recent, storage_usage, type_breakdown
 from .taxonomy_service import CategoryNode, TaxonomyService, is_uncategorized
 from .user_service import UserInfo, UserService
@@ -27,6 +33,7 @@ __all__ = [
     "ImportService",
     "ItemService",
     "LibraryService",
+    "PluginExportResult",
     "PluginHost",
     "PluginInfo",
     "PluginService",

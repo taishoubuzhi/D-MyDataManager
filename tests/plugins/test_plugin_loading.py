@@ -1,10 +1,12 @@
-"""插件载入：冲突只影响启用、不影响载入，且启用/禁用变更与不可用原因都要进控制台。"""
+"""插件载入：冲突只影响启用、不影响载入，且启用/禁用变更与不可用原因都要进控制台；另有插件导出的打包规则。"""
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 
 from loguru import logger
@@ -238,6 +240,92 @@ class ManifestFieldCase(unittest.TestCase):
         for info in infos:
             for field in ("incompatible", "load_after", "manager_version", "data"):
                 self.assertNotIn(field, info.manifest, f"{info.id} 仍写着 {field}")
+
+
+class ExportCase(unittest.TestCase):
+    """插件导出：一个插件一个 zip，多个插件各一个 zip 再套总包，且导出的包能原样导回来。"""
+
+    def _fixture(self) -> tuple[PluginService, Path]:
+        tmp = TempDir("plugin-export")
+        self.addCleanup(tmp.cleanup)
+        plugin_dir = tmp.path / "plugins"
+        for plugin_id, name in (("demo.alpha", "甲插件"), ("demo.beta", "乙插件")):
+            folder = plugin_dir / plugin_id
+            (folder / ".plugin").mkdir(parents=True)
+            (folder / ".data").mkdir()
+            (folder / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "id": plugin_id,
+                        "name": name,
+                        "version": "1.0.0",
+                        "api_version": ">=1.0 <2.0",
+                        "entry": "plugin.py",
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (folder / "plugin.py").write_text("from app.sdk import Plugin\n", encoding="utf-8")
+            (folder / ".plugin" / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+            (folder / ".data" / "state.json").write_text('{"n": 1}', encoding="utf-8")
+            # 缓存不该被打进包里
+            (folder / "__pycache__").mkdir()
+            (folder / "__pycache__" / "plugin.cpython-313.pyc").write_bytes(b"\x00\x01")
+        state_file = tmp.path / "plugins.json"
+        state_file.write_text(json.dumps({"version": 1, "plugins": {}}), encoding="utf-8")
+        return PluginService(plugin_dir=plugin_dir, state_file=state_file), tmp.path
+
+    def test_single_plugin_becomes_one_zip_without_the_cache(self) -> None:
+        service, root = self._fixture()
+        result = service.export_plugins(["demo.alpha"], root / "out" / "demo.alpha")
+        self.assertEqual(result.exported, ("demo.alpha",))
+        self.assertEqual(result.skipped, ())
+        self.assertEqual(result.path.name, "demo.alpha.zip", "没写后缀时要自己补上 .zip")
+        with zipfile.ZipFile(result.path) as archive:
+            names = set(archive.namelist())
+        self.assertIn("plugin.json", names)
+        self.assertIn("plugin.py", names)
+        self.assertIn(".plugin/helper.py", names)
+        self.assertIn(".data/state.json", names)
+        self.assertFalse([name for name in names if "__pycache__" in name or name.endswith(".pyc")])
+        self.assertFalse(list(result.path.parent.glob("*.part")), "导出成功后不该留下半成品")
+
+    def test_exported_zip_can_be_read_back_as_a_plugin(self) -> None:
+        """导出的包要能被「导入插件包」那条路径原样读出清单（这里只解包 + 校验，不真正载入）。"""
+        service, root = self._fixture()
+        result = service.export_plugins(["demo.alpha"], root / "out" / "demo.alpha.zip")
+        extracted = root / "again"
+        extracted.mkdir()
+        folder = PluginService._find_plugin_root(PluginService._extract_zip(result.path, extracted))
+        info = load_manifest(folder)
+        self.assertEqual(info.id, "demo.alpha")
+        self.assertEqual(info.name, "甲插件")
+
+    def test_many_plugins_are_zipped_one_by_one_then_wrapped(self) -> None:
+        service, root = self._fixture()
+        result = service.export_plugins(
+            ["demo.alpha", "demo.beta", "demo.alpha"], root / "out" / "插件导出.zip"
+        )
+        self.assertEqual(result.exported, ("demo.alpha", "demo.beta"), "重复的 id 只导一次")
+        with zipfile.ZipFile(result.path) as archive:
+            self.assertEqual(sorted(archive.namelist()), ["demo.alpha.zip", "demo.beta.zip"])
+            with zipfile.ZipFile(io.BytesIO(archive.read("demo.alpha.zip"))) as inner:
+                self.assertIn("plugin.json", inner.namelist())
+                self.assertNotIn("demo.alpha.zip", inner.namelist())
+
+    def test_missing_plugin_dir_is_reported_not_dropped(self) -> None:
+        service, root = self._fixture()
+        result = service.export_plugins(["demo.alpha", "demo.gone"], root / "out" / "部分.zip")
+        self.assertEqual(result.exported, ("demo.alpha",))
+        self.assertEqual(result.skipped, ("demo.gone",))
+        self.assertIn("1 个插件的目录找不到了", result.summary())
+
+    def test_nothing_exportable_raises(self) -> None:
+        service, root = self._fixture()
+        for ids in ([], ["demo.gone"]):
+            with self.subTest(ids=ids), self.assertRaises(PluginError):
+                service.export_plugins(ids, root / "out" / "空.zip")
 
 
 if __name__ == "__main__":
