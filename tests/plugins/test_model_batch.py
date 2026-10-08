@@ -207,7 +207,10 @@ class BatchRunCase(IsolatedCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # 同一用例类共用一个临时根目录：两个位置的权重都要清掉，否则新登记会被
+        # 磁盘上的老文件直接判成「已就绪」（旧位置 `.resources/models`、现位置 `.models`）。
         shutil.rmtree(self.root / ".resources" / "models", ignore_errors=True)
+        shutil.rmtree(self.root / ".models", ignore_errors=True)
         self.registry = ModelRegistry(self.root / "models" / f"{self._testMethodName}.json")
         self.settings = manager_module.ModelSettings()
         self.manager = ModelManager(self.registry, self.settings)
@@ -403,7 +406,10 @@ class TemplateCase(IsolatedCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # 同一用例类共用一个临时根目录：两个位置的权重都要清掉，否则新登记会被
+        # 磁盘上的老文件直接判成「已就绪」（旧位置 `.resources/models`、现位置 `.models`）。
         shutil.rmtree(self.root / ".resources" / "models", ignore_errors=True)
+        shutil.rmtree(self.root / ".models", ignore_errors=True)
         self.registry = ModelRegistry(self.root / "models" / f"{self._testMethodName}.json")
         self.settings = manager_module.ModelSettings()
         self.manager = ModelManager(self.registry, self.settings)

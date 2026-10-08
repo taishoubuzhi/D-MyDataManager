@@ -105,6 +105,12 @@ class ManifestCase(unittest.TestCase):
 class LibraryFileCase(IsolatedCase):
     """关键词库落盘：`.configs/autolabel.keywords.json`。"""
 
+    def setUp(self) -> None:
+        super().setUp()
+        # 同一个用例类共用一个临时根目录：先清掉上一个用例落下的关键词库，
+        # 否则按字母序先跑的用例会把「还没有文件」这条断言写坏。
+        store.keywords_file().unlink(missing_ok=True)
+
     def test_save_and_load_library(self) -> None:
         self.assertFalse(store.keywords_file().is_file())
         self.assertEqual(store.load_library(), ())

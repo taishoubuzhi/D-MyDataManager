@@ -47,6 +47,10 @@ LEGACY_RESOURCE_DIR_NAME = "resources"
 DEFAULT_RESOURCE_DIR = ROOT / RESOURCE_ROOT_NAME
 LOG_DIR = ROOT / LOG_DIR_NAME
 DEFAULT_EXPORT_DIR = ROOT / "exports"
+#: 下载器的默认落点（用户没在「下载管理 → 下载设置」里指定下载路径时用这个）。
+#: 放在程序目录下而不是资源文件夹里：资源文件夹默认是 ACL 保护 + 隐藏目录，
+#: 把下载塞进去既容易被锁住，也让用户找不着自己下的东西。
+DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
 
 # 资源文件夹内部结构：数据库、库文件夹都由 apply_resource_root() 按配置重算
 DATA_DIR = DEFAULT_RESOURCE_DIR

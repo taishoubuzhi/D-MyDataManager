@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from loguru import logger
 
-from . import console, data, items, manifest, storage, ui
+from . import console, data, download, items, manifest, pip, storage, ui
 from .context import ContextServices, PluginContext
 from .errors import (
     DependencyError,
@@ -49,12 +49,14 @@ __all__ = [
     "compare_versions",
     "console",
     "data",
+    "download",
     "events",
     "items",
     "library",
     "manifest",
     "parse_range",
     "parse_version",
+    "pip",
     "plugin_class_names",
     "range_text",
     "register_dependency_lookup",

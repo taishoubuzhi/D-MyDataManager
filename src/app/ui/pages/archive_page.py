@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QStackedWidget,
     QTableWidgetItem,
@@ -29,11 +31,17 @@ from qfluentwidgets import (
     TableWidget,
 )
 
-from ...core.config import config
+from ...core.config import config, export_dir
 from ...core.runtime.signals import signalBus
 from ...db import database
 from ...db.models import Archive
-from ...services import ArchiveService, UserService, preferred_codec
+from ...services import (
+    ArchiveBundleService,
+    ArchiveService,
+    UserService,
+    preferred_codec,
+    timestamp_name,
+)
 from ..dialogs import TextInputDialog
 from ..components.archive_restore_dialog import RestoreDialog
 from ..components.archive_rebuild_worker import ArchiveRebuildWorker
@@ -300,6 +308,10 @@ class ArchivePage(Page):
         self.create_button = IconTextPrimaryButton(FluentIcon.SAVE, "创建存档", self)
         self.create_button.clicked.connect(self._on_create)
         self.header.add_action(self.create_button)
+        self.import_button = IconTextButton(FluentIcon.DOWNLOAD, "导入存档包", self)
+        self.import_button.setToolTip("从别的机器导出的存档包里重建存档记录")
+        self.import_button.clicked.connect(self._on_import_bundle)
+        self.header.add_action(self.import_button)
         self.clean_button = IconTextButton(FluentIcon.DELETE, "清理无用文件", self)
         self.clean_button.clicked.connect(self._on_cleanup)
         self.header.add_action(self.clean_button)
@@ -909,6 +921,9 @@ class ArchivePage(Page):
         bar.addWidget(self.selection_label)
         bar.addStretch(1)
 
+        self.batch_export_button = IconTextButton(FluentIcon.SAVE, "导出所选存档", parent)
+        self.batch_export_button.setToolTip("把勾选的存档连内容打包成一个存档包，可以在别的机器上导入")
+        self.batch_export_button.clicked.connect(self._on_batch_export)
         self.batch_pin_button = IconTextButton(FluentIcon.PIN, "批量标记", parent)
         self.batch_pin_button.setToolTip("标记所有勾选的存档，使其不被自动清理删除")
         self.batch_pin_button.clicked.connect(lambda: self._on_batch_pin(True))
@@ -918,7 +933,7 @@ class ArchivePage(Page):
         self.batch_delete_button = IconTextButton(FluentIcon.DELETE, "批量删除", parent)
         self.batch_delete_button.setToolTip("删除所有勾选的存档；已标记的存档需先取消标记")
         self.batch_delete_button.clicked.connect(self._on_batch_delete)
-        for button in (self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
+        for button in (self.batch_export_button, self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
             bar.addWidget(button)
         return bar
 
@@ -938,7 +953,12 @@ class ArchivePage(Page):
         self.select_all_box.blockSignals(False)
         count = len(self._checked)
         self.selection_label.setText(f"已选 {count} 个存档" if count else "未选择存档")
-        for button in (self.batch_pin_button, self.batch_unpin_button, self.batch_delete_button):
+        for button in (
+            self.batch_export_button,
+            self.batch_pin_button,
+            self.batch_unpin_button,
+            self.batch_delete_button,
+        ):
             button.setEnabled(bool(count))
 
     def _apply_page_check_states(self) -> None:
@@ -1328,6 +1348,95 @@ class ArchivePage(Page):
         self._reload_archives(notify=True)
         suffix = f"，跳过 {len(pinned)} 个已标记" if pinned else ""
         self.toast_success("存档已删除", f"删除 {len(removable)} 个存档{suffix}")
+
+    # ------------------------------------------------------------ 存档包导入导出
+    def _bundle_target(self) -> Path:
+        """存档包的默认位置与名字；导出目录建不出来时只给文件名。"""
+        name = f"存档包-{timestamp_name()}.zip"
+        try:
+            folder = export_dir()
+            folder.mkdir(parents=True, exist_ok=True)
+            return folder / name
+        except OSError:
+            return Path(name)
+
+    def _on_batch_export(self) -> None:
+        """把勾选的存档连内容打包成一个存档包。"""
+        archives = self.checked_archives()
+        if not archives:
+            self.toast_warning("未选择存档", "请先勾选要导出的存档")
+            return
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "导出存档包",
+            str(self._bundle_target()),
+            "存档包 (*.zip);;所有文件 (*)",
+        )
+        if not path:
+            return
+        tip = self.busy("正在导出存档包", f"共 {len(archives)} 份存档")
+        try:
+            result = ArchiveBundleService(self.session).export(archives, path)
+        except Exception as exc:  # noqa: BLE001 - 没写权限 / 磁盘满都要如实说出来
+            tip.finish("导出失败")
+            self.toast_error("导出失败", str(exc))
+            return
+        tip.finish("导出完成")
+        if result.archives:
+            self.toast_success("导出完成", result.summary())
+        else:
+            self.toast_warning("没有可导出的存档", result.summary())
+
+    def _on_import_bundle(self) -> None:
+        """从存档包里重建存档记录；内容一起写回内容仓库。"""
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self,
+            "导入存档包",
+            str(export_dir()),
+            "存档包 (*.zip);;所有文件 (*)",
+        )
+        if not paths:
+            return
+        service = ArchiveBundleService(self.session)
+        infos = []
+        problems = []
+        for raw in paths:
+            try:
+                infos.append(service.inspect(raw))
+            except Exception as exc:  # noqa: BLE001 - 坏包要如实回报，不能静默跳过
+                problems.append(f"{Path(raw).name}：{exc}")
+        if problems:
+            self.toast_warning("有文件读不了", "；".join(problems[:3]))
+        usable = [info for info in infos if not info.is_empty]
+        if not usable:
+            if infos:
+                self.toast_warning("没有可导入的存档", "选中的包里都没有存档")
+            return
+        names = [name for info in usable for name in info.names]
+        preview = "、".join(names[:8]) + ("…" if len(names) > 8 else "")
+        body = (
+            f"将从 {len(usable)} 个包里导入 {len(names)} 份存档：{preview}\n\n"
+            "导入只重建存档记录（内容一起写回内容仓库），不会动现有数据、分类与用户；"
+            "重名存档会自动加「（导入）」后缀。"
+        )
+        if not confirm(self, "导入存档包", body):
+            return
+        tip = self.busy("正在导入存档包", f"共 {len(usable)} 个包")
+        total = 0
+        failures = []
+        for info in usable:
+            try:
+                total += service.import_bundle(info.path).archives
+            except Exception as exc:  # noqa: BLE001 - 一个包坏了不该拖垮其余的包
+                failures.append(f"{info.path.name}：{exc}")
+        tip.finish("导入完成")
+        self._reload_archives(notify=True)
+        if failures:
+            self.toast_warning("部分导入失败", "；".join(failures[:3]))
+        if total:
+            self.toast_success("导入完成", f"共导入 {total} 份存档")
+        elif not failures:
+            self.toast_warning("没有导入任何存档", "包里没有可导入的存档")
 
     # ------------------------------------------------------------ 维护与校验
     def _require_default_user(self, action: str) -> bool:

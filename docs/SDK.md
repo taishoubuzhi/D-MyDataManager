@@ -40,6 +40,9 @@ class HelloPlugin(Plugin):
 | `app.sdk.data` | 文本、表格、压缩包、图片的解析工具 | `read_text`、`decode_text`、`csv_rows`、`xlsx_sheets`、`archive_members`、`archive_read`、`image_info`、`image_data_url`、`human_size` |
 | `app.sdk.storage` | 配置目录读写 | `config_dir`、`config_file`、`data_dir`、`resources_dir`、`read_json`、`write_json`、`loads`、`dumps`（JSON 走 orjson，缺依赖自动退回标准库） |
 | `app.sdk.ui` | 界面支持 | `open_default`、`ask_open_with`、`open_with_program`、`reveal`、`open_page`、`notify_items_changed`、`simple_mode`、`clear_scroll_background`、间距常量 |
+| `app.sdk.download` | 程序本体**唯一**的下载队列 | `DOWNLOAD_EXTENSION`（`download.open`）、`request`、`enqueue`、`choose_target`、`default_dir`、`jobs`、`find`、`pause` / `resume` / `cancel` / `retry` / `forget`、`pause_all` / `resume_all` / `cancel_all` / `clear_finished`、`DownloadRef`；要做自己的任务行就用 `manager()` 与 `DownloadManager` / `DownloadOptions` / `DownloadJob` / `STATE_*` / `part_path` |
+| `app.sdk.pip` | pip 安装引擎（**只集成、不对用户开放**） | `PIP_EXTENSION`（`pip.install`）、`install`、`wait`、`pause` / `resume` / `cancel` / `forget`、`PipRef`、`task_log`、`venv_python`、`import_name`、`check_wheels`、`missing_program_packages` |
+| `app.sdk.export` | 把选中的数据交给程序本体导出 | `EXPORT_EXTENSION`（`export.open`）、`packages`、`plan`、`directory`、`choose_directory`、`variables`、`ExportRef`、`PackageRef`、`PlanRef`，以及命名模板的 `render` / `preview` / `VARIABLES` / `VARIABLE_MAP` / `safe_filename` |
 | `app.sdk.library` | 取别的插件暴露的库 | `library`、`requires` |
 | `app.sdk.manifest` | 受程序管理的 JSON 清单 | `MANIFEST_EXTENSION`、`describe`、`load`、`query`、`diff`、`update`、`write`、`reset`、`backup`、`backups`、`raw`、`entries`、`ids`、`items_of`、`record_of`、`register`、`value_of`、`available` |
 | `app.sdk.version` | 版本与版本范围 | `SDK_VERSION`、`parse_version`、`parse_range`、`satisfies`、`compare_versions`、`range_text` |
@@ -262,15 +265,18 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 - 程序侧调度在 `app.services.viewer_service` / `app.services.editor_service`（插件看不到）；插件侧写 `ctx.require("viewer.open")` / `ctx.require("editor.open")` 或直接继承工具库基类。
 - 页面注册成 `plugin.<key>` 路由，程序把它挂进主窗口堆叠页并按需加左侧导航项；左侧导航内置页面顺序固定（设置恒在最下面），插件页面按载入顺序追加、最多显示 7 个，超出的只出现在「页面管理」页里。
 
-### 5.4 三个扩展接口（程序本体实现、插件消费）
+### 5.4 扩展接口（程序本体实现、插件消费）
 
-这三个不是扩展点，而是**扩展接口**：`setup()` 里 `ctx.provide("名字", 对象)` 提供、消费方 `ctx.require("名字")` 取用。
+这些不是扩展点，而是**扩展接口**：`setup()` 里 `ctx.provide("名字", 对象)` 提供、消费方 `ctx.require("名字")` 取用。
 
 | 接口 | 谁提供 | 插件侧门面 | 详细成员 |
 | --- | --- | --- | --- |
 | `model.open` | 库插件 `lib.model` | `dm_plugin.lib.model.api`（依赖 `lib.model`） | `plugins/lib.model/PLUGIN.md` |
 | `console.output` | 程序本体（`src/main.py` 挂 `ConsoleOutput`） | `app.sdk.console`（`ctx.console`） | 本文第 6 节 |
 | `items.open` | 程序本体（`app.services.item_api`） | `app.sdk.items` | 本文第 7 节 |
+| `download.open` | 程序本体（`app.services.download_api`） | `app.sdk.download` | 本文第 12 节 |
+| `pip.install` | 程序本体（`app.services.pip_api`） | `app.sdk.pip` | 本文第 12 节 |
+| `export.open` | 程序本体（`app.services.export_api`） | `app.sdk.export` | 本文第 13 节 |
 
 `viewer.open` / `editor.open` 由查看器 / 编辑器工具库提供，见 5.3。
 
@@ -416,7 +422,91 @@ from dm_plugin.lib.model.api import BatchRequest, run_batch   # 清单里 depend
 results = run_batch([BatchRequest(task="chat", payload={"input": path}, key=str(item.id))])
 ```
 
-## 12. 排查清单
+## 12. 下载与安装（`app.sdk.download` / `app.sdk.pip`）
+
+### 12.1 下载
+
+全程序**只有一个**下载队列（`app.core.download.service` 懒建，任务索引落 `.configs/journals/download/`）：「下载管理」页和所有插件拿到的是同一个队列——
+用户在页面上暂停的任务不会在插件那边又跑起来。地址展开走「下载设置」里的全局镜像规则，插件不自己拼镜像。
+
+**红线**：插件**不许替用户决定下载**。用 `request(...)` 它自己会先弹确认框（用户取消就返回 `None`）；只有非用户触发、且你自己已经确认过的场合才用 `enqueue(...)` 绕过。
+
+```python
+from app.sdk import download
+
+job_id = download.request(["https://example.com/a.bin"])   # 弹确认框；取消 → None
+if job_id:
+    print(download.find(job_id).state_label)
+```
+
+| 用途 | 成员 |
+| --- | --- |
+| 发起 | `request(urls, *, target=None, name="", label="", sha256="", total_bytes=0, confirm=True, parent=None) -> str \| None`、`enqueue(urls, target, *, label="", sha256="", total_bytes=0) -> str`、`choose_target(name) -> str \| None`、`default_dir() -> str` |
+| 看 | `jobs() -> tuple[DownloadRef, ...]`、`find(job_id) -> DownloadRef \| None`、`DownloadRef`（`id` / `urls` / `target` / `label` / `name` / `state` / `state_label` / `done_bytes` / `total_bytes` / `progress` / `speed` / `eta` / `detail` / `sha256` / `error` / `finished`） |
+| 操作 | `pause` / `resume` / `cancel` / `retry` / `forget(job_id) -> bool`、`pause_all` / `resume_all` / `cancel_all` / `clear_finished() -> int` |
+| 做自己的任务行 | `manager() -> DownloadManager`（**共享对象，别 `shutdown()`**）+ `DownloadOptions` / `DownloadJob` / `DownloadError` / `STATE_*` / `FINAL_STATES` / `part_path` / `to_int` / `describe_error` / `build_opener` / `USER_AGENT`（要格式化大小就用 `app.sdk.data.human_size`） |
+
+- 低层 `DownloadManager` 的成员：`enqueue(urls, target, *, sha256="", total_bytes=0, label="") -> DownloadJob`、`jobs()` / `find(id)` / `active()` / `finished()`、`pause` / `resume` / `cancel` / `retry` / `forget(id)`、`pause_all` / `resume_all` / `cancel_all` / `clear_finished()`、`update(DownloadOptions)`（改并行数等立刻生效）、`restore()`（接回上次没做完的）、`flush()`。
+- 界面：`app.sdk.ui` 只给基础控件。**现成的下载任务列表从 `builtin.lib.ui` 取**：`download_list(...)` / `DownloadListView`、`add_download_dialog(...)` / `AddDownloadDialog`（插件清单里 `depends: builtin.lib.ui`）。自己搭界面时把 `app.sdk.ui.PANEL_MARGINS` 这些间距常量用上，别写死像素。
+
+### 12.2 pip 安装
+
+pip 安装器只是**集成进程序本体**、界面上不对用户开放；插件要用就经 `pip.install` 接口（同样**不许静默安装**，`confirm=True` 默认弹框）。
+
+```python
+from app.sdk import pip
+
+task = pip.install(python, log=pip.task_log(python), packages=["onnxruntime"], title="装 onnxruntime")
+if task is not None:                     # None = 用户取消
+    pip.wait(task.id, timeout=600)
+```
+
+| 用途 | 成员 |
+| --- | --- |
+| 发起 | `install(python, *, log, packages=(), kind=KIND_PACKAGES, title="", requirements=None, wheels=(), venv=None, base_python=None, index_url="", extra_index=(), urls=(), upgrade=False, github_prefixes=(), on_line=None, confirm=True, parent=None, message="") -> PipRef \| None`（`kind=KIND_WHEELS` 走本地 whl） |
+| 看 / 等 | `jobs()`、`find(task_id)`、`wait(task_id, timeout=None) -> bool`、`PipRef`（`id` / `title` / `kind` / `state` / `state_label` / `error` / `log` / `python` / `result` / `tail` / `finished` / `paused`）、`task_log(python)` |
+| 操作 | `pause` / `resume` / `cancel` / `forget(task_id) -> bool`、`clear_finished()` |
+| 依赖探测 | `venv_python(venv) -> Path`、`import_name(name) -> str`、`check_wheels(wheels) -> list[str]`、`missing_program_packages(packages)`、`missing_program_group(...)` |
+| 界面 | `builtin.lib.ui` 的 `pip_task_list(...)` / `PipTaskView` |
+
+## 13. 导出（`app.sdk.export`）
+
+插件不自己拼 zip：把**要导出的数据项 id** 交给程序本体，由它按用户设置分包、命名、写清单。
+导出界面与命名模板是程序本体的一部分（「导出」设置与导出对话框），插件只负责发起与预览。
+
+**红线**：插件**不许替用户决定往哪儿写文件**。`packages(...)` 默认 `confirm=True`，会先弹确认框——
+用户能看到要导出几个包、包叫什么、落到哪个目录，还能改目录；用户关掉就返回 `None`，一个字节都不写。
+只有非用户触发、且你已经确认过的场合才用 `confirm=False`。
+
+```python
+from app.sdk import export
+
+plan = export.plan(item_ids, mode="top", template="导出-{category}-{number,1,1,3}")
+print(plan.summary(), plan.names)         # 只算不写，适合做实时预览
+
+result = export.packages(item_ids, mode="top", template="导出-{category}-{number}")
+if result is not None:                    # None = 用户取消
+    print(result.summary(), result.paths)
+```
+
+| 用途 | 成员 |
+| --- | --- |
+| 发起 | `packages(ids, *, directory="", mode="single", template=DEFAULT_TEMPLATE, manifest_format="csv", confirm=True, parent=None, message="") -> ExportRef \| None`、`plan(ids, *, mode="single", template=DEFAULT_TEMPLATE, directory="", now=None, user="", creator="") -> PlanRef`、`directory() -> str`、`choose_directory(current="") -> str` |
+| 看 | `ExportRef`（`directory` / `packages` / `paths` / `exported` / `missing` / `warnings` / `finished` / `summary()`）、`PackageRef`（`label` / `path` / `name` / `exported` / `missing` / `warnings`）、`PlanRef`（`mode` / `directory` / `packages` / `names` / `total` / `summary()`） |
+| 命名模板 | `variables() -> tuple[Variable, ...]`、`render(template, RenderContext(...)) -> RenderedName`、`preview(template, contexts) -> tuple[RenderedName, ...]`、`safe_filename(text)`；常量 `DEFAULT_TEMPLATE`、`VARIABLES`、`VARIABLE_MAP`、`PLAN_MODES`、`UNASSIGNED_LABEL` |
+
+- **模板写法**：`{变量}`、`{变量,起点}`、`{变量,起点,间隔}`（编码式变量才认起点/间隔，不写就是 1 和 1），
+  数字编号还能跟第四段补零宽度（`{number,1,1,3}` → `007`）；时间式变量后面跟一段就是 `strftime` 格式（`{date,%Y%m%d}`）；
+  认不出的变量**原样保留**并在 `RenderedName.warnings` 里报出来，不会中断导出。
+- **分包方式** `mode`：`"single"`（打成一个压缩包）或 `"top"`（按最顶层分类分别打包，未分类排最后）。
+- **编号顺序就是 `ids` 的顺序**：编号按包序从 1 起自增。导出的文件名都会过一遍 `safe_filename` 并自动去重。
+- **改编号起点与间隔要改模板原文**：程序本体「导出对话框」（`app/ui/components/export_dialog.py` 的 `ExportDialog`）
+  的起点 / 间隔两个数字框会把模板里**每一个**编号式变量重写成 `{变量,起点,间隔}`（`app.core.export.apply_numbering()`，
+  保留原有的补零宽度，别名会归一成规范名；`numbered_tokens(template)` 用来问「这个模板里有哪些编号变量」）。
+- 导出是**同步做完**的：`packages()` 返回时文件已经在盘上，每个压缩包里都带一份 `清单-*.csv`。
+- 写盘用的是「先写 `.part` 再原子改名」，中途失败不会留下半个压缩包（`.part` 会被清掉）。
+
+## 14. 排查清单
 
 | 症状 | 先看 |
 | --- | --- |

@@ -28,16 +28,15 @@ path_too_long / path_limit_info`。
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from app.sdk import pip as _engine
 from app.sdk import storage
 from app.sdk.manifest import items_of
 
@@ -82,12 +81,9 @@ __all__ = [
     "venv_dir",
 ]
 
-#: Windows 上不弹控制台窗口（照 `src/app/core/runtime/acl.py` 的 `_CREATE_NO_WINDOW`）
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-#: 后台「盯暂停 / 取消」的轮询间隔（秒）：只给老式的 should_cancel/should_pause 回调用。
-#: 传了 `Control` 的调用方不走轮询——它们直接收掉子进程（见 `Control.cancel()`）。
-_STOP_POLL_SEC = 0.2
+#: Windows 上不弹控制台窗口、后台「盯暂停 / 取消」的轮询间隔：跟 core 的安装引擎共用一份。
+_CREATE_NO_WINDOW = _engine.CREATE_NO_WINDOW
+_STOP_POLL_SEC = _engine.STOP_POLL_SEC
 
 #: 插件自带的 profile 清单；没有 ctx 时的兜底路径（协议 v2：数据在 `.data/`）
 _DATA_FILE = Path(__file__).resolve().parents[2] / ".data" / "runtime_profiles.json"
@@ -448,145 +444,7 @@ def has_dir(profile_id: str) -> bool:
     return True
 
 
-def package_versions(python: Path) -> dict[str, str]:
-    """`pip list` 的结果（包名 → 版本）；任何失败都返回 `{}`。"""
-    try:
-        result = subprocess.run(
-            [str(python), "-m", "pip", "list", "--format=json", "--disable-pip-version-check"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=_CREATE_NO_WINDOW,
-            timeout=120,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    if result.returncode != 0:
-        return {}
-    try:
-        payload = storage.loads(result.stdout)
-    except ValueError:
-        return {}
-    if not isinstance(payload, list):
-        return {}
-    versions: dict[str, str] = {}
-    for item in payload:
-        if isinstance(item, Mapping):
-            name = _text(item.get("name"))
-            if name:
-                versions[name] = _text(item.get("version"))
-    return versions
-
-
 # ------------------------------------------------------------------ 安装 / 卸载
-
-
-def _emit(on_line: Callable[[str], None] | None, text: str) -> None:
-    if on_line is None:
-        return
-    try:
-        on_line(text)
-    except Exception:
-        pass
-
-
-def _stop_reason(
-    should_cancel: Callable[[], bool] | None,
-    should_pause: Callable[[], bool] | None = None,
-) -> RuntimeStopped | None:
-    """看一眼两个回调：取消优先于暂停；都没喊停就返回 None。"""
-    if should_cancel is not None and should_cancel():
-        return RuntimeStopped("安装已取消")
-    if should_pause is not None and should_pause():
-        return RuntimeStopped("安装已暂停", paused=True)
-    return None
-
-
-def _check_stop(
-    should_cancel: Callable[[], bool] | None,
-    should_pause: Callable[[], bool] | None = None,
-) -> None:
-    stopped = _stop_reason(should_cancel, should_pause)
-    if stopped is not None:
-        raise stopped
-
-
-def _terminate(process: subprocess.Popen) -> None:
-    """先礼后兵地收掉子进程：terminate → 等 5 秒 → kill；已经退出的直接返回。"""
-    if process.poll() is not None:
-        return
-    try:
-        process.terminate()
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            process.kill()
-            process.wait(timeout=5)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-    except OSError:
-        pass
-
-
-class Control:
-    """安装的停止开关：页面点「暂停 / 取消」时直接喊停，不用后台轮询。
-
-    `cancel()` / `pause()` 先置位，再把当前绑定的子进程收掉——pip 闷头下载几秒
-    不输出时也是点一下就停。`should_cancel()` / `should_pause()` 给安装函数在
-    每行输出之间复查用（这时通常已经收到 `RuntimeStopped` 了）。
-    """
-
-    __slots__ = ("_cancel", "_pause", "_lock", "_processes")
-
-    def __init__(self) -> None:
-        self._cancel = threading.Event()
-        self._pause = threading.Event()
-        self._lock = threading.Lock()
-        self._processes: set[subprocess.Popen] = set()
-
-    def cancel(self) -> None:
-        """取消：置取消位、清暂停位，并立刻停掉正在跑的子进程。"""
-        self._cancel.set()
-        self._pause.clear()
-        self._stop_processes()
-
-    def pause(self) -> None:
-        """暂停：置暂停位并立刻停掉子进程（venv 半成品与 pip 缓存都留着）。"""
-        self._pause.set()
-        self._stop_processes()
-
-    def clear_pause(self) -> None:
-        self._pause.clear()
-
-    def reset(self) -> None:
-        """开工前清掉两个位：上一次的取消位不该把这一次当场掐掉。"""
-        self._cancel.clear()
-        self._pause.clear()
-
-    def should_cancel(self) -> bool:
-        return self._cancel.is_set()
-
-    def should_pause(self) -> bool:
-        return self._pause.is_set()
-
-    def bind(self, process: subprocess.Popen) -> None:
-        """认领一个刚起的子进程；如果已经喊停了就当场收掉它。"""
-        with self._lock:
-            self._processes.add(process)
-            stopping = self._cancel.is_set() or self._pause.is_set()
-        if stopping:
-            _terminate(process)
-
-    def unbind(self, process: subprocess.Popen) -> None:
-        with self._lock:
-            self._processes.discard(process)
-
-    def _stop_processes(self) -> None:
-        with self._lock:
-            targets = list(self._processes)
-        for process in targets:
-            _terminate(process)
 
 
 def _base_python(profile: RuntimeProfile) -> Path:
@@ -599,108 +457,10 @@ def _base_python(profile: RuntimeProfile) -> Path:
     return Path(sys.executable)
 
 
-def _watch_stop(
-    process: subprocess.Popen,
-    should_cancel: Callable[[], bool] | None,
-    should_pause: Callable[[], bool] | None,
-) -> tuple[threading.Thread | None, list[RuntimeStopped]]:
-    """另开一个线程盯两个回调，命中就收掉子进程。
-
-    只靠「每读一行查一次」是不够的：pip 下载轮子时会闷头好几秒甚至几分钟不输出，
-    这时候点「暂停 / 取消」在界面看来就是完全没反应。这里 0.2 秒查一次。
-    """
-    if should_cancel is None and should_pause is None:
-        return None, []
-    hits: list[RuntimeStopped] = []
-
-    def poll() -> None:
-        while process.poll() is None:
-            stopped = _stop_reason(should_cancel, should_pause)
-            if stopped is not None:
-                hits.append(stopped)
-                _terminate(process)
-                return
-            time.sleep(_STOP_POLL_SEC)
-
-    thread = threading.Thread(target=poll, name="runtime-stop-watch", daemon=True)
-    thread.start()
-    return thread, hits
-
-
-def _stream(
-    command: list[str],
-    *,
-    log: Path,
-    on_line: Callable[[str], None] | None = None,
-    should_cancel: Callable[[], bool] | None = None,
-    should_pause: Callable[[], bool] | None = None,
-    control: Control | None = None,
-) -> int:
-    """跑一条命令，把 stdout+stderr 逐行写进日志并回调；返回退出码。
-
-    读每一行都查一次两个回调。传了 `control` 就把它绑到子进程上——页面按「暂停 /
-    取消」时由 `Control` 直接收掉子进程，**不需要**另外开线程轮询；只给老式回调
-    （测试与旧调用方）时才开那个 `_STOP_POLL_SEC` 的守护线程。
-    """
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a", encoding="utf-8", errors="replace") as handle:
-        handle.write("$ " + " ".join(command) + "\n")
-        handle.flush()
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        if control is not None:
-            control.bind(process)
-            watch, hits = None, []
-        else:
-            watch, hits = _watch_stop(process, should_cancel, should_pause)
-        try:
-            if process.stdout is not None:
-                for line in process.stdout:
-                    text = line.rstrip("\r\n")
-                    handle.write(text + "\n")
-                    handle.flush()
-                    _emit(on_line, text)
-                    stopped = _stop_reason(should_cancel, should_pause)
-                    if stopped is not None:
-                        if stopped not in hits:
-                            hits.append(stopped)
-                        _terminate(process)
-                        break
-            process.wait()
-            if hits:
-                raise hits[0]
-        finally:
-            if control is not None:
-                control.unbind(process)
-            if watch is not None:
-                watch.join(timeout=5)
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                process.wait()
-    return int(process.returncode or 0)
-
-
 def _packages(profile: RuntimeProfile) -> tuple[str, ...]:
     """profile 的包清单，去掉空白项。"""
     raw = getattr(profile, "packages", ()) or ()
     return tuple(text for text in (str(item).strip() for item in raw) if text)
-
-
-def _write_requirements(path: Path, packages: tuple[str, ...]) -> None:
-    """把包清单写成 `requirements.txt`（空清单也写一个空文件）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(packages) + ("\n" if packages else ""), encoding="utf-8")
 
 
 def _write_marker(profile_id: str) -> None:
@@ -730,58 +490,6 @@ def _clear_pending(profile_id: str, *, system: bool = False) -> None:
         pass
 
 
-def _pip_command(
-    python: Path,
-    profile: RuntimeProfile,
-    requirements: Path,
-    *,
-    upgrade: bool = False,
-    index_url: str = "",
-    urls: Iterable[str] = (),
-) -> list[str]:
-    """拼 `pip install` 命令：索引 / 镜像 / 代理都交给 pip 自己按环境变量处理。
-
-    profile 自带 `index_url` 的以 profile 为准（尊重包来源的特殊要求），
-    否则用页面设置里选的安装源（官方源为空串 = 用 pip 默认）。
-    `urls` 是显式直链（GitHub 资源换成镜像后的地址），pip 会优先用它们。
-    """
-    command = [str(python), "-m", "pip", "install", "--progress-bar", "off"]
-    if upgrade:
-        command.append("--upgrade")
-    index = _text(getattr(profile, "index_url", "")) or _text(index_url)
-    if index:
-        command += ["--index-url", index]
-    for extra in getattr(profile, "extra_index", ()) or ():
-        extra_text = _text(extra)
-        if extra_text:
-            command += ["--extra-index-url", extra_text]
-    command += [_text(url) for url in urls or () if _text(url)]
-    command += ["-r", str(requirements)]
-    return command
-
-
-def _github_retry(
-    log: Path,
-    *,
-    prefixes: Iterable[str],
-    rebuild: Callable[[list[str]], list[str]],
-    on_line: Callable[[str], None] | None = None,
-) -> list[str] | None:
-    """pip 失败后：把日志里的 GitHub 直链按「GitHub 下载源」换成镜像地址，重拼一条命令。
-
-    `rebuild(镜像直链列表)` 由调用方给出（ensure / ensure_system / install_wheels 的命令
-    形状各不相同）；没换出地址就返回 None，调用方照旧报错。换成官方（空前缀）不算重试。
-    """
-    text = _read_log(log)
-    if "github.com" not in text and "githubusercontent.com" not in text:
-        return None
-    mirrored = mirror_github_urls(github_asset_urls(text), prefixes)
-    if not mirrored:
-        return None
-    _emit(on_line, "改用 GitHub 下载源重试：" + "、".join(mirrored))
-    return rebuild(mirrored)
-
-
 def ensure(
     profile: RuntimeProfile,
     *,
@@ -793,12 +501,12 @@ def ensure(
     index_url: str = "",
     github_prefixes: Iterable[str] = (),
 ) -> Path:
-    """建 venv → 写 requirements.txt → `pip install -r`；返回 venv 里的解释器路径。
+    """在 profile 自己的 venv 里装依赖（没有就先建），返回 venv 里的解释器。
 
-    只负责执行，不负责询问用户；失败抛 `RuntimeError_`，被叫停抛 `RuntimeStopped`，
-    输出（含 pip 的）追加进 `log_file()`。传 `control` 时由它说了算（并负责收掉
-    pip 子进程）。`github_prefixes` 是「GitHub 下载源」的前缀链：pip 卡在
-    github.com 上时会用镜像地址重试一次。
+    只负责执行，不负责询问用户：失败抛 `RuntimeError_`，被叫停抛 `RuntimeStopped`。
+    真正干活的引擎在 core（core 不知道运行环境放哪儿，所以这里把路径算好递过去）；
+    开工前写「正在安装」的标记（`_write_pending`），装完写 `installed.json` 并抹掉标记。
+    中途失败**故意不清标记**，页面据此显示「未完成（上次安装中断）」。
     """
     if control is not None:
         should_cancel, should_pause = control.should_cancel, control.should_pause
@@ -806,224 +514,27 @@ def ensure(
     if not profile_id:
         raise RuntimeError_("运行环境 profile 缺少 id")
     _check_stop(should_cancel, should_pause)
-
-    packages = _packages(profile)
-    _write_pending(profile_id, packages)
-    python = python_path(profile_id)
-    requirements = requirements_path(profile_id)
-    log = log_file(profile_id)
-
-    if not python.exists():
-        venv = venv_dir(profile_id)
-        venv.parent.mkdir(parents=True, exist_ok=True)
-        base = _base_python(profile)
-        _emit(on_line, f"创建运行环境：{venv}")
-        code = _stream(
-            [str(base), "-m", "venv", str(venv)],
-            log=log,
+    try:
+        return _engine.ensure(
+            python_path(profile_id),
+            packages=_packages(profile),
+            log=log_file(profile_id),
+            requirements=requirements_path(profile_id),
+            venv=venv_dir(profile_id),
+            base_python=_base_python(profile),
+            index_url=_text(getattr(profile, "index_url", "")) or _text(index_url),
+            extra_index=_items(getattr(profile, "extra_index", ())),
+            upgrade=upgrade,
+            github_prefixes=github_prefixes,
             on_line=on_line,
             should_cancel=should_cancel,
             should_pause=should_pause,
             control=control,
+            on_start=lambda packages: _write_pending(profile_id, tuple(packages)),
+            on_finish=lambda _python: _finish(profile_id),
         )
-        if code != 0 or not python.exists():
-            raise RuntimeError_(f"创建运行环境失败（退出码 {code}），详见 {log}")
-    _check_stop(should_cancel, should_pause)
-
-    _write_requirements(requirements, packages)
-    if not packages:
-        _write_marker(profile_id)
-        _clear_pending(profile_id)
-        return python
-
-    command = _pip_command(python, profile, requirements, upgrade=upgrade, index_url=index_url)
-
-    _emit(on_line, "安装依赖：" + "、".join(packages))
-    code = _stream(
-        command,
-        log=log,
-        on_line=on_line,
-        should_cancel=should_cancel,
-        should_pause=should_pause,
-        control=control,
-    )
-    if code != 0:
-        retry = _github_retry(
-            log,
-            prefixes=github_prefixes,
-            on_line=on_line,
-            rebuild=lambda urls: _pip_command(
-                python, profile, requirements, upgrade=upgrade, index_url=index_url, urls=urls
-            ),
-        )
-        if retry is not None:
-            code = _stream(
-                retry,
-                log=log,
-                on_line=on_line,
-                should_cancel=should_cancel,
-                should_pause=should_pause,
-                control=control,
-            )
-    if code != 0:
-        raise RuntimeError_(
-            f"安装依赖失败（退出码 {code}），详见 {log}" + _network_hint(log) + _long_path_hint(log)
-        )
-    _check_stop(should_cancel, should_pause)
-    _write_marker(profile_id)
-    _clear_pending(profile_id)
-    return python
-
-
-def _dist_name(text: str) -> str:
-    """把发行版名或需求串归一化成 PEP 503 形式（`llama_cpp_python>=0.3` → `llama-cpp-python`）。"""
-    head = re.split(r"[<>=!~;\[\]()\s]", str(text).strip(), maxsplit=1)[0]
-    return re.sub(r"[-_.]+", "-", head).lower()
-
-
-def _wheel_dist_names(wheels: Iterable[Path]) -> set[str]:
-    """这些 whl 各自提供哪个发行版（用来把清单里已经被 whl 覆盖的那条去掉）。"""
-    names: set[str] = set()
-    for path in wheels:
-        head = path.name[:-4] if path.name.lower().endswith(".whl") else path.name
-        names.add(_dist_name(head.split("-")[0]))
-    return names
-
-
-def _read_log(log: Path) -> str:
-    """读一段安装日志；读不到就当空的。"""
-    try:
-        return log.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _network_hint(log: Path) -> str:
-    """pip 失败时看一眼日志：轮子挂在 github.com 上而当前网络连不上，是很常见的一种。"""
-    text = _read_log(log)
-    if "github.com" not in text or "TimeoutError" not in text:
-        return ""
-    return "｜提示：这个环境的轮子托管在 github.com 上，当前网络连不上——可在设置里把「GitHub 下载源」换成镜像，或用「本地 whl…」装一份离线轮子"
-
-
-def _long_path_hint(log: Path) -> str:
-    """pip 说「`[Errno 2] No such file or directory`」时，多半是路径太长顶破了 Windows 上限。
-
-    报错里那个「找不到」的文件其实是 pip 正要写出来的**包内文件**（例如 torch 里长达
-    137 字符的 CUDA 头文件），Windows 上超限后 `makedirs` 就抛 `FileNotFoundError`，
-    于是看起来像是「源里的包不完整」。
-    """
-    text = _read_log(log)
-    if "No such file or directory" not in text or "site-packages" not in text:
-        return ""
-    return (
-        f"｜提示：安装路径太长，顶破了 Windows 单条路径 {_WINDOWS_PATH_LIMIT} 字符的上限"
-        "（报错里那个「找不到」的文件其实是 pip 正要写出来的包内文件）。"
-        "在模型插件设置里把「模型目录」换到更浅的位置，"
-        "或用管理员权限开启系统「长路径支持」后重启程序"
-    )
-
-
-#: pip 输出里 GitHub 资源的直链（wheel / sdist / 压缩包）
-_GITHUB_ASSET = re.compile(
-    r"https?://(?:[A-Za-z0-9._-]+\.)?(?:github\.com|codeload\.github\.com|githubusercontent\.com)"
-    r"/\S+?\.(?:whl|zip|tar\.gz)",
-    re.IGNORECASE,
-)
-
-
-def github_asset_urls(text: str, limit: int = 8) -> list[str]:
-    """从 pip 输出里挑出 GitHub 上的资源直链（就是它没能下载下来的那些）。"""
-    found: list[str] = []
-    for match in _GITHUB_ASSET.finditer(str(text or "")):
-        url = match.group(0).rstrip(".,;)'\"")
-        if url and url not in found:
-            found.append(url)
-        if len(found) >= max(1, int(limit)):
-            break
-    return found
-
-
-def mirror_github_urls(urls: Iterable[str], prefixes: Iterable[str]) -> list[str]:
-    """按「GitHub 下载源」把直链换成镜像前缀地址；空白前缀（官方）跳过。"""
-    result: list[str] = []
-    for prefix in prefixes or ():
-        clean = _text(prefix).rstrip("/")
-        if not clean:
-            continue
-        for url in urls or ():
-            target = _text(url)
-            candidate = f"{clean}/{target}"
-            if target and candidate not in result:
-                result.append(candidate)
-    return result
-
-
-def _wheel_filename_parts(path: Path) -> tuple[str, str, str] | None:
-    """拆 wheel 文件名（`发行版-版本-python-abi-平台.whl`）→ (python, abi, 平台)。"""
-    name = path.name
-    if name.lower().endswith(".whl"):
-        name = name[:-4]
-    parts = name.split("-")
-    if len(parts) < 5:
-        return None
-    return parts[-3], parts[-2], parts[-1]
-
-
-def _python_tag_ok(tag: str, abi: str, major: int, minor: int) -> bool:
-    """python 标签认不认：`py3` / `py312` / `cp312`，以及低版本的 `abi3` 包。"""
-    for token in str(tag).split("."):
-        if token in ("py3", f"py{major}", f"py{major}{minor}", f"cp{major}{minor}"):
-            return True
-        if abi == "abi3" and token.startswith(f"cp{major}") and token[3:].isdigit() and int(token[3:]) <= minor:
-            return True
-    return False
-
-
-def _platform_tag_ok(tag: str) -> bool:
-    """平台标签认不认：`any`，或者和这台机器对得上（只看大类，架构细节交给 pip）。"""
-    bits = 64 if sys.maxsize > 2**32 else 32
-    for token in str(tag).split("."):
-        if token == "any":
-            return True
-        if sys.platform.startswith("win"):
-            if token == ("win_amd64" if bits == 64 else "win32"):
-                return True
-        elif sys.platform == "darwin":
-            if token.startswith("macosx") or token == "universal2":
-                return True
-        elif sys.platform.startswith("linux"):
-            if token.startswith(("linux", "manylinux", "musllinux")):
-                return True
-    return False
-
-
-def check_wheels(wheels: Iterable[str]) -> list[str]:
-    """查一遍这些 whl 能不能装到本机上，返回说人话的问题清单（空 = 没看出问题）。
-
-    只看文件名里的 python / 平台标签——真正的兼容性还是以 pip 的判断为准。
-    """
-    version = sys.version_info
-    major, minor = version[0], version[1]
-    problems: list[str] = []
-    for item in wheels:
-        path = Path(str(item))
-        if not path.exists():
-            problems.append(f"{path.name}：文件不存在")
-            continue
-        if path.suffix.lower() != ".whl":
-            problems.append(f"{path.name}：不是 .whl 文件")
-            continue
-        parts = _wheel_filename_parts(path)
-        if parts is None:
-            problems.append(f"{path.name}：文件名不像 wheel（发行版-版本-python-abi-平台.whl）")
-            continue
-        tag_py, tag_abi, tag_platform = parts
-        if not _python_tag_ok(tag_py, tag_abi, major, minor):
-            problems.append(f"{path.name}：这个包是给 Python {tag_py} 的，装不进 Python {major}.{minor}")
-        if not _platform_tag_ok(tag_platform):
-            problems.append(f"{path.name}：这个包是给 {tag_platform} 平台的，装不进这台机器（{sys.platform}）")
-    return problems
+    except (_engine.PipStopped, _engine.PipError) as exc:
+        raise _convert(exc) from exc
 
 
 def install_wheels(
@@ -1038,105 +549,38 @@ def install_wheels(
     upgrade: bool = False,
     github_prefixes: Iterable[str] = (),
 ) -> Path:
-    """用本地 `.whl` 装这个运行环境：建 venv（没有就建）→ `pip install <whl…>` → 写完成标记。
+    """用本地 whl 装这个 profile（没有 venv 就先建）；返回解释器。
 
-    和 `ensure()` 的区别只在「装什么」：装传进来的这些文件，外加清单里**没被这些 whl 覆盖**
-    的包（比如 `-gpu` 环境的 `nvidia-*-cu12`，它们不在 GitHub 上、能从镜像拉），这样离线装完
-    就是一个能跑的环境；剩下的依赖 pip 会按 `index_url` 自己去补。离线 / 内网拿 whl 装就靠它。
-    清单里剩下的包若也卡在 github.com 上，会按 `github_prefixes`（GitHub 下载源）重试一次。
+    装的是这些轮子，外加 profile 里**没被它们覆盖**的包（这样离线也装得完整）；
+    引擎在 core，这里同样只补路径与留档（开工写标记，装完写 `installed.json`）。
     """
     if control is not None:
         should_cancel, should_pause = control.should_cancel, control.should_pause
     profile_id = _text(getattr(profile, "id", ""))
     if not profile_id:
         raise RuntimeError_("运行环境 profile 缺少 id")
-    files = [Path(str(item)) for item in wheels]
-    if not files:
-        raise RuntimeError_("没有选任何 whl 文件")
-    missing = [str(path) for path in files if not path.exists()]
-    if missing:
-        raise RuntimeError_("找不到这些文件：" + "、".join(missing))
     _check_stop(should_cancel, should_pause)
-
-    _write_pending(profile_id, tuple(str(path) for path in files))
-    python = python_path(profile_id)
-    log = log_file(profile_id)
-
-    if not python.exists():
-        venv = venv_dir(profile_id)
-        venv.parent.mkdir(parents=True, exist_ok=True)
-        base = _base_python(profile)
-        _emit(on_line, f"创建运行环境：{venv}")
-        code = _stream(
-            [str(base), "-m", "venv", str(venv)],
-            log=log,
+    try:
+        return _engine.install_wheels(
+            python_path(profile_id),
+            [str(item) for item in wheels or ()],
+            packages=_packages(profile),
+            log=log_file(profile_id),
+            venv=venv_dir(profile_id),
+            base_python=_base_python(profile),
+            index_url=_text(getattr(profile, "index_url", "")) or _text(index_url),
+            extra_index=_items(getattr(profile, "extra_index", ())),
+            upgrade=upgrade,
+            github_prefixes=github_prefixes,
             on_line=on_line,
             should_cancel=should_cancel,
             should_pause=should_pause,
             control=control,
+            on_start=lambda files: _write_pending(profile_id, tuple(files)),
+            on_finish=lambda _python: _finish(profile_id),
         )
-        if code != 0 or not python.exists():
-            raise RuntimeError_(f"创建运行环境失败（退出码 {code}），详见 {log}")
-    _check_stop(should_cancel, should_pause)
-
-    command = [str(python), "-m", "pip", "install", "--progress-bar", "off"]
-    if upgrade:
-        command.append("--upgrade")
-    index = _text(getattr(profile, "index_url", "")) or _text(index_url)
-    if index:
-        command += ["--index-url", index]
-    for extra in getattr(profile, "extra_index", ()) or ():
-        extra_text = _text(extra)
-        if extra_text:
-            command += ["--extra-index-url", extra_text]
-    provided = _wheel_dist_names(files)
-    leftover = tuple(item for item in _packages(profile) if _dist_name(item) not in provided)
-    head = list(command)
-    command += [str(path) for path in files]
-    command += list(leftover)
-
-    _emit(on_line, "从本地 whl 安装：" + "、".join(path.name for path in files))
-    if leftover:
-        _emit(on_line, "清单里没被 whl 覆盖的包一起装：" + "、".join(leftover))
-    code = _stream(
-        command,
-        log=log,
-        on_line=on_line,
-        should_cancel=should_cancel,
-        should_pause=should_pause,
-        control=control,
-    )
-    if code != 0:
-        retry = _github_retry(
-            log,
-            prefixes=github_prefixes,
-            on_line=on_line,
-            rebuild=lambda urls: [
-                *head,
-                *[str(path) for path in files],
-                *list(leftover),
-                *urls,
-            ],
-        )
-        if retry is not None:
-            code = _stream(
-                retry,
-                log=log,
-                on_line=on_line,
-                should_cancel=should_cancel,
-                should_pause=should_pause,
-                control=control,
-            )
-    if code != 0:
-        raise RuntimeError_(
-            f"从本地 whl 安装失败（退出码 {code}），详见 {log}"
-            + _network_hint(log)
-            + _long_path_hint(log)
-        )
-    _check_stop(should_cancel, should_pause)
-    _write_marker(profile_id)
-    _clear_pending(profile_id)
-    return python
+    except (_engine.PipStopped, _engine.PipError) as exc:
+        raise _convert(exc) from exc
 
 
 def ensure_system(
@@ -1153,8 +597,9 @@ def ensure_system(
 ) -> Path:
     """P4：把 profile 的依赖装进**程序自己的解释器**（不建 venv）；返回目标解释器。
 
-    和 `ensure()` 一样只负责执行：是否安装由页面二次确认后决定。
-    清单留档写到 `system_requirements_path()`，输出追加进 `system_log_file()`。
+    和 `ensure()` 一样只负责执行：是否安装由页面二次确认后决定。清单留档写到
+    `system_requirements_path()`，输出追加进 `system_log_file()`。引擎在 core
+    （`ensure_packages`），失败仍以「装进程序环境失败」开头，页面照旧认得出。
     """
     if control is not None:
         should_cancel, should_pause = control.should_cancel, control.should_pause
@@ -1168,53 +613,43 @@ def ensure_system(
         raise RuntimeError_(f"程序解释器不存在：{target}")
 
     packages = _packages(profile)
-    _write_pending(profile_id, packages, system=True)
     requirements = system_requirements_path(profile_id)
-    _write_requirements(requirements, packages)
+    _write_pending(profile_id, packages, system=True)
     if not packages:
+        _engine.write_requirements(requirements, packages)
         _emit(on_line, "清单为空，没有需要安装的包。")
         _clear_pending(profile_id, system=True)
         return target
 
     log = system_log_file(profile_id)
-    command = _pip_command(target, profile, requirements, upgrade=upgrade, index_url=index_url)
     _emit(on_line, "安装进程序环境：" + "、".join(packages))
     _emit(on_line, f"目标解释器：{target}")
-    code = _stream(
-        command,
-        log=log,
-        on_line=on_line,
-        should_cancel=should_cancel,
-        should_pause=should_pause,
-        control=control,
-    )
-    if code != 0:
-        retry = _github_retry(
-            log,
-            prefixes=github_prefixes,
+    try:
+        result = _engine.ensure_packages(
+            target,
+            packages=packages,
+            log=log,
+            requirements=requirements,
+            index_url=_text(getattr(profile, "index_url", "")) or _text(index_url),
+            extra_index=_items(getattr(profile, "extra_index", ())),
+            upgrade=upgrade,
+            github_prefixes=github_prefixes,
             on_line=on_line,
-            rebuild=lambda urls: _pip_command(
-                target, profile, requirements, upgrade=upgrade, index_url=index_url, urls=urls
-            ),
+            should_cancel=should_cancel,
+            should_pause=should_pause,
+            control=control,
         )
-        if retry is not None:
-            code = _stream(
-                retry,
-                log=log,
-                on_line=on_line,
-                should_cancel=should_cancel,
-                should_pause=should_pause,
-                control=control,
-            )
-    if code != 0:
+    except _engine.PipStopped as exc:
+        raise _convert(exc) from exc
+    except _engine.PipError as exc:
         raise RuntimeError_(
-            f"装进程序环境失败（退出码 {code}），详见 {log}"
-            + _network_hint(log)
-            + _long_path_hint(log)
-        )
+            f"装进程序环境失败：{exc}"
+            + _engine.network_hint(log)
+            + _engine.long_path_hint(log)
+        ) from exc
     _check_stop(should_cancel, should_pause)
     _clear_pending(profile_id, system=True)
-    return target
+    return result
 
 
 def uninstall_system(
@@ -1300,3 +735,68 @@ def clear_logs(profile_id: str, *, system: bool = False) -> None:
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+# ------------------------------------------------------------------ 引擎转发
+
+#: 建 venv、跑 pip、GitHub 镜像重试、whl 校验这些通用件都在 core（`app.core.pip`），
+#: 插件经 `app.sdk.pip` 用同一份实现（以前这里各抄了一份，两边得一起改）。
+#: 下面只做两件事：把 core 的异常翻成插件自己的 `RuntimeStopped` / `RuntimeError_`
+#: （页面按这两个类型分流），以及把与 profile 无关的纯工具直接指向 core。
+Control = _engine.Control
+check_wheels = _engine.check_wheels
+package_versions = _engine.package_versions
+github_asset_urls = _engine.github_asset_urls
+mirror_github_urls = _engine.mirror_github_urls
+
+
+def _emit(on_line: Callable[[str], None] | None, text: str) -> None:
+    """把一行输出转给调用方（回调自己抛异常不算安装失败，和 core 一致）。"""
+    _engine.emit(on_line, text)
+
+
+def _convert(exc: Exception) -> RuntimeError_:
+    """core 的安装异常 → 插件自己的异常类型（页面只认这两个）。"""
+    if isinstance(exc, _engine.PipStopped):
+        return RuntimeStopped(str(exc), paused=bool(getattr(exc, "paused", False)))
+    return RuntimeError_(str(exc))
+
+
+def _stream(
+    command: Sequence[str],
+    *,
+    log: Path,
+    on_line: Callable[[str], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    should_pause: Callable[[], bool] | None = None,
+    control: Control | None = None,
+) -> int:
+    """跑一条命令并逐行回调（core 的 `stream`），被叫停按插件类型抛出。"""
+    try:
+        return _engine.stream(
+            command,
+            log=log,
+            on_line=on_line,
+            should_cancel=should_cancel,
+            should_pause=should_pause,
+            control=control,
+        )
+    except (_engine.PipStopped, _engine.PipError) as exc:
+        raise _convert(exc) from exc
+
+
+def _check_stop(
+    should_cancel: Callable[[], bool] | None,
+    should_pause: Callable[[], bool] | None = None,
+) -> None:
+    """命中「取消 / 暂停」就抛 `RuntimeStopped`（取消优先，和 core 一个判序）。"""
+    if should_cancel is not None and should_cancel():
+        raise RuntimeStopped("安装已取消")
+    if should_pause is not None and should_pause():
+        raise RuntimeStopped("安装已暂停", paused=True)
+
+
+def _finish(profile_id: str) -> None:
+    """装完的留档：写 `installed.json`，再抹掉「正在安装」的标记。"""
+    _write_marker(profile_id)
+    _clear_pending(profile_id)

@@ -1,7 +1,10 @@
-"""插件的界面支持：全站共用的间距、打开文件、定位文件、滚动区透明。
+"""插件的界面支持：全站共用的间距、打开文件、定位文件、滚动区透明、下载器视图。
 
 插件只依赖 `app.sdk`：这里是「按程序的样子搭界面」所需的最小集合，
 Qt 相关实现都在函数内部延迟导入，导入本模块不会拉起 Qt。
+
+下载器 / pip 安装器那套视图也在这里转发（`download_list` / `add_download_dialog`）：实现
+在程序本体，插件不必自己画一遍下载列表，也就能和「下载管理」页长得一样。
 """
 
 from __future__ import annotations
@@ -23,33 +26,45 @@ __all__ = [
     "PANEL_MARGINS",
     "ROW_SPACING",
     "SCROLL_GUTTER",
+    "AddDownloadDialog",
+    "DownloadListView",
+    "PipTaskView",
+    "add_download_dialog",
     "ask_open_with",
     "clear_scroll_background",
+    "download_list",
     "open_default",
     "open_page",
     "open_with_program",
     "notify_items_changed",
+    "pip_task_list",
     "reveal",
     "simple_display",
     "simple_mode",
 ]
 
-#: 按钮与卡片类按需导入：插件可以直接写 `ui.IconTextButton(...)` / `ui.ClickCard(...)`，
-#: 导入本模块仍然不拉起 Qt。
-_LAZY_EXPORTS = (
-    "ClickCard",
-    "IconTextButton",
-    "IconTextPrimaryButton",
-    "simple_display",
-    "simple_mode",
-)
+#: 控件按需导入：插件可以直接写 `ui.IconTextButton(...)` / `ui.download_list(...)`，
+#: 导入本模块仍然不拉起 Qt。值是控件所在的模块路径（相对 `app.sdk`）。
+_LAZY_EXPORTS = {
+    "ClickCard": "..ui.framework",
+    "IconTextButton": "..ui.framework",
+    "IconTextPrimaryButton": "..ui.framework",
+    "simple_display": "..ui.framework",
+    "simple_mode": "..ui.framework",
+    # 下载器 / pip 安装器的视图：实现放在程序本体（`app.ui.components`），插件经 SDK 取用，
+    # UI 工具库再原样转出去 —— 于是程序与插件的下载列表长得一样、行为也一样。
+    "AddDownloadDialog": "..ui.components.download_view",
+    "DownloadListView": "..ui.components.download_view",
+    "PipTaskView": "..ui.components.pip_view",
+}
 
 
 def __getattr__(name: str):
-    if name in _LAZY_EXPORTS:
-        from ..ui import framework
+    target = _LAZY_EXPORTS.get(name)
+    if target:
+        from importlib import import_module
 
-        return getattr(framework, name)
+        return getattr(import_module(target, __package__), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 #: 间距是全站唯一的来源：程序页面与插件界面都从这里取，不各自写死数字。
@@ -138,3 +153,58 @@ def notify_items_changed() -> None:
     from ..core.runtime.signals import signalBus
 
     signalBus.itemsChanged.emit()
+
+
+# ------------------------------------------------------------------ 下载器视图
+def download_list(*, provider=None, reader=None, parent=None):
+    """下载任务列表控件（「下载管理」页用的那一份）。
+
+    `provider` 是「建 / 取队列」的回调，`reader` 是「只读队列」的回调；都不给就挂程序本体
+    共享的那条下载队列（`app.sdk.download` 用的就是它）。插件多数时候只要：
+
+        view = ui.download_list()
+    """
+    from ..ui.components.download_view import DownloadListView
+
+    return DownloadListView(parent, provider=provider, reader=reader)
+
+
+def add_download_dialog(
+    parent=None,
+    *,
+    title: str = "新建下载",
+    urls=(),
+    name: str = "",
+    directory: str = "",
+    hint: str = "",
+):
+    """「新建下载」对话框：一行一个地址，开始前先选保存位置。
+
+    用法（`dialog.exec()` 为真再取 `dialog.urls()` / `dialog.target()`）：
+
+        dialog = ui.add_download_dialog(self, urls=["https://example.com/a.bin"])
+        if dialog.exec():
+            ...
+    """
+    from ..ui.components.download_view import AddDownloadDialog
+
+    return AddDownloadDialog(
+        parent,
+        directory=directory,
+        title=title,
+        urls=urls,
+        name=name,
+        hint=hint,
+    )
+
+
+def pip_task_list(*, provider=None, reader=None, parent=None):
+    """pip 安装任务列表控件：装依赖时把进度 / 日志尾巴摆出来，能暂停 / 取消。
+
+    插件发起安装（`app.sdk.pip.install`）之后通常就把它放进自己的页面：
+
+        view = ui.pip_task_list()
+    """
+    from ..ui.components.pip_view import PipTaskView
+
+    return PipTaskView(parent, provider=provider, reader=reader)

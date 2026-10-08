@@ -417,6 +417,30 @@ def fit_columns(
             table.setColumnWidth(column, table.columnWidth(column) + int(available * weight))
 
 
+def fill_columns(
+    table: TableWidget,
+    *,
+    fixed: Mapping[int, int],
+    flexible: Sequence[int],
+    min_width: int = 110,
+) -> None:
+    """把固定列设成给定宽度，剩余宽度平分给可伸缩的文本列（铺满整张表）。
+
+    和 `fit_columns()` 的分工：那个是「按内容量宽」，量出来的总和可能远小于表格宽度
+    （右侧留一大条空白）也可能远大于它（横向溢出被切掉），而且在控件拿到真实宽度之前
+    调用等于没生效。任务列表这种列少、宽度可控的表格用这个更稳 —— 只要表格宽度变了就
+    重排一次（见 `DownloadListView._fit_columns`）。
+    """
+    width = table.viewport().width()
+    if width <= 0:
+        return
+    share = max(min_width, (width - sum(fixed.values())) // max(1, len(flexible)))
+    for column, value in fixed.items():
+        table.setColumnWidth(column, value)
+    for column in flexible:
+        table.setColumnWidth(column, share)
+
+
 def wrap_table(
     table: TableWidget,
     *,
@@ -522,6 +546,7 @@ __all__ = [
     "check_cell",
     "prepare_table",
     "fit_columns",
+    "fill_columns",
     "wrap_table",
     "fit_table_height",
     "match_filters",

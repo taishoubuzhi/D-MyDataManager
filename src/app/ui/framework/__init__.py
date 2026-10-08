@@ -37,7 +37,7 @@ from .feedback import (
 )
 from .page import Page, PageBase, ScrollPage
 from .sections import ClickCard, PageHeader, caption, empty_state, page_header, panel_card, section_card, toolbar
-from .settings_cards import NumberSettingCard
+from .settings_cards import ActionCard, NumberSettingCard
 from .tooltips import (
     HINT_BADGE_SIZE,
     HINT_COLUMNS,
@@ -119,6 +119,7 @@ __all__ = [
     "StatusBadge",
     "IconTextButton",
     "IconTextPrimaryButton",
+    "ActionCard",
     "NumberSettingCard",
     "Page",
     "PageBase",

@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import json
 import os
@@ -25,6 +26,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from app.core.pip import engine as pip_engine
 from tests.harness import ROOT, IsolatedCase
 
 PLUGIN_DIR = ROOT / "plugins" / "lib.model"
@@ -156,6 +158,11 @@ class ModelPathsCase(IsolatedCase):
         self.addCleanup(shutil.rmtree, self.models, ignore_errors=True)
         self.addCleanup(shutil.rmtree, self.legacy, ignore_errors=True)
 
+    def _seed_legacy(self, content: str = "{}") -> None:
+        """在旧位置放一份登记表：目录要自己先建出来，否则写入会抛 FileNotFoundError。"""
+        self.legacy.mkdir(parents=True, exist_ok=True)
+        (self.legacy / "registry.json").write_text(content, encoding="utf-8")
+
     def test_defaults_to_hidden_dir_under_program_root(self) -> None:
         """不设置就用程序目录下的 `.models`，而不是资源文件夹下的 `models`。"""
         self.assertEqual(model_paths.default_models_root(), self.models)
@@ -226,7 +233,7 @@ class ModelPathsCase(IsolatedCase):
     def test_prefers_new_location_once_it_exists(self) -> None:
         """两个位置都有时用新位置，且不碰旧位置里的东西。"""
         self.legacy.mkdir(parents=True, exist_ok=True)
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
         self.models.mkdir(parents=True, exist_ok=True)
         self.assertEqual(model_paths.models_root(), self.models)
         self.assertTrue((self.legacy / "registry.json").is_file())
@@ -234,7 +241,7 @@ class ModelPathsCase(IsolatedCase):
 
     def test_keeps_legacy_and_moves_in_background_when_rename_fails(self) -> None:
         """改名搬不动（跨盘 / 有程序占着）：先用旧位置，后台再整份复制。"""
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
         with mock.patch.object(Path, "rename", side_effect=OSError("busy")), mock.patch.object(
             model_paths, "_start_background_migration"
         ) as started:
@@ -254,7 +261,7 @@ class ModelPathsCase(IsolatedCase):
 
     def test_move_models_dir_refuses_non_empty_target(self) -> None:
         """目标里已经有东西：不合并，说明原因，来源一个文件都不动。"""
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
         self.models.mkdir(parents=True, exist_ok=True)
         (self.models / "keep.txt").write_text("x", encoding="utf-8")
         result = model_paths.move_models_dir(self.legacy, self.models)
@@ -265,7 +272,7 @@ class ModelPathsCase(IsolatedCase):
 
     def test_move_models_dir_cleans_up_half_copied_target(self) -> None:
         """改名与复制都不成：半份新目录清掉，原目录原样留着，并把原因带出来。"""
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
         with mock.patch.object(Path, "rename", side_effect=OSError("busy")), mock.patch.object(
             model_paths.shutil, "copytree", side_effect=OSError("no space")
         ):
@@ -278,7 +285,7 @@ class ModelPathsCase(IsolatedCase):
 
     def test_move_models_dir_cleans_up_when_landing_fails(self) -> None:
         """复制到了临时目录、但落位时目标被占住：临时目录清掉，来源不动。"""
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
 
         def fake_copy(source, target, **kwargs):
             Path(target).mkdir(parents=True, exist_ok=True)
@@ -296,7 +303,7 @@ class ModelPathsCase(IsolatedCase):
 
     def test_background_migration_reports_what_it_could_not_do(self) -> None:
         """后台搬移的三种结局都要能告诉用户：成功 / 搬完但没删干净 / 根本没搬动。"""
-        (self.legacy / "registry.json").write_text("{}", encoding="utf-8")
+        self._seed_legacy()
 
         # 1) 复制失败：仍用旧位置，报「没能搬走」并带上原因
         failed = model_paths.MoveResult(False, str(self.legacy), "复制失败：no space")
@@ -451,7 +458,7 @@ class ModelRuntimeCase(IsolatedCase):
             seen.append(bool(payload.get("packages")) and int(payload.get("pid") or 0) > 0)
             return 0
 
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             runtime.ensure(profile)
 
         self.assertEqual(seen, [True, True])
@@ -469,7 +476,7 @@ class ModelRuntimeCase(IsolatedCase):
         def fake(command, *, log, on_line=None, should_cancel=None, should_pause=None, control=None):
             return 1
 
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             with self.assertRaises(runtime.RuntimeError_):
                 runtime.ensure(profile)
 
@@ -505,7 +512,7 @@ class SystemEnvCase(IsolatedCase):
     """P4 程序环境安装模式：`ensure_system()` 的命令、留档与失败处理。"""
 
     def _capture(self, code: int = 0):
-        """替换 `_stream`，记录命令与日志路径，不真的跑 pip。"""
+        """替换 `stream`，记录命令与日志路径，不真的跑 pip。"""
         calls: list[dict] = []
 
         def fake(command, *, log, on_line=None, should_cancel=None, should_pause=None, control=None):
@@ -516,6 +523,17 @@ class SystemEnvCase(IsolatedCase):
 
         return calls, fake
 
+    @contextlib.contextmanager
+    def _no_pip(self, fake):
+        """装、卸两条路径都不真跑 pip。
+
+        装依赖的引擎在 core（`app.core.pip`），由 core 自己调它的 `stream`，所以要盖住
+        `pip_engine.stream`；卸载仍走插件自己的 `_stream` 薄壳，SDK 门面把 core 的函数按名
+        绑定过去（`app.sdk.pip.stream is pip_engine.stream`），所以那条路要盖 `runtime._stream`。
+        """
+        with mock.patch.object(pip_engine, "stream", fake), mock.patch.object(runtime, "_stream", fake):
+            yield
+
     def test_ensure_system_targets_program_python(self) -> None:
         profile = runtime.RuntimeProfile(
             id="sys-env",
@@ -525,7 +543,7 @@ class SystemEnvCase(IsolatedCase):
         )
         calls, fake = self._capture()
         lines: list[str] = []
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             target = runtime.ensure_system(profile, on_line=lines.append)
 
         self.assertEqual(target, runtime.system_python())
@@ -548,7 +566,7 @@ class SystemEnvCase(IsolatedCase):
         fake_python.write_text("", encoding="utf-8")
         profile = runtime.RuntimeProfile(id="sys-empty", packages=())
         calls, fake = self._capture()
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             target = runtime.ensure_system(profile, python=fake_python)
         self.assertEqual(target, fake_python)
         self.assertEqual(calls, [])  # 清单为空就什么都不装
@@ -556,7 +574,7 @@ class SystemEnvCase(IsolatedCase):
     def test_ensure_system_cancel_before_install(self) -> None:
         profile = runtime.RuntimeProfile(id="sys-cancel", packages=("torch",))
         calls, fake = self._capture()
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             with self.assertRaises(runtime.RuntimeError_):
                 runtime.ensure_system(profile, should_cancel=lambda: True)
         self.assertEqual(calls, [])
@@ -566,7 +584,7 @@ class SystemEnvCase(IsolatedCase):
         profile = runtime.RuntimeProfile(id="sys-off", packages=("torch", "onnxruntime"))
         calls, fake = self._capture()
         lines: list[str] = []
-        with mock.patch.object(runtime, "_stream", fake):
+        with self._no_pip(fake):
             target = runtime.uninstall_system(profile, on_line=lines.append)
 
         self.assertEqual(target, runtime.system_python())
@@ -583,19 +601,19 @@ class SystemEnvCase(IsolatedCase):
         fake_python = self.root / "fake-python.exe"
         fake_python.write_text("", encoding="utf-8")
         calls, fake = self._capture()
-        with mock.patch.object(runtime, "_stream", fake):
+        with self._no_pip(fake):
             target = runtime.uninstall_system(runtime.RuntimeProfile(id="sys-off-empty", packages=()), python=fake_python)
         self.assertEqual(target, fake_python)
         self.assertEqual(calls, [])  # 清单为空就不跑 pip
 
-        with mock.patch.object(runtime, "_stream", fake):
+        with self._no_pip(fake):
             with self.assertRaises(runtime.RuntimeError_):
                 runtime.uninstall_system(runtime.RuntimeProfile(id="sys-off-missing", packages=("torch",)), python=self.root / "no-such-python.exe")
 
     def test_ensure_system_failure_reported(self) -> None:
         profile = runtime.RuntimeProfile(id="sys-fail", packages=("torch",))
         _calls, fake = self._capture(code=1)
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             with self.assertRaises(runtime.RuntimeError_) as caught:
                 runtime.ensure_system(profile)
         self.assertIn("装进程序环境失败", str(caught.exception))
@@ -612,7 +630,7 @@ class SystemEnvCase(IsolatedCase):
             seen.append(runtime.interrupted("sys-pend", system=True))
             return 0
 
-        with mock.patch.object(runtime, "_stream", working):
+        with mock.patch.object(pip_engine, "stream", working):
             runtime.ensure_system(profile, python=fake_python)
         self.assertEqual(seen, [True])
         self.assertFalse(runtime.interrupted("sys-pend", system=True))
@@ -628,7 +646,7 @@ class SystemEnvCase(IsolatedCase):
         self.assertTrue(runtime.interrupted("sys-pend-off", system=True))
 
         _calls, fake = self._capture()
-        with mock.patch.object(runtime, "_stream", fake):
+        with self._no_pip(fake):
             runtime.uninstall_system(profile, python=fake_python)
 
         self.assertFalse(pending.exists())
@@ -698,10 +716,10 @@ class RuntimeControlCase(IsolatedCase):
         self.assertEqual(again.terminated, 1)
 
     def test_stream_with_control_skips_polling_thread(self) -> None:
-        """传了 `Control` 就不该再开那个 0.2 秒轮询线程。"""
+        """传了 `Control` 就不该再开那个 0.2 秒轮询线程（轮询在 core 的引擎里）。"""
         log = self.root / "control.log"
         control = runtime.Control()
-        with mock.patch.object(runtime, "_watch_stop") as watch:
+        with mock.patch.object(pip_engine, "watch_stop") as watch:
             code = runtime._stream(
                 [sys.executable, "-c", "print('hi')"],
                 log=log,
@@ -714,7 +732,7 @@ class RuntimeControlCase(IsolatedCase):
     def test_stream_without_control_still_watches(self) -> None:
         """老式回调路径保留轮询线程（旧调用方与测试还靠它）。"""
         log = self.root / "watch.log"
-        with mock.patch.object(runtime, "_watch_stop", wraps=runtime._watch_stop) as watch:
+        with mock.patch.object(pip_engine, "watch_stop", wraps=pip_engine.watch_stop) as watch:
             runtime._stream(
                 [sys.executable, "-c", "print('hi')"],
                 log=log,
@@ -786,7 +804,7 @@ class RuntimeControlCase(IsolatedCase):
                 on_line("fake output")
             return 0
 
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             target = runtime.install_wheels(profile, [str(wheel)], on_line=lambda _line: None)
 
         self.assertEqual(target, python)
@@ -805,11 +823,11 @@ class RuntimeControlCase(IsolatedCase):
     def test_network_hint_mentions_local_wheels(self) -> None:
         go = self.root / "go.log"
         go.write_text("ConnectTimeoutError(\"Connection to github.com timed out.\")\n", encoding="utf-8")
-        self.assertIn("本地 whl", runtime._network_hint(go))
+        self.assertIn("本地 whl", pip_engine.network_hint(go))
         ok = self.root / "ok.log"
         ok.write_text("Successfully installed demo-1.0\n", encoding="utf-8")
-        self.assertEqual(runtime._network_hint(ok), "")
-        self.assertEqual(runtime._network_hint(self.root / "missing.log"), "")
+        self.assertEqual(pip_engine.network_hint(ok), "")
+        self.assertEqual(pip_engine.network_hint(self.root / "missing.log"), "")
 
     def test_long_path_hint_reads_install_log(self) -> None:
         """路径超限的 `[Errno 2]` 要说人话，别的失败不掺和。"""
@@ -820,16 +838,16 @@ class RuntimeControlCase(IsolatedCase):
             "iterators/predicated_tile_access_iterator_residual_last.h'\n",
             encoding="utf-8",
         )
-        self.assertIn("安装路径太长", runtime._long_path_hint(deep))
+        self.assertIn("安装路径太长", pip_engine.long_path_hint(deep))
         other = self.root / "other.log"
         other.write_text("ERROR: No matching distribution found for torch\n", encoding="utf-8")
-        self.assertEqual(runtime._long_path_hint(other), "")
-        self.assertEqual(runtime._long_path_hint(self.root / "missing-hint.log"), "")
+        self.assertEqual(pip_engine.long_path_hint(other), "")
+        self.assertEqual(pip_engine.long_path_hint(self.root / "missing-hint.log"), "")
 
     def test_dist_name_normalises(self) -> None:
-        self.assertEqual(runtime._dist_name("llama_cpp_python>=0.3.2"), "llama-cpp-python")
-        self.assertEqual(runtime._dist_name("Llama-CPP.Python"), "llama-cpp-python")
-        self.assertEqual(runtime._dist_name("torch ; extra == \"x\""), "torch")
+        self.assertEqual(pip_engine.dist_name("llama_cpp_python>=0.3.2"), "llama-cpp-python")
+        self.assertEqual(pip_engine.dist_name("Llama-CPP.Python"), "llama-cpp-python")
+        self.assertEqual(pip_engine.dist_name("torch ; extra == \"x\""), "torch")
 
     def test_install_wheels_rejects_empty_and_missing(self) -> None:
         profile = runtime.RuntimeProfile(id="whl-empty", packages=())
@@ -888,7 +906,7 @@ class GitHubSourceCase(IsolatedCase):
             return 1 if len(calls) == 1 else 0
 
         lines: list[str] = []
-        with mock.patch.object(runtime, "_stream", fake):
+        with mock.patch.object(pip_engine, "stream", fake):
             runtime.ensure(profile, on_line=lines.append, github_prefixes=("https://ghproxy.net",))
 
         self.assertEqual(len(calls), 2)

@@ -22,6 +22,7 @@ from ..core.plugins.extensions import extension_registry
 from ..core.runtime.signals import signalBus
 from ..db.database import new_session
 from .pages.archive_page import ArchivePage
+from .pages.download_page import DownloadPage
 from .pages.home_page import HomePage
 from .pages.import_page import ImportPage
 from .pages.manage_page import ManagePage
@@ -42,6 +43,7 @@ BUILTIN_PAGES: tuple[tuple[str, str, FluentIcon, bool], ...] = (
     ("tag_page", "标签", FluentIcon.TAG, False),
     ("user_page", "用户", FluentIcon.PEOPLE, False),
     ("archive_page", "存档", FluentIcon.HISTORY, False),
+    ("download_page", "下载管理", FluentIcon.DOWNLOAD, False),
     ("plugin_page", "插件", FluentIcon.TILES, False),
     ("workbench_page", "页面管理", FluentIcon.LAYOUT, False),
     ("settings_page", "设置", FluentIcon.SETTING, True),
@@ -64,6 +66,7 @@ class MainWindow(FluentWindow):
         self.tag_page = TagPage(self)
         self.user_page = UserPage(self)
         self.archive_page = ArchivePage(self)
+        self.download_page = DownloadPage(self)
         self.plugin_page = PluginPage(self)
         self.workbench_page = WorkbenchPage(self)
         self.settings_page = SettingsPage(self)

@@ -452,6 +452,28 @@ def manage_category_files(case: Case) -> None:
         dispose_window(window)
 
 
+@check("manage_open_export_dir", "pages")
+def manage_open_export_dir(case: Case) -> None:
+    """标题区的「打开导出文件夹」：按当前导出目录调 open_path，不能炸在 config 上。"""
+    from app.core.config import export_dir
+
+    _, window = build_window(case)
+    page = window.manage_page
+    opened: list[str] = []
+    original = manage_module.open_folder
+    manage_module.open_folder = lambda path: (opened.append(str(path)), True)[1]
+    try:
+        assert page.export_dir_button.isEnabled(), "「打开导出文件夹」默认应当可用"
+        page.export_dir_button.click()
+    finally:
+        manage_module.open_folder = original
+        dispose_window(window)
+
+    expected = str(export_dir())
+    assert opened, "点「打开导出文件夹」没有调用 open_path"
+    assert opened[0] == expected, f"打开的应当是 {expected}，实际 {opened[0]}"
+
+
 @check("manage_selection", "pages")
 def manage_selection(case: Case) -> None:
     """多选（Ctrl / Ctrl+Shift / 三态全选）、双击打开与批量按钮启用状态。"""

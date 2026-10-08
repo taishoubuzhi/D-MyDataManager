@@ -24,13 +24,18 @@ from app.core.runtime import jsonio, paths # noqa: E402
 from app.core.manifest import manifest_kit  # noqa: E402
 from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
 from app.core.config import Language, config  # noqa: E402
+from app.core.download import service as download_service  # noqa: E402
 from app.core import capabilities  # noqa: E402
 from app.core.runtime.logging_setup import setup_logging  # noqa: E402
 from app.db.database import dispose_engine, init_db, session_scope  # noqa: E402
 from app.db.seed import seed  # noqa: E402
 from app.sdk.console import CONSOLE_EXTENSION  # noqa: E402
+from app.sdk.download import DOWNLOAD_EXTENSION  # noqa: E402
+from app.sdk.export import EXPORT_EXTENSION  # noqa: E402
 from app.sdk.items import ITEMS_EXTENSION  # noqa: E402
 from app.sdk.manifest import MANIFEST_EXTENSION  # noqa: E402
+from app.sdk.pip import PIP_EXTENSION  # noqa: E402
+from app.services import download_api, export_api, pip_api  # noqa: E402
 from app.services.console_service import ConsoleOutput  # noqa: E402
 from app.services.item_api import ItemsApi  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
@@ -180,6 +185,10 @@ def _lock_on_exit() -> None:
         return
     _locked = True
     try:
+        # 先把下载收起来：停下来的任务留在索引里，下次启动继续，不丢断点
+        download_service.shutdown()
+        # 插件发起的安装也收掉（pip 不能续传，直接取消）
+        pip_api.shutdown()
         dispose_engine()
         count, message = privacy.end_session()
         if count:
@@ -261,9 +270,21 @@ def main() -> int:
     plugin_service.bootstrap(ITEMS_EXTENSION, ItemsApi())
     # 清单机制：插件用 app.sdk.manifest 读 / 查 / 改 / 备份受管理的 JSON 清单
     plugin_service.bootstrap(MANIFEST_EXTENSION, manifest_kit)
+    # 下载器接口：插件用 app.sdk.download 请程序本体下载（自带确认框、任务统一进下载管理页）
+    plugin_service.bootstrap(DOWNLOAD_EXTENSION, download_api.api())
+    # pip 安装器接口：插件用 app.sdk.pip 装依赖（自带确认框、后台跑、可暂停 / 取消）
+    plugin_service.bootstrap(PIP_EXTENSION, pip_api.api())
+    # 导出接口：插件用 app.sdk.export 把选中的数据交给程序本体导成压缩包
+    plugin_service.bootstrap(EXPORT_EXTENSION, export_api.api())
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     plugin_service.load_viewers()
     _stage(7, "插件系统已就绪")
+
+    # 下载队列：启动时接回上次没做完的下载（索引在 .configs/journals/download/）
+    try:
+        download_service.manager()
+    except Exception as exc:  # noqa: BLE001 - 接不回来也不该拦住启动
+        logger.warning("下载队列启动失败：{}", exc)
 
     window = MainWindow()
     window.show()

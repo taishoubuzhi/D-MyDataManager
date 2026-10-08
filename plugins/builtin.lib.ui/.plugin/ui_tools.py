@@ -68,6 +68,15 @@ from app.sdk import ui as sdk_ui
 from app.sdk.data import human_size
 from app.sdk.ui import ClickCard, IconTextButton, IconTextPrimaryButton
 
+#: 下载器 / pip 安装器的视图由程序本体实现，经 SDK 转到这里：插件用它就能拿到和「下载
+#: 管理」页一模一样的任务列表（不用自己画一遍，也不会两套行为）。
+AddDownloadDialog = sdk_ui.AddDownloadDialog
+DownloadListView = sdk_ui.DownloadListView
+PipTaskView = sdk_ui.PipTaskView
+add_download_dialog = sdk_ui.add_download_dialog
+download_list = sdk_ui.download_list
+pip_task_list = sdk_ui.pip_task_list
+
 #: 间距与边距沿用 SDK 里的统一取值，插件不要再写死数字。
 CARD_SPACING = sdk_ui.CARD_SPACING
 COMPACT_MARGINS = sdk_ui.COMPACT_MARGINS
@@ -1407,6 +1416,8 @@ def form_dialog(parent: QWidget | None = None, title: str = "", **fields) -> For
 
 
 __all__ = [
+    "add_download_dialog",
+    "AddDownloadDialog",
     "body_label",
     "caption",
     "CARD_SPACING",
@@ -1424,6 +1435,8 @@ __all__ = [
     "DURATION_INFO",
     "DURATION_SUCCESS",
     "DURATION_WARNING",
+    "download_list",
+    "DownloadListView",
     "empty_state",
     "field",
     "fill_table",
@@ -1446,6 +1459,8 @@ __all__ = [
     "PageTemplate",
     "panel_card",
     "PANEL_MARGINS",
+    "pip_task_list",
+    "PipTaskView",
     "PlayerPanel",
     "primary_button",
     "progress_bar",

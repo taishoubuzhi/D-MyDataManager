@@ -35,6 +35,7 @@ from ...sdk.items import ImportContext
 from ...sdk.points import ExtensionPoint
 from ...services import ArchiveService, ImportService, LibraryService, TaxonomyService, UserService
 from ...services.blob_store import sha256_of
+from ...services.import_job import ImportPlanItem, import_store, open_journals, resume_job
 from ..components import FlowArea
 from ..components.import_worker import ImportWorker
 from ..framework import (
@@ -56,7 +57,7 @@ from ..components.keyword_input import KeywordInput
 from ..components.tag_picker import TagPicker
 from ..framework import IconTextButton, IconTextPrimaryButton, icon_text_label
 
-_STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败"}
+_STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败", "cancelled": "已取消"}
 _MAX_DETAIL_ROWS = 500
 _DEDUPE_SCAN_LIMIT = 200
 #: 结果表格里「文件 / 说明」两列放的是文件名与库内路径，都比较长：换行显示、不省略。
@@ -81,11 +82,17 @@ class ImportPage(ScrollPage):
         self._worker: ImportWorker | None = None
         self.selected_label_text = "尚未选择文件"
         self._started_at: dt.datetime | None = None
+        #: 当前这份「待导入清单」的 id（暂停后还在，用来继续 / 逐项取消）
+        self._job_id: str = ""
+        self._job_total = 0
+        #: 上次异常退出留下的清单
+        self._recovery_journals: list = []
 
         self._build_mode_card()
         self._build_target_card()
         self._build_details_card()
         self._build_progress_card()
+        self._build_recovery_card()
         self.add_stretch()
 
         self._reload_users()
@@ -98,6 +105,8 @@ class ImportPage(ScrollPage):
         signalBus.userChanged.connect(self._reload_categories)
         # 插件启用 / 禁用后，导入页的功能按钮跟着出现或消失
         signalBus.pluginsChanged.connect(self._sync_plugin_actions)
+        # 启动时找残留的导入清单：上次异常退出后没做完的批量导入
+        self._check_recovery()
 
     # ------------------------------------------------------------------ 界面
     def _build_mode_card(self) -> CardWidget:
@@ -287,6 +296,8 @@ class ImportPage(ScrollPage):
         )
         prepare_table(self.details_table, movable=False)
         self.details_table.setMinimumHeight(220)
+        # 选中某一行 → 「取消选中项」按钮可用
+        self.details_table.itemSelectionChanged.connect(self._sync_job_buttons)
         layout.addWidget(self.details_table)
 
         self.details_card = card
@@ -304,6 +315,23 @@ class ImportPage(ScrollPage):
         self.progress_label = CaptionLabel("等待开始", card)
         layout.addWidget(self.progress_label)
 
+        # 「待导入清单」的各种操作：暂停 / 继续、取消整批、取消个别还没导入的项
+        self.job_label = CaptionLabel("", card)
+        self.job_label.setWordWrap(True)
+        layout.addWidget(self.job_label)
+
+        controls = QHBoxLayout()
+        self.pause_btn = PushButton("暂停导入", card)
+        self.pause_btn.clicked.connect(self._toggle_pause)
+        self.cancel_btn = PushButton("取消整批", card)
+        self.cancel_btn.clicked.connect(self._cancel_batch)
+        self.cancel_item_btn = PushButton("取消选中项", card)
+        self.cancel_item_btn.clicked.connect(self._cancel_selected_item)
+        for button in (self.pause_btn, self.cancel_btn, self.cancel_item_btn):
+            controls.addWidget(button)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+
         self.result_table = TableWidget(card)
         self.result_table.setColumnCount(3)
         self.result_table.setHorizontalHeaderLabels(["文件", "状态", "说明"])
@@ -316,6 +344,46 @@ class ImportPage(ScrollPage):
         self.progress_card = card
         card.hide()
         return card
+
+    def _build_recovery_card(self) -> CardWidget:
+        card, layout = self.add_section(
+            "上次未完成的导入",
+            "程序上次批量导入时异常退出；清单还在，可以接着做完，也可以放弃",
+        )
+        self.recovery_label = CaptionLabel("", card)
+        self.recovery_label.setWordWrap(True)
+        layout.addWidget(self.recovery_label)
+
+        row = QHBoxLayout()
+        self.recovery_resume = PrimaryPushButton("继续导入", card)
+        self.recovery_resume.clicked.connect(self._resume_recovery)
+        self.recovery_abandon = PushButton("放弃这次导入", card)
+        self.recovery_abandon.clicked.connect(self._abandon_recovery)
+        row.addWidget(self.recovery_resume)
+        row.addWidget(self.recovery_abandon)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.recovery_card = card
+        card.hide()
+        return card
+
+    def _sync_job_buttons(self) -> None:
+        """按「有没有在跑 / 有没有清单 / 有没有选中行」刷新三个操作按钮。"""
+        if not hasattr(self, "pause_btn"):
+            return
+        running = self._worker is not None and self._worker.isRunning()
+        configured = bool(self._job_id)
+        has_selection = self.details_table.currentRow() >= 0
+        self.pause_btn.setText("暂停导入" if running else "继续导入")
+        self.pause_btn.setEnabled(running or configured)
+        self.cancel_btn.setEnabled(running or configured)
+        self.cancel_item_btn.setEnabled(configured and has_selection)
+        self.pause_btn.setToolTip(
+            "当前文件处理完后停下，清单会保留" if running else "接着上次的清单继续导入"
+        )
+        self.cancel_btn.setToolTip("剩余还没开始的项都会被标成「已取消」，已导入的不受影响")
+        self.cancel_item_btn.setToolTip("在「待导入文件信息」里选中一行，取消这一项的导入请求")
 
     # ------------------------------------------------------------------ 交互
     def _set_mode(self, mode: str) -> None:
@@ -381,6 +449,7 @@ class ImportPage(ScrollPage):
         """按当前数据库状态重建用户/分类/标签候选项（与其它页面保持同一入口）。"""
         self._reload_users()
         self._reload_tags()
+        self._check_recovery()
 
     def _on_user_changed(self) -> None:
         self._reload_categories()
@@ -537,7 +606,7 @@ class ImportPage(ScrollPage):
     # ------------------------------------------------------------------ 导入
     def import_now(self) -> None:
         if self._worker is not None and self._worker.isRunning():
-            self.toast_warning("正在导入", "请等待当前批量导入结束")
+            self.toast_warning("正在导入", "请先暂停或等这一轮跑完，再开始新的批量导入")
             return
         user_id = self.target_user_id()
         common = {
@@ -582,28 +651,194 @@ class ImportPage(ScrollPage):
             self.toast_error("导入失败", str(exc))
 
     def _start_batch(self, user_id: int | None, common: dict) -> None:
+        sources = self._collect_sources()
+        if not sources:
+            self.toast_warning("没有可导入的文件", "请先选择文件或文件夹")
+            return
+        # 待导入清单在这里定稿：以后一律以这份快照为准（不再重扫目录），
+        # 所以「预览里看到的」就是「真正会导入的」。
+        items = [
+            ImportPlanItem(key=f"{index:06d}", source=str(path), subdir=subdir or "")
+            for index, (path, subdir) in enumerate(sources)
+        ]
         if self._directory:
-            kind = "folder"
-            sources = [self._directory]
             options = {**common, "name": Path(self._directory).name}
+            title = f"批量导入：{Path(self._directory).name}"
         else:
-            kind = "files"
-            sources = list(self._files)
             options = {**common, "category_id": self.category_box.currentData()}
+            title = "批量导入"
 
+        self._begin_progress(len(items), f"准备导入 {len(items)} 个文件…")
+        worker = ImportWorker(items, options=options, title=title)
+        self._wire_worker(worker)
+        worker.start()
+
+    def _resume_journal(self, journal_id: str) -> None:
+        """接着一份已有清单继续导入（暂停后继续、或崩溃恢复）。"""
+        store = import_store()
+        try:
+            journal = store.load(journal_id)
+        except Exception as exc:  # noqa: BLE001 —— 清单读不回来就别硬跑
+            logger.warning("读回导入清单失败：{}", exc)
+            self.toast_error("无法继续导入", str(exc))
+            self._job_id = ""
+            self._sync_job_buttons()
+            return
+        self._job_id = journal_id
+        self._begin_progress(len(journal.items), f"继续导入，剩余 {len(journal.open_items())} 项…")
+        worker = ImportWorker(journal_id=journal_id, adopt=True)
+        self._wire_worker(worker)
+        worker.start()
+
+    def _begin_progress(self, total: int, text: str) -> None:
         self.progress_card.show()
         self.result_table.setRowCount(0)
         self._fit_result_height()
         self.progress_bar.setValue(0)
+        self._job_total = total
         self._started_at = dt.datetime.now()
-        self.progress_label.setText(f"准备导入 {len(sources) if kind == 'files' else len(self._tree_files)} 个文件…")
+        self.progress_label.setText(text)
+        self.job_label.setText("")
 
-        worker = ImportWorker(kind, sources, options)
+    def _wire_worker(self, worker: ImportWorker) -> None:
         worker.progressed.connect(self._on_progress)
         worker.evented.connect(self._on_event)
+        worker.jobReady.connect(self._on_job_ready)
+        worker.stateChanged.connect(self._on_state_changed)
         worker.finished_job.connect(self._on_finished)
         self._worker = worker
-        worker.start()
+        self._sync_job_buttons()
+
+    def _with_job(self, action):
+        """按当前清单 id 开一份任务对象，读-改-写它（暂停中也能用）。"""
+        store = import_store()
+        job = resume_job(store.load(self._job_id), store=store)
+        return action(job)
+
+    # ---------------------------------------------------- 暂停 / 继续 / 取消
+    def _toggle_pause(self) -> None:
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.request_pause()
+            self.job_label.setText("正在暂停……当前文件处理完就会停下，清单会保留")
+            return
+        if not self._job_id:
+            self.toast_warning("没有可继续的导入", "请先选择文件或文件夹开始一次批量导入")
+            return
+        self._resume_journal(self._job_id)
+
+    def _resume_recovery(self) -> None:
+        if not self._recovery_journals:
+            return
+        self.recovery_card.hide()
+        self._resume_journal(self._recovery_journals[0].id)
+
+    def _abandon_recovery(self) -> None:
+        if not self._recovery_journals:
+            return
+        journal = self._recovery_journals[0]
+        if not self.confirm(
+            "放弃这次导入",
+            "剩余还没导入的项都会被标成「已取消」，这份清单随后删除。已经导入的内容不受影响。",
+        ):
+            return
+        try:
+            store = import_store()
+            resume_job(journal, store=store).abandon()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("放弃导入清单失败：{}", exc)
+            self.toast_error("放弃失败", str(exc))
+            return
+        self.toast_success("已放弃", "剩余的待导入项已取消，清单已删除")
+        if self._job_id == journal.id:
+            self._job_id = ""
+        self._sync_job_buttons()
+        self._check_recovery()
+
+    def _cancel_batch(self) -> None:
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.request_cancel()
+            self.job_label.setText("正在取消：剩余还没开始的项都会被标成「已取消」…")
+            return
+        if not self._job_id:
+            self.toast_warning("没有进行中的导入", "请先开始一次批量导入")
+            return
+        if not self.confirm(
+            "取消整批导入",
+            "剩余还没导入的项都会被标成「已取消」，这份清单随后删除。已经导入的内容不受影响。",
+        ):
+            return
+        try:
+            self._with_job(lambda job: job.abandon())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("取消整批导入失败：{}", exc)
+            self.toast_error("取消失败", str(exc))
+            return
+        self._job_id = ""
+        self.result_table.setRowCount(0)
+        self.progress_label.setText("已取消整批导入")
+        self.job_label.setText("")
+        self._sync_job_buttons()
+        self._check_recovery()
+
+    def _cancel_selected_item(self) -> None:
+        if not self._job_id:
+            self.toast_warning("没有进行中的导入", "请先开始一次批量导入")
+            return
+        row = self.details_table.currentRow()
+        if row < 0:
+            self.toast_warning("没有选中项", "在「待导入文件信息」里选中一行再取消")
+            return
+        key = f"{row:06d}"
+        worker = self._worker
+        try:
+            if worker is not None and worker.isRunning():
+                # 正在跑：交给它自己的那一轮处理（它会在文件之间跳过这一项）
+                worker.cancel_item(key)
+                cancelled = True
+            else:
+                cancelled = bool(self._with_job(lambda job: job.cancel_item(key)))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("取消导入项失败：{}", exc)
+            self.toast_error("取消失败", str(exc))
+            return
+        if not cancelled:
+            self.toast_warning("无法取消", "这一项已经开始或已经处理完了")
+            return
+        cell = self.details_table.item(row, 5)
+        if cell is not None:
+            cell.setText("已取消导入")
+        self.job_label.setText("这一项已取消导入，其余项照常处理")
+        self.toast_success("已取消", "这一项不会再被导入")
+
+    def _check_recovery(self) -> None:
+        """扫描残留的导入清单（上次异常退出留下的），有就提示用户。"""
+        try:
+            leftovers = [journal for journal in open_journals() if journal.id != self._job_id]
+        except Exception as exc:  # noqa: BLE001 —— 扫描失败不该影响页面
+            logger.warning("扫描未完成的导入清单失败：{}", exc)
+            return
+        self._recovery_journals = leftovers
+        if not leftovers:
+            self.recovery_card.hide()
+            return
+        journal = leftovers[0]
+        counts = journal.counts()
+        done = counts.get("done", 0) + counts.get("skipped", 0)
+        extra = f"（另有 {len(leftovers) - 1} 份未完成清单）" if len(leftovers) > 1 else ""
+        self.recovery_label.setText(
+            f"「{journal.title or journal.id}」共 {len(journal.items)} 项，"
+            f"已完成 {done} 项，还有 {len(journal.open_items())} 项没处理{extra}。"
+        )
+        self.recovery_card.show()
+
+    def _on_job_ready(self, journal_id: str) -> None:
+        self._job_id = journal_id
+        self._sync_job_buttons()
+
+    def _on_state_changed(self, state: str) -> None:
+        self._sync_job_buttons()
 
     def _on_progress(self, done: int, total: int, name: str) -> None:
         percent = 100 if total <= 0 else int(done / total * 100)
@@ -633,11 +868,22 @@ class ImportPage(ScrollPage):
         self.result_table.scrollToBottom()
 
     def _on_finished(self, payload: dict) -> None:
-        self.progress_bar.setValue(100)
+        stopped = str(payload.get("stopped") or "")
+        remaining = int(payload.get("remaining") or 0)
+        paused = stopped == "paused" or (remaining > 0 and not payload.get("error"))
         failed = payload.get("failed") or []
+        if paused:
+            self.progress_label.setText(f"已暂停 · 还有 {remaining} 项待导入")
+        else:
+            self.progress_bar.setValue(100)
+
         summary = f"成功 {payload.get('ok', 0)}，跳过 {payload.get('skipped', 0)}，失败 {len(failed)}"
+        if payload.get("cancelled"):
+            summary += f"，取消 {payload['cancelled']}"
         if payload.get("category"):
             summary += f"；新分类「{payload['category']}」"
+        if paused:
+            summary += f"；剩余 {remaining} 项"
         if self._started_at is not None:
             elapsed = (dt.datetime.now() - self._started_at).total_seconds()
             summary += f"；耗时 {elapsed:.1f} 秒"
@@ -646,23 +892,37 @@ class ImportPage(ScrollPage):
         if self._worker is not None:
             self._worker.deleteLater()
             self._worker = None
+        # 暂停就留着清单（可以继续、可以逐项取消）；跑完/取消了就清掉
+        self._job_id = (str(payload.get("journal") or self._job_id) if paused else "")
+        self._sync_job_buttons()
+
+        # 不管是暂停还是跑完，库里的内容都变了（这是逐项提交的好处）
+        self.session.expire_all()
+        signalBus.itemsChanged.emit()
+        signalBus.librariesChanged.emit()
+        signalBus.categoriesChanged.emit()
+        self._reload_categories()
 
         if payload.get("error"):
             self._fit_result_height()
             self.toast_error("导入失败", str(payload["error"]))
             return
 
-        self.session.expire_all()
-        signalBus.itemsChanged.emit()
-        signalBus.librariesChanged.emit()
-        signalBus.categoriesChanged.emit()
-        self._reload_categories()
+        if paused:
+            self._fit_result_height()
+            self.job_label.setText("可以点「继续导入」接着做，或在下方结果表/待导入清单里取消个别项")
+            self.toast_info("已暂停", f"清单已保留，还有 {remaining} 项没处理")
+            return
+
         self._maybe_archive(
             f"批量导入：{payload.get('category') or self.selected_label_text}"[:200]
         )
         self._clear_sources()
         self._fit_result_height()
-        if payload.get("ok"):
+        self._check_recovery()
+        if stopped == "cancelled":
+            self.toast_info("已取消", summary)
+        elif payload.get("ok"):
             self.toast_success("导入完成", summary)
         elif failed:
             self.toast_error("导入失败", f"{Path(failed[0][0]).name}：{failed[0][1]}")

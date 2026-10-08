@@ -129,6 +129,18 @@ class Config(QConfig):
     )
     archiveOnImport = ConfigItem("Import", "Archive-On-Import", True, BoolValidator())
 
+    # 下载：这些是「标量」设置项，跟着 QConfig 走；镜像规则是一份结构化列表，
+    # 放在清单 `core.download_mirrors` 里（见 `app.core.download.mirror_store`）。
+    downloadPath = ConfigItem("Download", "Path", "")
+    downloadConcurrent = RangeConfigItem("Download", "Concurrent", 2, RangeValidator(1, 16))
+    # 顺序下载：同一时刻只跑一个任务（相当于把并行数锁成 1，但并行数本身保留）
+    downloadSequential = ConfigItem("Download", "Sequential", False, BoolValidator())
+    downloadTimeout = RangeConfigItem("Download", "Timeout", 15, RangeValidator(5, 600))
+    # 每个地址的重试次数（地址之间还会按镜像规则依次回退）
+    downloadRetries = RangeConfigItem("Download", "Retries", 2, RangeValidator(0, 5))
+    # 全局代理，如 `http://127.0.0.1:7890`；留空表示直连、走系统默认
+    downloadProxy = ConfigItem("Download", "Proxy", "")
+
     # 存档
     keepVersions = RangeConfigItem("Archive", "Keep-Versions", 10, RangeValidator(1, 200))
     pruneMode = OptionsConfigItem(
@@ -178,6 +190,11 @@ def backup_dir() -> Path:
 
 def export_dir() -> Path:
     return paths.resolve_dir(config.exportPath.value, paths.DEFAULT_EXPORT_DIR)
+
+
+def download_dir() -> Path:
+    """下载器的默认落点（「下载管理 → 下载设置」里的下载路径，与配置项同步）。"""
+    return paths.resolve_dir(config.downloadPath.value, paths.DEFAULT_DOWNLOAD_DIR)
 
 
 def db_file() -> Path:

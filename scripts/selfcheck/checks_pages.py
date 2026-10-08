@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import tokenize
 
 from .harness import PAGE_ATTRS, ROOT, Case, build_window, check, dispose_window, ensure_app, install_builtin_plugins
 
 PAGES_DIR = ROOT / "src" / "app" / "ui" / "pages"
+APP_DIR = ROOT / "src" / "app"
 
 #: 页面源码里不允许出现的写法（样式与线程必须下沉到 framework / components）。
 FORBIDDEN_SNIPPETS = (
@@ -26,6 +29,42 @@ FORBIDDEN_SNIPPETS = (
 
 _MARGINS_RE = re.compile(r"setContentsMargins\(([^)]*)\)")
 _INT_RE = re.compile(r"-?\d+")
+
+#: `config` 有两种绑定：`from ...core.config import config` 拿到的是实例（ConfigItem 在它上面），
+#: `from ..core import config` 拿到的是模块（`download_dir()` 这类函数挂在模块上）。
+_CONFIG_IMPORT_RE = re.compile(r"^from\s+(?P<module>[\w.]+)\s+import\s+(?P<clause>\([^)]*\)|[^\n(]+)", re.M)
+_CONFIG_ASSIGN_RE = re.compile(r"^config\s*=\s*", re.M)
+
+
+def _imported_names(clause: str) -> set[str]:
+    """`from x import a, (b as c)` 里的名字集合。"""
+    text = clause.strip().lstrip("(").rstrip(")")
+    names = set()
+    for part in text.split(","):
+        name = part.strip().split(" as ")[-1].strip().strip("()")
+        if name:
+            names.add(name)
+    return names
+
+
+def _config_references(text: str) -> list[tuple[int, str]]:
+    """源码里所有 `config.<名字>` 的 (行号, 名字)；字符串与注释里的不算。"""
+    found: list[tuple[int, str]] = []
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+    except (SyntaxError, tokenize.TokenError, IndentationError):
+        return found
+    for index, token in enumerate(tokens):
+        if token.type != tokenize.NAME or token.string != "config":
+            continue
+        if index and tokens[index - 1].string == ".":  # self.config.xxx 之类别算进来
+            continue
+        if index + 2 >= len(tokens):
+            continue
+        dot, name = tokens[index + 1], tokens[index + 2]
+        if dot.string == "." and name.type == tokenize.NAME:
+            found.append((token.start[0], name.string))
+    return found
 
 
 def _button_contents(button):
@@ -115,6 +154,40 @@ def pages_style_guard(case: Case) -> None:
             if any(int(value) != 0 for value in _INT_RE.findall(args)):
                 problems.append(f"{rel} 写死了边距 setContentsMargins({args})，请用 framework 的 token")
     assert not problems, "页面样式规则被破坏：" + "；".join(problems)
+
+
+@check("config_api_references", "pages")
+def config_api_references(case: Case) -> None:
+    """静态守卫：`config.<名字>` 必须在绑定的对象上真的存在。
+
+    这类拼写错误只有用户点到那个按钮才会炸（`AttributeError: 'Config' object
+    has no attribute ...`），全量测试与门禁都照不到，所以放在源码扫描里堵住。
+    """
+    from app.core import config as config_module
+    from app.core.config import config as config_instance
+
+    problems: list[str] = []
+    for path in sorted(APP_DIR.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        targets: list[object] = []
+        for match in _CONFIG_IMPORT_RE.finditer(text):
+            parts = match.group("module").split(".")
+            names = _imported_names(match.group("clause"))
+            if "config" not in names:
+                continue
+            if len(parts) >= 2 and parts[-1] == "config" and parts[-2] == "core":
+                targets.append(config_instance)
+            elif parts[-1] == "core":
+                targets.append(config_module)
+        if _CONFIG_ASSIGN_RE.search(text):
+            targets.append(config_instance)
+        if not targets:
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        for lineno, name in _config_references(text):
+            if not any(hasattr(target, name) for target in targets):
+                problems.append(f"{rel}:{lineno} config.{name} 不存在")
+    assert not problems, "config 引用不存在的属性/方法：" + "；".join(problems)
 
 
 # --------------------------------------------------------------------- 装配

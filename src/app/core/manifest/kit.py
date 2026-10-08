@@ -62,7 +62,7 @@ MANIFEST_VERSION = "1"
 #: 顶层必须项
 REQUIRED_KEYS = ("manifest", "id", "version", "kind", "items")
 #: 支持的清单类型
-KINDS = ("module-data", "registry", "profiles", "catalog")
+KINDS = ("module-data", "registry", "profiles", "catalog", "journal")
 #: 清单 id 规则（与插件 id 同规则）
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")
 #: 备份目录保留份数
@@ -298,6 +298,10 @@ class ManifestKit:
     # 登记 ---------------------------------------------------------------
     def register(self, entry: ManifestEntry, *, source: str = "") -> ManifestEntry:
         return self.registry.register(entry, source=source)
+
+    def drop(self, manifest_id: str) -> bool:
+        """注销单份清单（临时清单用完即删；内置清单下次刷新会被加回来）。"""
+        return self.registry.drop(manifest_id)
 
     def entries(self) -> tuple[ManifestEntry, ...]:
         return self.registry.entries()

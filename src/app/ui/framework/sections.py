@@ -178,6 +178,8 @@ def empty_state(
     layout = QVBoxLayout(host)
     layout.setContentsMargins(0, 24, 0, 24)
     layout.setSpacing(6)
+    # 上下留弹簧：外面给多了高度就把图标与文字整体居中，而不是把图标拉成一大块空白。
+    layout.addStretch(1)
     if icon is not None:
         picture = BodyLabel("", host)
         picture.setPixmap(icon.icon().pixmap(24, 24))
@@ -187,6 +189,7 @@ def empty_state(
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     label.setWordWrap(True)
     layout.addWidget(label)
+    layout.addStretch(1)
     return host
 
 

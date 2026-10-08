@@ -11,8 +11,6 @@ from qfluentwidgets import (
     CardWidget,
     ComboBox,
     FluentIcon,
-    PushButton,
-    PushSettingCard,
     SettingCard,
     SettingCardGroup,
     StrongBodyLabel,
@@ -36,12 +34,21 @@ from ...core.runtime.version import APP_VERSION
 from ...db import database
 from ...sdk import Events, ExtensionPoint
 from ...sdk.data import human_size
-from ...services import LibraryService, UserService
+from ...services import (
+    DatabaseBundleError,
+    DatabaseBundleService,
+    LibraryService,
+    UserService,
+    import_replace,
+    inspect_package,
+    timestamp_name,
+)
 from ...services.maintenance import compact_database, reset_to_defaults
 from ...services.plugin_service import plugin_service
 from ...services.privacy_service import privacy
 from ..components.pager import PAGE_SIZES, normalize_page_size
 from ..framework import (
+    ActionCard,
     NumberSettingCard,
     ScrollPage,
     confirm,
@@ -80,18 +87,6 @@ class ComboSettingCard(SettingCard):
         self.changed.emit(self.combo.currentText())
 
 
-class ActionCard(PushSettingCard):
-    """设置卡上的操作按钮：换成 Fluent PushButton，避免全站混入原生 QPushButton。"""
-
-    def __init__(self, text, icon, title: str, content: str, parent=None) -> None:
-        super().__init__(text, icon, title, content, parent)
-        index = self.hBoxLayout.indexOf(self.button)
-        release_widget(self.button)
-        self.button = PushButton(text, self)
-        self.hBoxLayout.insertWidget(index, self.button, 0, Qt.AlignmentFlag.AlignRight)
-        self.button.clicked.connect(self.clicked)
-
-
 class SettingsPage(ScrollPage):
     page_name = "settingsPage"
     page_title = "设置"
@@ -108,6 +103,7 @@ class SettingsPage(ScrollPage):
             self._import_group(),
             self._storage_group(),
             self._library_group(),
+            self._backup_group(),
             self._privacy_group(),
             self._library_card(),
             self._log_group(),
@@ -520,9 +516,22 @@ class SettingsPage(ScrollPage):
         self._apply_permissions()
 
     def _apply_permissions(self) -> None:
-        for card in (self._path_card, self._scan_card, self._rebuild_card, self._compact_card, self._reset_card):
+        for card in (
+            self._path_card,
+            self._scan_card,
+            self._rebuild_card,
+            self._compact_card,
+            self._reset_card,
+            self._db_export_card,
+            self._db_merge_card,
+            self._db_replace_card,
+        ):
             card.setEnabled(self._is_admin)
-        for hint in (self._library_permission_card, self._maintenance_permission_card):
+        for hint in (
+            self._library_permission_card,
+            self._maintenance_permission_card,
+            self._backup_permission_card,
+        ):
             hint.setVisible(not self._is_admin)
 
     def _require_admin(self, action: str) -> bool:
@@ -583,6 +592,135 @@ class SettingsPage(ScrollPage):
             signal.emit()
         tip.finish("已恢复初始化")
         self.toast_success("已恢复初始化", "设置已重置，应用即将重启")
+        restart_application()
+
+    # ------------------------------------------------------------------ 整库包
+    def _database_target(self) -> Path:
+        name = f"数据库包-{timestamp_name()}.zip"
+        try:
+            return export_dir() / name
+        except OSError:
+            return Path(name)
+
+    def _read_package(self, action: str):
+        """选一个整库包并读它的清单；读不了就提示并返回 None。"""
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, action, str(export_dir()), "整库包 (*.zip);;所有文件 (*)"
+        )
+        if not chosen:
+            return None
+        try:
+            return Path(chosen), inspect_package(chosen)
+        except (DatabaseBundleError, OSError) as exc:
+            self.toast_warning("读不了这个整库包", str(exc))
+            return None
+
+    def _after_database_import(self) -> None:
+        self._refresh_libraries()
+        for signal in (
+            signalBus.itemsChanged,
+            signalBus.categoriesChanged,
+            signalBus.tagsChanged,
+            signalBus.userChanged,
+            signalBus.archivesChanged,
+            signalBus.librariesChanged,
+        ):
+            signal.emit()
+
+    def _toast_import(self, report) -> None:
+        if report.missing:
+            self.toast_warning("导入完成，但有内容缺失", report.summary())
+        else:
+            self.toast_success("导入完成", report.summary())
+
+    def _on_export_database(self) -> None:
+        if not self._require_admin("导出整库"):
+            return
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            "导出整库包",
+            str(self._database_target()),
+            "整库包 (*.zip);;所有文件 (*)",
+        )
+        if not chosen:
+            return
+        tip = self.busy("正在导出整库", "打包数据库与库内文件…")
+        try:
+            result = DatabaseBundleService(self.session).export(chosen)
+        except (DatabaseBundleError, OSError) as exc:
+            tip.finish("导出失败")
+            self.toast_warning("导出整库失败", str(exc))
+            return
+        tip.finish("导出完成")
+        self.toast_success("已导出整库包", result.summary())
+
+    def _on_import_database_merge(self) -> None:
+        if not self._require_admin("导入整库"):
+            return
+        picked = self._read_package("导入整库（新增式）")
+        if picked is None:
+            return
+        path, info = picked
+        if not confirm(
+            self,
+            "导入整库（新增式）",
+            f"将从 {path.name} 导入：{info.summary()}\n\n"
+            "现有数据不会被删除；同名用户、分类与标签会合并，重名文件在同目录加 _1 后缀，"
+            "重名存档加「（导入）」后缀。\n确定继续？",
+        ):
+            return
+        tip = self.busy("正在导入整库", "合并用户、分类、标签与数据项…")
+        try:
+            report = DatabaseBundleService(self.session).import_merge(path)
+        except (DatabaseBundleError, OSError) as exc:
+            try:
+                self.session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            tip.finish("导入失败")
+            self.toast_warning("导入整库失败", str(exc))
+            return
+        self._after_database_import()
+        tip.finish("导入完成")
+        self._toast_import(report)
+
+    def _on_import_database_replace(self) -> None:
+        if not self._require_admin("导入整库"):
+            return
+        picked = self._read_package("导入整库（覆盖式）")
+        if picked is None:
+            return
+        path, info = picked
+        if not confirm(
+            self,
+            "导入整库（覆盖式）",
+            f"将用 {path.name} 里的数据库与库文件夹整体替换现在的数据：{info.summary()}\n\n"
+            "现在的数据库会另存一份 data.db.bak-<时间戳>，库文件夹改名成 library.bak-<时间戳>，"
+            "但界面上的数据会立刻变成包里的。\n确定继续？",
+        ):
+            return
+        if not confirm(
+            self,
+            "再确认一次",
+            "覆盖式导入会清空当前数据库与库文件夹（只留上面提到的备份）。\n确定要覆盖？",
+        ):
+            return
+        tip = self.busy("正在导入整库", "替换数据库与库文件夹…")
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            report = import_replace(path)
+        except (DatabaseBundleError, OSError) as exc:
+            self._reload_session()
+            tip.finish("导入失败")
+            self.toast_warning("导入整库失败", str(exc))
+            return
+        self._reload_session()
+        self._after_database_import()
+        tip.finish("导入完成")
+        self.toast_success("覆盖式导入完成", f"{report.summary()}，应用即将重启")
         restart_application()
 
     def _choose_export_dir(self) -> None:
@@ -665,6 +803,49 @@ class SettingsPage(ScrollPage):
             group,
         )
         group.addSettingCard(self._library_permission_card)
+        return group
+
+    # ------------------------------------------------------------------ 备份与迁移
+    def _backup_group(self) -> SettingCardGroup:
+        group = SettingCardGroup("备份与迁移", self)
+
+        self._db_export_card = ActionCard(
+            "导出整库",
+            FluentIcon.SAVE,
+            "导出整库包",
+            "把数据库与库文件夹里的文件打成一个压缩包，可以在别的机器上导入",
+            group,
+        )
+        self._db_export_card.clicked.connect(self._on_export_database)
+        group.addSettingCard(self._db_export_card)
+
+        self._db_merge_card = ActionCard(
+            "导入整库",
+            FluentIcon.DOWNLOAD,
+            "导入整库（新增式）",
+            "把包里的用户、分类、标签、数据项与存档并进现有数据；同名分类标签合并，重名文件加 _1 后缀，不删任何东西",
+            group,
+        )
+        self._db_merge_card.clicked.connect(self._on_import_database_merge)
+        group.addSettingCard(self._db_merge_card)
+
+        self._db_replace_card = ActionCard(
+            "导入整库",
+            FluentIcon.SYNC,
+            "导入整库（覆盖式）",
+            "用包里的数据库与库文件夹整体替换现在的内容；原数据会改名备份，界面上的数据随即变成包里的",
+            group,
+        )
+        self._db_replace_card.clicked.connect(self._on_import_database_replace)
+        group.addSettingCard(self._db_replace_card)
+
+        self._backup_permission_card = SettingCard(
+            FluentIcon.INFO,
+            "仅默认用户可用",
+            "整库导入导出会读写数据库与整个库文件夹，属于全库操作",
+            group,
+        )
+        group.addSettingCard(self._backup_permission_card)
         return group
 
     def _privacy_group(self) -> SettingCardGroup:

@@ -1,18 +1,28 @@
-"""导出服务：把数据项复制为普通文件（或打包成一个 zip），并生成清单。"""
+"""导出服务：把数据项复制为普通文件（或打包成一个 zip），并生成清单。
+
+打包本身交给 `app.core.export`：那里管 `.part` 暂存、原子改名、分包与命名模板；
+这里只负责把数据库里的条目翻译成「要导出的文件」，以及把清单塞进包里。
+"""
 
 from __future__ import annotations
 
 import csv
 import datetime as dt
 import io
-import os
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from ..core.export import (
+    DEFAULT_TEMPLATE,
+    PackagePlan,
+    PlannedItem,
+    ZipPack,
+    name_packages,
+    plan_packages,
+)
 from ..core.runtime import jsonio
 from ..db.models import DataItem, DataType
 from ..repositories import ItemRepository
@@ -57,6 +67,46 @@ class ZipExportResult:
 
     def summary(self) -> str:
         text = f"已把 {self.exported} 个文件打包到 {self.path.name}"
+        if self.missing:
+            text += f"，{self.missing} 个源文件缺失"
+        return text
+
+
+@dataclass
+class PackageResult:
+    """分包导出里的一个压缩包：装的是哪一包、落在哪、装进去几个文件。"""
+
+    label: str
+    path: Path
+    exported: int = 0
+    missing: int = 0
+    warnings: tuple[str, ...] = ()
+
+
+@dataclass
+class PackageExportResult:
+    """一次分包导出的总账（`mode="single"` 时只会有 1 个包）。"""
+
+    directory: Path
+    packages: tuple[PackageResult, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def exported(self) -> int:
+        return sum(row.exported for row in self.packages)
+
+    @property
+    def missing(self) -> int:
+        return sum(row.missing for row in self.packages)
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return tuple(row.path for row in self.packages)
+
+    def summary(self) -> str:
+        if not self.packages:
+            return "没有要导出的数据项"
+        text = f"已导出 {len(self.packages)} 个压缩包（共 {self.exported} 个文件）到 {self.directory}"
         if self.missing:
             text += f"，{self.missing} 个源文件缺失"
         return text
@@ -159,25 +209,100 @@ class ExportService:
         result = ZipExportResult(path=path)
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         suffix = "json" if manifest_format == "json" else "csv"
-        staging = path.with_name(path.name + ".part")
         used: set[str] = set()
-        try:
-            with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
-                for item in items:
-                    if self._archive_one(archive, item, used):
-                        result.exported += 1
-                    else:
-                        result.missing += 1
-                archive.writestr(
-                    f"清单-{stamp}.{suffix}",
-                    self.manifest_bytes(self.manifest_rows(items), manifest_format),
-                )
-            os.replace(staging, path)
-        except BaseException:  # 磁盘满 / 用户中途关掉之类：别留下半个包
-            staging.unlink(missing_ok=True)
-            raise
+        with ZipPack(path) as pack:
+            for item in items:
+                if self._pack_one(pack, item, used):
+                    result.exported += 1
+                else:
+                    result.missing += 1
+            pack.add_bytes(
+                f"清单-{stamp}.{suffix}",
+                self.manifest_bytes(self.manifest_rows(items), manifest_format),
+            )
         logger.info("导出压缩包完成：{}", result.summary())
         return result
+
+    def export_packages(
+        self,
+        items: list[DataItem],
+        directory: str | Path,
+        *,
+        mode: str = "single",
+        template: str = DEFAULT_TEMPLATE,
+        manifest_format: str = "csv",
+        now: dt.datetime | None = None,
+        user: str = "",
+        creator: str = "",
+    ) -> PackageExportResult:
+        """按分包方式把选中数据项导成若干压缩包，包名走命名模板。
+
+        `mode="single"` 只出一个包；`mode="top"` 按每个条目所在分类的最顶层分开打包。
+        模板里认不出的变量不会中断导出，只记在 `warnings` 里（包名保留原文）。
+        """
+        if not items:
+            raise ValueError("没有要导出的数据项")
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        by_key = {str(item.id): item for item in items}
+        plan: PackagePlan = plan_packages(self.planned_items(items), mode=mode)
+        named = name_packages(
+            plan.packages, template, now=now, user=user, creator=creator, used=set()
+        )
+        moment = now or dt.datetime.now()
+        stamp = moment.strftime("%Y%m%d-%H%M%S")
+        suffix = "json" if manifest_format == "json" else "csv"
+        results: list[PackageResult] = []
+        warnings: list[str] = []
+        for row in named:
+            chosen = [by_key[item.key] for item in row.package.items if item.key in by_key]
+            single = PackageResult(
+                label=row.package.label,
+                path=target / row.filename,
+                warnings=tuple(row.warnings),
+            )
+            used: set[str] = set()
+            with ZipPack(single.path) as pack:
+                for item in chosen:
+                    if self._pack_one(pack, item, used):
+                        single.exported += 1
+                    else:
+                        single.missing += 1
+                pack.add_bytes(
+                    f"清单-{stamp}.{suffix}",
+                    self.manifest_bytes(self.manifest_rows(chosen), manifest_format),
+                )
+            results.append(single)
+            warnings.extend(f"{single.path.name}：{text}" for text in row.warnings)
+        outcome = PackageExportResult(
+            directory=target, packages=tuple(results), warnings=tuple(warnings)
+        )
+        logger.info("分包导出完成：{}", outcome.summary())
+        return outcome
+
+    def category_path(self, item: DataItem) -> str:
+        """条目所在分类的完整路径（`影视/电影`）；没分类给空串。"""
+        names: list[str] = []
+        category = item.category
+        guard = 0
+        while category is not None and guard < 32:
+            names.append(category.name)
+            category = category.parent
+            guard += 1
+        return "/".join(reversed(names))
+
+    def planned_items(self, items: list[DataItem]) -> list[PlannedItem]:
+        """把数据库条目翻译成分包/命名用的只读计划项。"""
+        return [
+            PlannedItem(
+                key=str(item.id),
+                name=item.name,
+                category=self.category_path(item),
+                user=(item.user.name if item.user else ""),
+                size=int(item.size or 0),
+            )
+            for item in items
+        ]
 
     # ---------------------------------------------------------------- 内部
     def _export_one(self, item: DataItem, target: Path, used: set[str]) -> bool:
@@ -195,19 +320,17 @@ class ExportService:
             logger.error("导出失败 {}：{}", item.name, exc)
             return False
 
-    def _archive_one(self, archive: zipfile.ZipFile, item: DataItem, used: set[str]) -> bool:
+    def _pack_one(self, pack: ZipPack, item: DataItem, used: set[str]) -> bool:
         """把一项塞进压缩包；源文件缺失返回 False（不静默漏掉，由调用方计数）。"""
         filename = self._unique_filename(item, used)
         try:
             if item.type == DataType.TEXT and item.content:
-                archive.writestr(filename, item.content.encode("utf-8"))
+                pack.add_text(filename, item.content)
                 return True
             if not item.checksum or not self.store.content_available(item.checksum):
                 logger.warning("源文件缺失，跳过：{}", item.name)
                 return False
-            with archive.open(filename, "w") as handle:
-                for data in self.store.iter_content(item.checksum):
-                    handle.write(data)
+            pack.add_stream(filename, self.store.iter_content(item.checksum))
             return True
         except Exception as exc:
             logger.error("打包失败 {}：{}", item.name, exc)

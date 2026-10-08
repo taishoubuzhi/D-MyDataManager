@@ -20,7 +20,7 @@
     },
     "kind": {
       "type": "string",
-      "enum": ["module-data", "registry", "profiles", "catalog"],
+      "enum": ["module-data", "registry", "profiles", "catalog", "journal"],
       "description": "清单类型"
     },
     "title": {

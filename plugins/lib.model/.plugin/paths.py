@@ -21,10 +21,10 @@
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import shutil
+import sys
 import threading
 from pathlib import Path
 from typing import NamedTuple
@@ -32,9 +32,6 @@ from typing import NamedTuple
 from app.sdk import storage
 
 from .constants import PLUGIN_ID
-
-#: 只有拿不到 SDK 时才用的兜底日志（进不了程序日志，见模块说明）
-logger = logging.getLogger(__name__)
 
 __all__ = [
     "ModelsDirUnusable",
@@ -102,7 +99,10 @@ class MoveResult(NamedTuple):
 
 
 def _emit(level: str, message: str) -> None:
-    """把路径层出的问题写进程序日志；拿不到 SDK 就退回 stdlib（绝不抛出）。"""
+    """把路径层出的问题写进程序日志；拿不到 SDK 就退回 stderr（绝不抛出）。
+
+    不用 stdlib `logging`：插件的 logging 没有接进程序日志，写了也没人看得到。
+    """
     text = str(message)
     try:
         from app.sdk import console as console_api
@@ -116,7 +116,10 @@ def _emit(level: str, message: str) -> None:
         return
     except Exception:  # noqa: BLE001 - 报日志本身不该影响主流程
         pass
-    logger.warning("%s", text)
+    try:
+        sys.stderr.write(f"[{PLUGIN_ID}] {text}\n")
+    except Exception:  # noqa: BLE001 - 连 stderr 都没有就算了，主流程优先
+        pass
 
 
 def _ensure(directory: Path) -> Path:

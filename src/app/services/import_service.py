@@ -441,6 +441,14 @@ class ImportService:
             self.session.flush()
         return category.id
 
+    def category_for(self, category_id: int | None, user_id: int | None = None) -> int | None:
+        """某个归属实际会用到的分类 id（没指定分类时就是「未分类」）。
+
+        导入任务恢复时要按「这一项本该落到哪个目录」去找孤儿文件，用的就是这个解析；
+        和 `import_file` 走同一条路，才不会找到一个根本不存在的目录。
+        """
+        return self._category_for(category_id, self._resolve_user_id(user_id))
+
     def _register_blob(self, checksum: str, size: int, mime: str, store_rel: str | None = None) -> None:
         """登记内容引用；`store_rel` 为空串表示内容已分块、没有松散文件。"""
         if store_rel is None:

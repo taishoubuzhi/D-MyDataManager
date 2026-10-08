@@ -35,7 +35,31 @@
 * `items` 必须是数组，每一项必须有非空字符串 `key`，同一份清单里 `key` 不得重复。
 * 每项除 `key` 之外的字段随 `kind` 自定义；**要按 key 取值的那一项必须带 `value` 字段**（`ManifestData.value()` 只认 `value`）。
 * `id` 规则与插件 id 相同：`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`。
-* `kind` 取值：`module-data`（模块常量）、`registry`（注册表）、`profiles`（档位表）、`catalog`（清单目录）。
+* `kind` 取值：`module-data`（模块常量）、`registry`（注册表）、`profiles`（档位表）、`catalog`（清单目录）、`journal`（临时清单，见 §2.1）。
+
+### 2.1 临时清单（`kind = "journal"`）
+
+`journal` 是唯一一种**运行期产生、用完即删**的清单类型，承载「长任务的可恢复进度」：把待处理项先落盘，中途允许暂停 / 继续 / 取消，进程异常退出后下次启动还能接着做。它与其余四种类型的区别不在字段形状，而在生命周期：
+
+| | 普通受管清单 | 临时清单 |
+| --- | --- | --- |
+| 存在时长 | 长期，是程序数据的一部分 | 一个任务的生命周期 |
+| 谁创建 | 随代码 / 插件声明，固定路径 | 运行期动态 `register` + `write` |
+| 备份 | 每次变更前备份，留 10 份 | **不备份**（`write(..., backup=False)`，易失状态备份没有意义） |
+| 写入节奏 | 变更即写 | 节流合批（见下） |
+| 结束 | 一直存在 | 待处理项全部结清时删文件 + 注销登记 |
+
+顶层字段在统一格式之外附带：`journal_kind`（哪类任务，也是目录名）、`batch`（批次标识）、`state`（`running` / `paused` / `finished` / `abandoned`）、`created_at` / `updated_at`（ISO 字符串）、`options`（恢复时重现同一套语义的参数，例如导入的目标用户 / 分类 / 重名策略）。`title` / `description` 沿用统一格式的那两个可选字段。
+
+`items` 每一项在 `key` 之外至少带 `status`：`pending`（待处理）→ `active`（进行中）→ `done` / `skipped` / `failed` / `cancelled`（终态）。`pending` 与 `active` 是「还没结清」，只要还有一项没结清，这份清单就不许删。
+
+**进程重启后必须重新登记。** `ManifestRegistry` 只是内存字典，进程一退登记就没了；盘上残留的 JSON 不重新 `register`，`manifest_kit` 会直接报「没有登记名为 … 的清单」。所以临时清单的宿主必须在启动时扫描自己的目录、按文件里的 `id` 重新登记（`app.core.journals.JournalStore.scan()` 做的就是这件事），再把清单呈现给用户决定「继续 / 放弃」。
+
+**写入节流。** 逐项修改都整份重写是 O(n²)。宿主应合批：默认每 1 秒或每 20 条改动落盘一次（`FLUSH_INTERVAL` / `FLUSH_EVERY`），并在状态跃迁（开始 / 暂停 / 结束）、退出时强制落盘。崩溃最多丢掉最后一个合批窗口内的进度，而恢复本来就要重新核对，所以这个取舍是安全的。
+
+**恢复语义。** `active` 的项在异常退出时结果未知，恢复时退回 `pending`，由宿主按自己的语义核对（导入侧就是查内容校验和、收养库里已落盘但没登记的文件），而不是猜成功或猜失败。
+
+**实现位置**：`src/app/core/journals.py`（`Journal` / `JournalStore`），底层仍走 `manifest_kit`。普通清单的宿主不需要关心这一层。
 
 ## 3. 历史格式（`legacy`）
 
@@ -96,7 +120,8 @@ from app.core.manifest import manifest_kit
 | `update(id, mutations, *, backup=True)` | 按 key 变更：`{"key": k, ...}` 合并字段，`{"key": k, "remove": True}` 删项 |
 | `reset(id)` | 用**最近一次**备份覆盖当前文件（无备份抛 `ManifestBackupError`） |
 | `backup(id)` / `backups(id)` | 手工备份 / 列出备份（新的在前） |
-| `register(entry, *, source="")` | 运行期追加登记 |
+| `register(entry, *, source="")` | 运行期追加登记（重复 id 抛 `ValueError`） |
+| `drop(id) -> bool` | 注销单份清单的登记（临时清单用完即删；内置清单下次刷新会被加回来）；已注销返回 `False` |
 
 `ManifestData`：`path`、`version`、`kind`、`keys`、`meta`（除 items 外的顶层字段）、`items`（`key → 项`）、`raw`，以及
 `get(key, default=None)`、`value(key, default=_MISSING)`、`list()`（保持文件顺序）、`filters(**filters)`。
@@ -157,4 +182,5 @@ manifest.register("my.plugin.data", "plugins/my.plugin/.data/x.json", kind="cata
 
 * `tests/core/test_manifest.py`：内置登记表（18 条、17 份受管、登记表形状）、读写 / 查询 / 对照 / 变更 / 重置 / 备份裁剪、坏数据路径、legacy 路径、SDK 面无实现与有实现两种退化。
 * `tests/core/test_core_module_data.py`：`core.runtime`、`core.plugins` 两份真实清单与模块导出常量一致，并逐份读取 / 校验 17 份受管清单（结构 + schema）。
+* `tests/core/test_journal.py`：临时清单（`kind = "journal"`）的创建、进程重启后的重新登记、写入节流、终态清理、`active` 退回 `pending`、删除与注销登记。
 * 批次门禁（批 I 收口时的实测）：`compileall` rc 0、`python -m unittest discover -s tests -t .` = **564 OK**、`pytest -q` = **564 passed**、`python scripts/selfcheck.py --layer data,services,pages,flows` = **149/149**、`python scripts/plugin_stubs.py --check` = 与清单一致。

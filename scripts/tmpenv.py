@@ -102,6 +102,7 @@ def redirect_paths(root: Path) -> None:
     paths.ROOT = root
     paths.LOG_DIR = root / paths.LOG_DIR_NAME
     paths.DEFAULT_EXPORT_DIR = root / "exports"
+    paths.DEFAULT_DOWNLOAD_DIR = root / "downloads"
     paths.CONFIG_DIR = root / paths.CONFIG_DIR_NAME
     paths.CONFIG_FILE = paths.CONFIG_DIR / "config.json"
     paths.PLUGIN_DIR = root / "plugins"
@@ -144,6 +145,12 @@ def reset_config(root: Path) -> None:
     config.set(config.resourceProtected, False)
     config.set(config.hiddenProtected, False)
     config.set(config.exportPath, "")
+    config.set(config.downloadPath, "")
+    config.set(config.downloadConcurrent, 2)
+    config.set(config.downloadSequential, False)
+    config.set(config.downloadTimeout, 15)
+    config.set(config.downloadRetries, 2)
+    config.set(config.downloadProxy, "")
     config.set(config.currentUserId, 0)
     config.set(config.nameByTime, False)
     config.set(config.duplicatePolicy, "rename")
@@ -172,6 +179,7 @@ def reset_runtime_dirs() -> None:
         paths.LEGACY_STORE_DIR,
         paths.LEGACY_COVER_DIR,
         paths.DEFAULT_EXPORT_DIR,
+        paths.DEFAULT_DOWNLOAD_DIR,
     ):
         shutil.rmtree(folder, ignore_errors=True)
     for name in ("data.db", "data.db-wal", "data.db-shm"):

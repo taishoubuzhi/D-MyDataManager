@@ -20,6 +20,8 @@ from xml.etree import ElementTree
 
 from loguru import logger
 
+from ..core.runtime.sizes import human_size
+
 try:  # 编码嗅探（比「按顺序硬试」准得多，尤其对 gb18030 / shift_jis）；缺依赖时退回固定顺序
     from charset_normalizer import from_bytes as _detect_bytes
 except ImportError:  # pragma: no cover - 取决于运行环境
@@ -61,16 +63,6 @@ def suffix_of(value: str | Path) -> str:
     if "." in text:
         text = text.rsplit(".", 1)[-1]
     return text.strip(".")
-
-def human_size(value: float) -> str:
-    """把字节数写成 1.2 MB 这样的可读形式。"""
-    size = float(value or 0)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
-
 
 # --------------------------------------------------------------------- 文本
 def detect_encoding(raw: bytes) -> str:

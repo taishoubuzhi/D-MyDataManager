@@ -8,11 +8,29 @@ qfluentwidgets 的 `RangeSettingCard` 只有滑块，想设「保留 37 个存�
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from qfluentwidgets import PushButton, RangeSettingCard, SpinBox
+from qfluentwidgets import PushButton, PushSettingCard, RangeSettingCard, SpinBox
 
-__all__ = ["SPIN_WIDTH", "NumberSettingCard"]
+from .feedback import release_widget
+
+__all__ = ["ActionCard", "SPIN_WIDTH", "NumberSettingCard"]
 
 SPIN_WIDTH = 96
+
+
+class ActionCard(PushSettingCard):
+    """设置卡上的操作按钮：换成 Fluent PushButton，避免全站混入原生 QPushButton。
+
+    `PushSettingCard` 内部建的是原生 `QPushButton`（自检 `style_uniformity` 会拦），
+    所以这里把它换掉；按钮文字与点击信号仍按上游的用法走。
+    """
+
+    def __init__(self, text, icon, title: str, content: str, parent=None) -> None:
+        super().__init__(text, icon, title, content, parent)
+        index = self.hBoxLayout.indexOf(self.button)
+        release_widget(self.button)
+        self.button = PushButton(text, self)
+        self.hBoxLayout.insertWidget(index, self.button, 0, Qt.AlignmentFlag.AlignRight)
+        self.button.clicked.connect(self.clicked)
 
 
 class NumberSettingCard(RangeSettingCard):

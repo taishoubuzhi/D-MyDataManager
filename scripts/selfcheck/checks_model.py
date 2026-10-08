@@ -135,9 +135,13 @@ def model_extension_api(case: Case) -> None:
     if models.loaded() != ():
         problems.append(f"没有加载过模型，loaded 应为空：{models.loaded()}")
 
-    registry = case.root / ".resources" / "models" / "registry.json"
+    from dm_plugin.lib.model import paths as model_paths
+
+    registry = model_paths.registry_file()
     if not registry.is_file():
-        problems.append(f"登记表没有落到隔离资源目录：{registry}")
+        problems.append(f"登记表没有落盘：{registry}")
+    if case.root not in registry.parents:
+        problems.append(f"登记表没有落到隔离目录（跑测试不该写进真实程序目录）：{registry}")
     api.reload()
     if [item.id for item in models.list_models()] != [record.id]:
         problems.append("reload 之后模型丢失")
@@ -1719,46 +1723,71 @@ def model_runtime_profile_twins(case: Case) -> None:
     assert not problems, "运行环境双胞胎解析：" + "；".join(problems[:12])
 
 
-@check("model_download_prune", "services")
-def model_download_prune(case: Case) -> None:
-    """下载收尾：临时目录空了才删、有东西就留着，`download/` 空了也顺手清，取消走 drop_part。"""
+@check("model_download_facade", "services")
+def model_download_facade(case: Case) -> None:
+    """模型下载器只是程序本体队列的门面：`.part` 贴着目标文件、`active()` 给条数、
+    `shutdown()` 落盘但**不关**共享队列、`model_id` 记在插件自己这边。"""
     install_builtin_plugins()
+    from app.core import download as core
+    from app.core.journals import JournalStore
     from dm_plugin.lib.model.download import downloader
 
     problems: list[str] = []
-    folder = downloader.download_dir("local/selfcheck")
-    folder.mkdir(parents=True, exist_ok=True)
-    part = downloader.part_path("local/selfcheck", Path("model.gguf"))
-    part.write_bytes(b"x" * 16)
-    if downloader.prune_download_dir("local/selfcheck"):
-        problems.append("临时目录里还有运行时产生了东西，不该被删")
-    if not part.is_file():
-        problems.append("prune 不该动临时目录里的文件")
-    part.unlink()
-    if not downloader.prune_download_dir("local/selfcheck"):
-        problems.append("空的临时目录没有被删掉")
-    if folder.exists():
-        problems.append(f"临时目录还在：{folder}")
-    if folder.parent.name == "download" and folder.parent.exists():
-        problems.append(f"空的 download/ 没有被顺手清掉：{folder.parent}")
+    target = Path(case.root) / "model.gguf"
+    part = downloader.part_path(target)
+    if part != target.with_name(target.name + ".part"):
+        problems.append(f"`.part` 该贴着目标文件：{part}")
+    if part.parent != target.parent:
+        problems.append("`.part` 与目标文件不在同一个目录")
 
-    folder.mkdir(parents=True, exist_ok=True)
-    part.write_bytes(b"y" * 16)
-    downloader.drop_part("local/selfcheck", Path("model.gguf"))
-    if part.exists() or downloader.meta_path(part).exists() or folder.exists():
-        problems.append("drop_part 没有把临时文件和空目录清干净")
-    if not downloader.drop_part("local/selfcheck", Path("model.gguf")):
-        problems.append("drop_part 对没有半成品的目标也该安静通过")
-    assert not problems, "下载临时目录清理：" + "；".join(problems[:12])
+    queue = core.DownloadManager(
+        core.DownloadOptions(concurrent=1, retries=0, timeout=1.0),
+        index=JournalStore(core.DOWNLOAD_KIND, root=Path(case.root) / "journals"),
+        name="selfcheck",
+    )
+    manager = downloader.DownloadManager(queue=queue)
+    # 自检不联网：谁也别被取走，任务就停在「排队中」看形状
+    original_take = core.DownloadManager._take_locked
+    core.DownloadManager._take_locked = lambda self: None
+    try:
+        job = manager.enqueue("local/selfcheck", ["http://127.0.0.1:9/model.gguf"], target)
+        if job.target != target:
+            problems.append(f"任务视图该给出 Path 目标：{job.target!r}")
+        if job.model_id != "local/selfcheck":
+            problems.append(f"任务视图该带上 model_id：{job.model_id!r}")
+        if job.urls != ("http://127.0.0.1:9/model.gguf",):
+            problems.append(f"任务视图该给出地址：{job.urls!r}")
+        if job.label != "model.gguf":
+            problems.append(f"没给标签时该用文件名：{job.label!r}")
+        if not isinstance(manager.active(), int):
+            problems.append("active() 该给条数，不是列表")
+        if len(manager.jobs()) != 1:
+            problems.append(f"队列里该只有一条任务：{len(manager.jobs())}")
+        if manager.forget(job.id):
+            problems.append("还没结束的任务不该能被摘掉")
+        manager.pause(job.id)
+        manager.shutdown()
+        if not manager.jobs():
+            problems.append("shutdown 只该落盘，不该关掉共享队列")
+        if manager.active() != 0:
+            problems.append("暂停之后不该还有任务在跑")
+    finally:
+        core.DownloadManager._take_locked = original_take
+        try:
+            manager.cancel_all()
+        finally:
+            queue.shutdown(wait=1.0)
+    assert not problems, "模型下载器门面：" + "；".join(problems[:12])
 
 
 @check("model_crash_recovery", "services")
 def model_crash_recovery(case: Case) -> None:
     """异常退出：安装留「没装完」标记、下载留断点信息，重开后接着装 / 接着下。"""
     install_builtin_plugins()
+    from app.core import download as core
+    from app.core.journals import JournalStore
     from dm_plugin.lib.model import runtime as runtime_module
     from dm_plugin.lib.model.download import downloader
-    from dm_plugin.lib.model.settings import ModelSettings
 
     problems: list[str] = []
     profile_id = "selfcheck-crash"
@@ -1773,17 +1802,21 @@ def model_crash_recovery(case: Case) -> None:
     python.write_bytes(b"")
     profile = runtime_module.RuntimeProfile(id=profile_id, name="自检环境", packages=("nonexistent-package-xyz",))
     seen: list[bool] = []
-    original_stream = runtime_module._stream
+    # 安装引擎已经搬进程序本体，插件这一层只是转发：要拦住「真去跑 pip」，得替换
+    # 程序本体引擎里的 `stream`（插件那个 `_stream` 名字现在只是转发的壳，换掉它没用）。
+    from app.core.pip import engine as pip_engine
+
+    original_stream = pip_engine.stream
 
     def fake_stream(command, *, log, on_line=None, should_cancel=None, should_pause=None, control=None):
         seen.append(runtime_module.interrupted(profile_id))
         return 0
 
     try:
-        runtime_module._stream = fake_stream
+        pip_engine.stream = fake_stream
         runtime_module.ensure(profile, on_line=lambda _line: None)
     finally:
-        runtime_module._stream = original_stream
+        pip_engine.stream = original_stream
     if seen != [True]:
         problems.append(f"安装进行中应当认出「上次安装中断」：{seen}")
     if runtime_module.interrupted(profile_id):
@@ -1792,41 +1825,46 @@ def model_crash_recovery(case: Case) -> None:
         problems.append("装好之后应当有完成标记")
     runtime_module.discard(profile_id)
 
-    target = Path("model.gguf")
-    part = downloader.part_path("local/selfcheck", target)
-    part.parent.mkdir(parents=True, exist_ok=True)
-    part.write_bytes(b"x" * 32)
-    job = downloader.DownloadJob(
-        id="selfcheck",
-        model_id="local/selfcheck",
-        label="model.gguf",
-        state=downloader.STATE_QUEUED,
-        target=target,
-        total_bytes=64,
-        _urls=["http://127.0.0.1:9/model.gguf"],
-    )
-    downloader.remember_job(downloader.meta_path(part), job)
-    meta = downloader.read_meta(downloader.meta_path(part))
-    if meta.get("model_id") != "local/selfcheck" or meta.get("target") != str(target):
-        problems.append(f"断点信息没记全：{meta}")
-    if meta.get("urls") != ["http://127.0.0.1:9/model.gguf"]:
-        problems.append(f"断点信息丢了下载地址：{meta.get('urls')}")
-
-    manager = downloader.DownloadManager(ModelSettings(), max_workers=1)
+    target = Path(case.root) / "model.gguf"
+    part = downloader.part_path(target)
+    if part != target.with_name(target.name + ".part"):
+        problems.append(f"`.part` 该贴着目标文件：{part}")
+    store = JournalStore(core.DOWNLOAD_KIND, root=Path(case.root) / "journals")
+    options = core.DownloadOptions(concurrent=1, retries=0, timeout=1.0)
+    # 自检不联网：谁也别被取走，任务就一直停在「排队中」
+    original_take = core.DownloadManager._take_locked
+    core.DownloadManager._take_locked = lambda self: None
+    first_queue = core.DownloadManager(options, index=store, name="selfcheck")
+    second_queue = None
     try:
-        if manager.resume_leftovers() < 1:
-            problems.append("没把盘上的半成品排回下载队列")
-        picked = [item for item in manager.jobs() if str(item.target) == str(target)]
-        if len(picked) != 1:
-            problems.append(f"半成品应当只排一次：{len(picked)}")
-        elif picked[0].label != "model.gguf" or "model.gguf" not in str(picked[0]._urls[0]):
-            problems.append(f"排回来的任务丢了来源信息：{picked[0].label} / {picked[0]._urls}")
-        manager.shutdown()
+        first = downloader.DownloadManager(queue=first_queue)
+        first.enqueue("local/selfcheck", ["http://127.0.0.1:9/model.gguf"], target)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"x" * 32)
+        first.shutdown()  # 插件退场：只落盘
+        first_queue.shutdown(wait=1.0)  # 程序本体退出：任务留成「已退出，下次启动继续」
         if not part.exists():
-            problems.append("关程序不该把没下完的 `.part` 删掉")
+            problems.append("退出时不该把没下完的 `.part` 删掉")
+
+        # 重开：新的队列 + 新的门面，读同一份任务索引与同一份插件记录
+        second_queue = core.DownloadManager(options, index=store, name="selfcheck")
+        second = downloader.DownloadManager(queue=second_queue)
+        restored = second.resume_leftovers()
+        picked = [item for item in second.jobs() if Path(item.target) == target]
+        if restored < 1 or len(picked) != 1:
+            problems.append(f"半成品该被接回队列且只接一次：restored={restored} picked={len(picked)}")
+        elif picked[0].model_id != "local/selfcheck":
+            problems.append(f"接回来的任务该认得自己属于哪个模型：{picked[0].model_id!r}")
+        elif picked[0].label != "model.gguf":
+            problems.append(f"接回来的任务该记得自己的标签：{picked[0].label!r}")
+        elif "model.gguf" not in str(picked[0].urls[0]):
+            problems.append(f"接回来的任务该记得下载地址：{picked[0].urls}")
     finally:
-        manager.shutdown()
-        downloader.drop_part("local/selfcheck", target)
+        core.DownloadManager._take_locked = original_take
+        if second_queue is not None:
+            second_queue.shutdown(wait=1.0)
+        first_queue.shutdown(wait=1.0)
+        part.unlink(missing_ok=True)
     assert not problems, "异常退出后的恢复：" + "；".join(problems[:12])
 
 

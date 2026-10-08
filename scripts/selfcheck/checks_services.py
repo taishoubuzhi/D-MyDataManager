@@ -564,7 +564,10 @@ def export_archive_zip(case: Case) -> None:
 
     store = BlobStore(store_dir())
     rel_paths = session.execute(text("select rel_path from blobs")).scalars().all()
-    assert any(store.remove(rel) for rel in rel_paths), "内容仓库里没有可删除的文件"
+    # 注意别用 any(...)：它会在第一个 True 处短路，只删掉一份内容，
+    # 后面「内容缺失要计入 missing」就永远测不出来。
+    removed = [rel for rel in rel_paths if store.remove(rel)]
+    assert removed, "内容仓库里没有可删除的文件"
     later = service.export_archive(items, case.root / "missing")
     assert later.missing >= 1, f"内容缺失应计入 missing：{later.summary()}"
 

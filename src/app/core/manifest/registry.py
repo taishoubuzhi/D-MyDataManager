@@ -223,6 +223,20 @@ class ManifestRegistry:
             self._sources.pop(key, None)
         return tuple(gone)
 
+    def drop(self, manifest_id: str) -> bool:
+        """注销单份清单，返回是否真的注销了。
+
+        运行期建立又删除的临时清单（见 `app.core.journals`）走这条路：它用完即删，
+        登记信息再留着只会让 `ids()` 越滚越长，`describe()` 里出现指向已删文件的空条目。
+        内置清单即使被注销，下次 `_refresh_builtin()` 也会按 id 加回来，所以这里不设白名单。
+        """
+        key = str(manifest_id)
+        if key not in self._entries:
+            return False
+        self._entries.pop(key, None)
+        self._sources.pop(key, None)
+        return True
+
     def __contains__(self, manifest_id: object) -> bool:
         self._refresh_builtin()
         return str(manifest_id) in self._entries
