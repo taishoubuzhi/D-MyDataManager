@@ -1,9 +1,9 @@
 {
   "id": "builtin.viewer.video",
   "name": "内置视频播放器",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "api_version": ">=1.0 <2.0",
-  "description": "播放 mp4 / mkv / avi 等视频：播放暂停、进度、音量、倍速、循环、全屏、前一秒 / 后一秒 / 首末帧（都有提示）、画面缩放、截图、内嵌字幕与音轨选择；窗口标题栏带设置入口，系统解码器播不了时可转码兜底。",
+  "description": "播放 mp4 / mkv / avi 等视频：播放暂停、进度、音量、倍速、循环、全屏、前一秒 / 后一秒 / 首末帧（都有提示）、画面缩放、截图、内嵌字幕与音轨选择，可设为进入就自动播放；窗口标题栏带设置入口，系统解码器播不了时可转码兜底。",
   "author": "D-MyDataManager",
   "builtin": true,
   "entry": "plugin.py",
@@ -53,6 +53,13 @@
       "kind": "bool",
       "default": false,
       "description": "打开视频时循环播放（播完回到开头）。"
+    },
+    {
+      "key": "autoplay",
+      "label": "进入就播放",
+      "kind": "bool",
+      "default": false,
+      "description": "打开视频窗口就直接开始播放；关着时和以前一样，等你点播放按钮。"
     },
     {
       "key": "aspect",

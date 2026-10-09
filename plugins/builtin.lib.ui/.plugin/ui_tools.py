@@ -1460,6 +1460,9 @@ class PlayerPanel(QWidget):
         self._volume = _media_volume(values.get("volume", MEDIA_VOLUME))
         self._muted = bool(values.get("muted", False))
         self._loop = bool(values.get("loop", False))
+        # 进入播放器就自动开播（选项 autoplay）；没开就维持「等用户点播放」
+        self._autoplay = bool(values.get("autoplay", False))
+        self._autoplay_pending = self._autoplay
         self._rate = float(values.get("rate", 1.0) or 1.0)
         self._aspect = str(values.get("aspect") or "fit")
         self._frame_seconds = MEDIA_FRAME_SECONDS
@@ -1635,6 +1638,18 @@ class PlayerPanel(QWidget):
     def set_loop(self, loop: bool) -> None:
         self._loop = bool(loop)
         self._emit_option("loop", self._loop)
+
+    @property
+    def autoplay(self) -> bool:
+        """打开窗口就直接播（选项 `autoplay`）。"""
+        return self._autoplay
+
+    def set_autoplay(self, autoplay: bool) -> None:
+        """开启时若还没在播就立刻开始（设置里改一下立即生效）；关掉不会打断正在播的视频。"""
+        self._autoplay = bool(autoplay)
+        self._autoplay_pending = False
+        if self._autoplay and self._player.playbackState() == self._player_cls.PlaybackState.StoppedState:
+            self._player.play()
 
     def set_native_size(self, width: int, height: int) -> None:
         """告诉播放控件视频的原始分辨率（探测得到的，比等播放器自己报早一步）。"""
@@ -1860,7 +1875,13 @@ class PlayerPanel(QWidget):
             self._player.setPosition(value)
 
     def _on_media_status(self, status) -> None:
-        """单文件循环：播完回到开头接着播。"""
+        """自动开播（选项开启时，等文件装载好再点播放）与单文件循环：播完回到开头接着播。"""
+        if self._autoplay_pending and status in (
+            self._player_cls.MediaStatus.LoadedMedia,
+            self._player_cls.MediaStatus.BufferedMedia,
+        ):
+            self._autoplay_pending = False
+            self._player.play()
         if self._loop and status == self._player_cls.MediaStatus.EndOfMedia:
             self._player.setPosition(0)
             self._player.play()

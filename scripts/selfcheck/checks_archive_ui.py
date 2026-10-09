@@ -1237,7 +1237,7 @@ def _sample_video(path: Path) -> Path:
 
 @check("video_viewer", "pages")
 def video_viewer(case: Case) -> None:
-    """视频查看器：探测信息、播放条动作、选项回写、逐帧换算与「转码兜底」确认。"""
+    """视频查看器：探测信息、播放条动作、选项回写（含「进入就播放」）与「转码兜底」确认。"""
     from unittest import mock
 
     from qfluentwidgets import FluentIcon, ToolButton
@@ -1325,6 +1325,18 @@ def video_viewer(case: Case) -> None:
         viewer.resize(640, 420)
         viewer.show()
         ensure_app().processEvents()
+
+        # 默认「进入就播放」是关的：打开窗口后应停在停止状态，等用户自己点播放
+        _expect(
+            problems,
+            viewer.autoplay is False,
+            f"默认不该开启「进入就播放」，实际 {viewer.autoplay}",
+        )
+        _expect(
+            problems,
+            viewer._player.playbackState() == viewer._player_cls.PlaybackState.StoppedState,
+            "没开「进入就播放」时，打开视频不该自己播起来",
+        )
 
         tips: list[str] = []
         slots: list[tuple[int, str]] = []
@@ -1519,10 +1531,15 @@ def video_viewer(case: Case) -> None:
         keys = [str(item.get("key")) for item in items]
         _expect(
             problems,
-            keys == ["volume", "muted", "rate", "loop", "aspect", "subtitle", "zoom_step", "zoom_hint"],
+            keys == ["volume", "muted", "rate", "loop", "autoplay", "aspect", "subtitle", "zoom_step", "zoom_hint"],
             f"视频查看器的设置项应覆盖播放偏好与缩放，实际 {keys}",
         )
         by_key = {str(item["key"]): item for item in items}
+        _expect(
+            problems,
+            by_key["autoplay"]["kind"] == "bool" and by_key["autoplay"]["value"] is False,
+            f"「进入就播放」应是默认关着的开关，实际 {by_key.get('autoplay')}",
+        )
         _expect(
             problems,
             by_key["aspect"]["kind"] == "choice" and "fit" in by_key["aspect"]["choices"],
@@ -1536,6 +1553,47 @@ def video_viewer(case: Case) -> None:
         by_key["aspect"]["on_change"]("fit")
         _expect(problems, viewer.aspect == "fit", "设置项改了应立即生效")
         _expect(problems, ("aspect", "fit") in options, f"设置项改了应回写选项，实际 {options}")
+
+        # 「进入就播放」在设置里改一下立即生效：开着时当前窗口马上开播，关掉就写回选项
+        import time
+
+        by_key["autoplay"]["on_change"](True)
+        _expect(problems, viewer.autoplay is True, "设置里开启「进入就播放」应立即生效")
+        _expect(problems, ("autoplay", True) in options, f"「进入就播放」应回写选项，实际 {options}")
+        if engine:
+            playing = False
+            for _ in range(60):
+                ensure_app().processEvents()
+                if viewer._player.playbackState() == viewer._player_cls.PlaybackState.PlayingState:
+                    playing = True
+                    break
+                time.sleep(0.05)
+            _expect(problems, playing, "开启「进入就播放」后当前窗口应马上开始播放")
+        by_key["autoplay"]["on_change"](False)
+        _expect(problems, viewer.autoplay is False, "关掉「进入就播放」应生效")
+        _expect(problems, ("autoplay", False) in options, f"关掉「进入就播放」也应回写选项，实际 {options}")
+
+        # 开着「进入就播放」打开窗口：不用点播放就该自己播起来
+        if engine:
+            auto_viewer = video_module.VideoViewer(
+                sample, window, options={"autoplay": True}, on_option=lambda *_: None
+            )
+            try:
+                auto_viewer.resize(640, 420)
+                auto_viewer.show()
+                ensure_app().processEvents()
+                _expect(problems, auto_viewer.autoplay is True, "选项传入后应记下「进入就播放」")
+                playing = False
+                for _ in range(60):
+                    ensure_app().processEvents()
+                    if auto_viewer._player.playbackState() == auto_viewer._player_cls.PlaybackState.PlayingState:
+                        playing = True
+                        break
+                    time.sleep(0.05)
+                _expect(problems, playing, "开启「进入就播放」时，进入播放器应直接开始播放")
+            finally:
+                auto_viewer._release()
+                _drop_widget(auto_viewer)
 
         steps: list[float] = []
         original_seek = viewer.seek_by
@@ -1619,6 +1677,11 @@ def video_viewer(case: Case) -> None:
                     f"插件默认音量应为 80（折合 0.8），实际 {getattr(built, '_volume', None)}",
                 )
                 _expect(problems, built is not None and built._subtitle_on is True, "默认应打开内嵌字幕开关")
+                _expect(
+                    problems,
+                    built is not None and built.autoplay is False,
+                    "没设过选项时默认不该自动播放",
+                )
             finally:
                 _drop_widget(built)
     finally:

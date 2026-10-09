@@ -20,6 +20,7 @@ class VideoViewerPlugin(ViewerPlugin):
                 "muted": self.option("muted", False),
                 "rate": self.option("rate", "1"),
                 "loop": self.option("loop", False),
+                "autoplay": self.option("autoplay", False),
                 "aspect": self.option("aspect", "fit"),
                 "subtitle": self.option("subtitle", True),
                 "zoom_step": self.option("zoom_step", "1.25"),

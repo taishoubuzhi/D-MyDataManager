@@ -623,6 +623,14 @@ class VideoViewer(PlayerPanel):
                 "on_change": self._pick_loop,
             },
             {
+                "key": "autoplay",
+                "label": "进入就播放",
+                "kind": "bool",
+                "value": bool(self.autoplay),
+                "description": "开着时打开视频直接开播（当前这个窗口也会马上开始）；关掉就保持等你自己点播放。",
+                "on_change": self._pick_autoplay,
+            },
+            {
                 "key": "aspect",
                 "label": "画面比例",
                 "kind": "choice",
@@ -687,6 +695,10 @@ class VideoViewer(PlayerPanel):
         if button is not None:
             button.setChecked(self.loop)
         self.save_option("loop", self.loop)
+
+    def _pick_autoplay(self, value) -> None:
+        self.set_autoplay(bool(value))
+        self.save_option("autoplay", self.autoplay)
 
     def _pick_aspect(self, value) -> None:
         self.set_aspect(str(value))

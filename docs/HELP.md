@@ -732,8 +732,9 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 放大的画面也被视口裁掉、不会盖住上下工具条）；1.0 = 适应窗口，可以缩到 `MEDIA_ZOOM_MIN`（0.1，变成 0.x）也能放到 `MEDIA_ZOOM_MAX`（8.0），
 到两端时放大 / 缩小按钮自动变灰，「重置缩放」无条件回到 1.0；放大后可以直接**按住画面拖动平移**（平移被 `_clamp_pan()` 夹在视口内），
 每次缩放都会在**右下角浮出当前倍率**（默认 1 秒，时长由选项 `zoom_hint` 决定）。
-倍速与音量 / 静音 / 画面比例（适应 / 拉伸）等偏好走**插件选项**（`.data/viewer.json` 同级的那份选项，键 `volume` / `muted` / `rate` / `loop` / `aspect` / `subtitle` / `zoom_step` / `zoom_hint`，都是全局偏好）；
-「截图」按当前 `_position` 让 **`app.sdk.media`** 抽一帧（`media.frame()`），**帧步进**用 `media.MEDIA_FRAME_SECONDS` 与 `media_service` 探到的帧率换算成秒；播放前先用 `app.sdk.media.probe()` 拿时长 / 分辨率 / 字幕轨。
+倍速与音量 / 静音 / 画面比例（适应 / 拉伸）/ **进入就播放**等偏好走**插件选项**（`.data/viewer.json` 同级的那份选项，键 `volume` / `muted` / `rate` / `loop` / `autoplay` / `aspect` / `subtitle` / `zoom_step` / `zoom_hint`，都是全局偏好）；
+「进入就播放」关着时和以前一样等你点播放，开着时**打开播放器就直接开播**（`PlayerPanel` 在媒体加载好后自动 `play()`；在设置里现开也会让当前这个窗口马上开始，关掉不打断正在播的视频）；
+「截图」按当前 `_position` 让 **`app.sdk.media`** 抽一帧（`media.frame()`）；前一秒 / 后一秒与首末帧用 `PlayerPanel` 的 `seek_by(±1.0)` / `go_first_frame()` / `go_last_frame()`（都返回落点毫秒，提示照它写）；播放前先用 `app.sdk.media.probe()` 拿时长 / 分辨率 / 字幕轨。
 **转码兜底**：系统多媒体后端解不开（`errorOccurred`）时，若 `media.available()` 为真就弹确认框问「要不要转码到临时文件再播」，用户同意才在后台线程（`_FallbackWorker`，`QThread` + `QEventLoop`）里 `media.transcode()` 成同目录的 `.tmp/media/*.mp4` 再 `setSource()` 播放，**不同意就取消播放**（不静默转码）；这些临时文件在**关窗时删除**，删不掉（播放器还占着句柄）就重试几次，仍不行交给 `media_service` 的退出兜底清理。**没有「静默转码」的开关**：每一次都由用户点确认（用户 m00259 第 4 条）。
 每个查看器把显示名、`kind`、宿主、扩展名、能力写在自己的 `.data/viewer.json` 里；基类的 `setup()` 读它、`ctx.require("dialog")`
 之后调 `ctx.add_viewer(...)` 登记，子类只实现 `create_view(path, parent=None)` 返回视图控件。查看器控件是普通 `QWidget`，
@@ -747,7 +748,7 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 **设置入口也在这条标题栏上**：内容页实现 `settings_items()`（返回 `key` / `label` / `kind`（bool / int / choice）/ `value` / `description` / `choices` / 单位与范围 / `on_change`），
 外壳（`plugins/builtin.lib.ui/.plugin/dialog_host.py` 的 `PopupWindow._attach_content()`）先转交 `attach_popup()`、再问一次设置项，有就往关闭按钮左边加一个齿轮
 （`FluentIcon.SETTING`，机制在 `plugins/builtin.lib.ui/.plugin/settings.py`）；点开的对话框里**改一下立即生效并回写插件选项**（没有「确定」，
-底部只有「完成」/「关闭」）。当前声明设置项的查看器：视频（音量 / 静音 / 倍速 / 循环 / 画面比例 / 内嵌字幕 / 缩放步长 / 倍率提示时长）、
+底部只有「完成」/「关闭」）。当前声明设置项的查看器：视频（音量 / 静音 / 倍速 / 循环 / **进入就播放** / 画面比例 / 内嵌字幕 / 缩放步长 / 倍率提示时长）、
 图片（打开时适应窗口 / 缩放步长 / 平滑缩放）、文本（默认编码 / 自动换行）；`ViewerWindow` / `EditorWindow` 只负责把 popup 转给内容页并转发设置项。
 程序侧只剩调度：`app.services.viewer_service` 的 `open_path()` / `open_viewer_with()` / `open_system()` 通过 `viewer.open` 扩展接口把活儿交给插件
 （`plugins/builtin.lib.viewer/.plugin/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。

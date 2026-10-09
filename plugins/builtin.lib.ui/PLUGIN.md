@@ -47,6 +47,9 @@
     `add_action` / `remove_action` 转发给 `MediaBar`，另有 `set_native_size()` 供插件把探测到的分辨率先喂进来；
     **播放位置**（`seek_by(seconds) -> int` 按秒快进 / 快退、`go_first_frame()` / `go_last_frame()`，
     三者都**返回本次落到的时间（毫秒）**，方便调用方照着弹提示；`step_frames(frames)` 按帧长挪动，供需要逐帧的场景用）；
+    **播放状态**（`loop` / `set_loop`、`autoplay` / `set_autoplay` —— 打开时读取偏好，构造参数 `options` 里
+    的 `autoplay` 为真就等媒体加载好自动开播，中途改 `set_autoplay(True)` 也会立刻播；`save_option(key, value)`
+    是「立即生效 + 回写插件选项」的入口）；
     **画面缩放**（`set_zoom` / `zoom_in` / `zoom_out` / `reset_zoom` / `can_zoom_in` / `can_zoom_out` / `zoom`
     / `zoomChanged(倍率, 到最小?, 到最大?)` / `zoom_text()`，1.0 = 适应窗口，范围 `MEDIA_ZOOM_MIN` ~ `MEDIA_ZOOM_MAX`），
     放大后按住画面拖动平移（`_pan_by_mouse()`，平移由 `_pan_limits()` / `_clamp_pan()` 夹住）、
