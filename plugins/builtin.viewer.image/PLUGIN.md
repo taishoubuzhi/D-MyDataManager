@@ -35,4 +35,6 @@
 | smooth_scaling | bool | 开 | 缩放是否用平滑插值 |
 
 选项在「插件」页的「插件选项」对话框里改，改完插件会重新载入，工厂闭包里的参数立即生效；
-plugin.py 里的 DEFAULT_FIT_ON_OPEN / DEFAULT_ZOOM_STEP / DEFAULT_SMOOTH 是这些默认值的来源。
+**标题栏的齿轮**也能就地改（`.plugin/image_view.py` 的 `ImageViewer.settings_items()` 声明这三项，改一下立即生效
+并通过 `on_option` 回写），不必重新打开图片；plugin.py 里的 DEFAULT_FIT_ON_OPEN / DEFAULT_ZOOM_STEP / DEFAULT_SMOOTH
+是这些默认值的来源。

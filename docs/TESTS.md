@@ -13,7 +13,7 @@
 | `dataset.py` | 多样化语料生成（`Corpus` / `build_corpus`），导入类用例与 `scripts/seed_demo.py` 共用 |
 | `core/` `services/` `sdk/` `plugins/` | 按**被测对象**分目录的单元测试包（一个主题一个模块） |
 | `verify.py` | 门禁聚合入口：编译 → 插件桩 `--check` → `unittest discover` → 自检四层 → `pytest` → 可选依赖验收 → 打包冒烟 |
-| `smoke_checkout.py` | 打包冒烟：用 git 载荷造干净检出，在里面编译、走真实启动路径、跑门禁子集 |
+| `smoke_checkout.py` | 打包冒烟：用 git 载荷造干净检出，在里面编译、走真实启动路径、跑门禁子集（载荷清单按 `git ls-files --cached --others --exclude-standard` 算，`AGENT.md` 与 `docs/index/` 属于 `.gitignore` 排除的本地资料，**不在**校验范围内） |
 | `verify_optional_absence.py` | 把可降级依赖全藏起来后，程序仍能导入 / 入库 / 读回 / 回退监听 |
 | `.tmp/` | `tests/` 下所有测试共用的临时目录根（`tests/.tmp/`），运行结束自动清除（见第 5 节），已在 `.gitignore` 中 |
 
@@ -32,6 +32,8 @@
 | `core/test_jsonio.py` | JSON 读写（批 J6）：优先 orjson、缺依赖退回标准库，两者语义一致。 |
 | `core/test_manifest.py` | 清单机制：读取 / 查询 / 对照 / 变更 / 重置 / 备份，以及 SDK 面。 |
 | `core/test_mime.py` | MIME 与编码探测（批 J4）：内容嗅探优先于扩展名，但同类时扩展名更具体。 |
+| `core/test_qt_media.py` | 媒体引擎日志：把 QtMultimedia 自带那份 FFmpeg 的 libav 日志等级压到静音（`core/runtime/qt_media.py`），并留一条「只藏 info、保留真错误」的退路。 |
+| `core/test_runtime_paths.py` | 运行时目录：打包检出（git 克隆 + 独立 venv）也能把项目根认出来，插件目录、配置目录不落进 `src/`。 |
 | `core/test_security.py` | 口令散列：argon2id 首选、PBKDF2 兜底、老散列惰性升级（批 J3）。 |
 | `core/test_shell.py` | 系统默认打开：参数模板拼命令行、文件不存在直接失败、`os.startfile()` 被系统拒绝时回退资源管理器代开。 |
 
@@ -41,11 +43,12 @@
 | --- | --- |
 | `services/test_batch_rename.py` | 批量改名规则与关键词批量增减的用例：四种改名方式、重名序号、扩展名保护。 |
 | `services/test_category_sync.py` | 分类与库目录的双向同步：分类增 / 改 / 移 / 删都要落到目录上、「未分类」= 用户名文件夹根目录、按磁盘目录刷新分类树（含旧「未分类」目录回迁与空壳分类清理）。 |
-| `services/test_cover_service.py` | 封面规范：图片直接用自己（不存副本）、视频抽第一帧、其它类型不生成、没有 ffmpeg 时优雅退回，以及「重置封面」清空旧文件与旧记录后按规范重建。 |
+| `services/test_cover_service.py` | 封面规范：图片直接用自己（不存副本）、视频抽第一帧、其它类型不生成、没有媒体引擎时优雅退回，以及「重置封面」清空旧文件与旧记录后按规范重建。 |
 | `services/test_hidden.py` | 隐藏数据（`.hiddens/`）的用例：搬动、回搬、清理、扫描与过滤。 |
 | `services/test_item_api.py` | 数据接口（`app.sdk.items` + `app.services.item_api`）的用例。 |
 | `services/test_item_rename.py` | 数据改名用例：改显示名时库内文件一起改名，重名加序号，文件不在库里也不报错。 |
 | `services/test_layout_migration.py` | 库目录结构迁移：找回文件的三种真实布局（用户 m42407）。 |
+| `services/test_media_service.py` | 媒体引擎（PyAV）：探测时长 / 分辨率 / 流清单、抽第一帧并缩放、逐帧迭代、内嵌字幕解析、转封装（含只留音轨 / 只留字幕轨、轨道号不存在时报错不留半成品）、转码（含取消）、临时目录的创建与清理、缺引擎时的优雅降级。 |
 | `services/test_privacy.py` | 资源文件夹保护（静态保护模型）与启动自愈的用例。 |
 | `services/test_tag_permissions.py` | 标签权限：默认用户（管理员）可管理任意标签，其他用户只能管理自己创建的标签；仍被他人数据使用的标签不能转为个人。 |
 | `services/test_tag_shadows.py` | 标签重名：个人标签不得与全局标签同名，重名时并入全局标签（含启动修复）。 |

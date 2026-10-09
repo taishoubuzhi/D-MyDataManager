@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QPixmap, QTransform
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon
@@ -26,6 +26,8 @@ from dm_plugin.builtin.lib.ui.plugin import (
 ZOOM_STEP = 1.25
 ZOOM_MIN = 0.05
 ZOOM_MAX = 12.0
+#: 「适应窗口」允许把小图放大到铺满视口，所以上限比手动缩放的 ZOOM_MAX 宽
+FIT_ZOOM_MAX = 32.0
 
 
 def sibling_images(path: Path, extensions: Iterable[str]) -> list[Path]:
@@ -51,7 +53,7 @@ class ImageViewer(QWidget):
     """图片查看控件。
 
     `fit_on_open` / `zoom_step` / `smooth` 由插件选项决定（见 plugins/builtin.viewer.image/plugin.py），
-    插件页改动选项后重新载入插件即可生效。
+    窗口标题栏的「设置」入口里也能就地改：改完立即生效，并通过 `on_option` 回写插件选项。
     """
 
     def __init__(
@@ -63,6 +65,7 @@ class ImageViewer(QWidget):
         zoom_step: float = ZOOM_STEP,
         smooth: bool = True,
         extensions: Iterable[str] = (),
+        on_option: Callable[[str, object], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._path = Path(path)
@@ -71,6 +74,7 @@ class ImageViewer(QWidget):
         self._rotation = 0
         self._step_factor = max(1.01, float(zoom_step))
         self._smooth = bool(smooth)
+        self._on_option = on_option
         self._siblings = sibling_images(self._path, extensions)
         self._index = self._siblings.index(self._path) if self._path in self._siblings else 0
         self._pixmap = QPixmap(str(self._path))
@@ -103,6 +107,9 @@ class ImageViewer(QWidget):
         root.addWidget(bar)
 
         self._scroll, self._label = image_canvas(self)
+        # 视口尺寸由外层布局决定：弹窗刚建时视口往往只有几十像素，
+        # 之后变大不会再触发本控件的 resizeEvent，所以要盯住视口自己的 Resize。
+        self._scroll.viewport().installEventFilter(self)
         root.addWidget(self._scroll, 1)
 
     # ------------------------------------------------------------------ 行为
@@ -112,7 +119,7 @@ class ImageViewer(QWidget):
         available = self._scroll.viewport().size()
         width = max(1, self._pixmap.width())
         height = max(1, self._pixmap.height())
-        return max(ZOOM_MIN, min(available.width() / width, available.height() / height, ZOOM_MAX))
+        return max(ZOOM_MIN, min(available.width() / width, available.height() / height, FIT_ZOOM_MAX))
 
     def _apply(self) -> None:
         transform = QTransform()
@@ -184,8 +191,70 @@ class ImageViewer(QWidget):
             self._scale = self._fit_scale()
         self._apply()
 
+    # ------------------------------------------------------------------ 设置面板
+    def settings_items(self) -> list[dict]:
+        """标题栏「设置」入口里的项：打开方式、缩放步长与平滑缩放，改完立即生效。"""
+        return [
+            {
+                "key": "fit_on_open",
+                "label": "打开时适应窗口",
+                "kind": "bool",
+                "value": bool(self._fit),
+                "description": "打开图片时先按显示区域缩放，尽量大地完整显示。",
+                "on_change": self._pick_fit_on_open,
+            },
+            {
+                "key": "zoom_step",
+                "label": "缩放步长",
+                "kind": "choice",
+                "value": f"{self._step_factor:g}",
+                "choices": {"1.1": "1.1×（细腻）", "1.25": "1.25×（默认）", "1.5": "1.5×（快速）"},
+                "description": "每次点放大 / 缩小时的倍率变化幅度。",
+                "on_change": self._pick_zoom_step,
+            },
+            {
+                "key": "smooth_scaling",
+                "label": "平滑缩放",
+                "kind": "bool",
+                "value": bool(self._smooth),
+                "description": "关掉后缩放更快，但像素边缘更硬。",
+                "on_change": self._pick_smooth,
+            },
+        ]
+
+    def save_option(self, key: str, value: object) -> None:
+        """把设置项的变化回写给插件（没有回调时只在本窗口生效）。"""
+        if self._on_option is not None:
+            self._on_option(key, value)
+
+    def _pick_fit_on_open(self, value) -> None:
+        if bool(value):
+            self._fit_window()
+        self.save_option("fit_on_open", bool(value))
+
+    def _pick_zoom_step(self, value) -> None:
+        try:
+            self._step_factor = max(1.01, float(value))
+        except (TypeError, ValueError):
+            return
+        self.save_option("zoom_step", f"{self._step_factor:g}")
+
+    def _pick_smooth(self, value) -> None:
+        self._smooth = bool(value)
+        self._apply()
+        self.save_option("smooth_scaling", self._smooth)
+
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         super().resizeEvent(event)
         if self._fit:
             self._scale = self._fit_scale()
             self._apply()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt 命名
+        """视口尺寸变化时重算「适应窗口」：打开弹窗时视口是逐步变大的。"""
+        if obj is self._scroll.viewport() and event.type() == QEvent.Type.Resize and self._fit:
+            scale = self._fit_scale()
+            if abs(scale - self._scale) > 1e-6:
+                self._scale = scale
+                self._apply()
+        return super().eventFilter(obj, event)

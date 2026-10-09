@@ -127,6 +127,16 @@ class ViewerPlugin(Plugin):
         ctx = getattr(self, "_ctx", None)
         return ctx.option(key, default) if ctx is not None else default
 
+    def set_option(self, key: str, value) -> None:
+        """写插件选项（与「插件设置」写的是同一份，改完立即生效）。"""
+        ctx = getattr(self, "_ctx", None)
+        if ctx is None:
+            return
+        try:
+            ctx.set_option(key, value)
+        except Exception:  # 存偏好失败不该打断查看器
+            pass
+
     def create_view(self, path, parent=None):
         """造出自己的视图控件：子类必须实现。"""
         raise NotImplementedError(f"插件 {self.id} 没有实现 create_view()")

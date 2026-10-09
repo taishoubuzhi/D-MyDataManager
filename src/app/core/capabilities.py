@@ -15,7 +15,7 @@ print(capabilities.summary_text())       # 一行中文摘要（缺几项、缺�
 ## 约定
 
 - 探测**不 import 重型库**：只用 `importlib.util.find_spec()`，版本号走 `importlib.metadata`；
-  外部工具（ffmpeg / bsdtar）只查路径。因此 `report()` 可以在启动路径上安全调用。
+  外部工具（bsdtar）只查路径。因此 `report()` 可以在启动路径上安全调用。
 - 缺依赖是正常状态：每项给出中文提示与可直接复制的 pip 命令（默认清华镜像 + `--no-cache-dir`）。
 - 结果缓存：探测一次就记住，`refresh()` 可以在装完包后强制重查。
 """
@@ -145,9 +145,9 @@ _SPECS: tuple[_Spec, ...] = (
     _Spec("zstd", KIND_STDLIB, "内容仓库默认压缩编码（比 deflate 更快更小）",
           module="compression.zstd", alt_module="backports.zstd", dist="backports.zstd",
           fallback="内容仓库退回 deflate：功能不丢，压缩率差一点（3.14+ 走标准库；3.13 及更早由随依赖装的 backports.zstd 顶上，两者帧格式互通）"),
-    _Spec("ffmpeg", KIND_TOOL, "视频抽帧 / 转码（缩略图、向量化前的解码）",
-          tools=("ffmpeg", "ffmpeg.exe"), tool_hint="装 ffmpeg 并加进 PATH（或 pip install imageio-ffmpeg）",
-          fallback="视频不能抽帧 / 转码，视频缩略图与视频向量化不可用"),
+    _Spec("av", KIND_PYTHON, "媒体引擎：视频抽帧 / 探测 / 转码 / 字幕（PyAV，进程内自带 FFmpeg 库）",
+          module="av", dist="av",
+          fallback="没有媒体引擎，视频不能抽帧 / 转码 / 读字幕，视频缩略图与视频向量化不可用（查看器仍可用系统播放器打开）"),
     _Spec("bsdtar", KIND_TOOL, "系统 libarchive：rar / 7z 等压缩包的外部解包器",
           tools=(WINDOWS_TAR, "bsdtar", "bsdtar.exe", "tar", "tar.exe"),
           tool_hint=f"Windows 自带 {WINDOWS_TAR}；其它系统装 libarchive",

@@ -48,7 +48,7 @@ HIDDEN = (
     "pyzipper",
     "rarfile",
     "hf_transfer",
-    "imageio_ffmpeg",
+    "av",
     "backports",
     "zstandard",
 )
@@ -108,6 +108,20 @@ def main() -> int:
         expect(not item.available, f"{item.name} 在藏起来之后应报缺失")
         expect("pip install" in item.hint and capabilities.PYPI_MIRROR in item.hint, f"{item.name} 的提示应带镜像命令")
     expect(bool(capabilities.install_commands()), "缺失时应给出可复制的安装命令")
+
+    # 媒体引擎（PyAV）缺失时：能力页如实报缺 + 视频封面退回空串，而不是抛错
+    from app.db.models import DataType
+    from app.services import cover_service, media_service
+
+    engine = capabilities.capability("av")
+    expect(not engine.available, "av 被藏起来后应报缺失")
+    expect("pip install" in engine.hint, "av 缺失时也要给出安装命令")
+    expect(not media_service.available(), "media_service 也应报引擎不可用")
+    expect(media_service.probe(__file__) is None, "没有引擎时探测应返回 None 而不是抛错")
+    expect(
+        cover_service.build_cover(str(Path(__file__)), "0" * 64, DataType.VIDEO) == "",
+        "没有引擎时视频封面应退回空串",
+    )
 
     # 3) JSON 与口令的回退路径 -------------------------------------------
     text = jsonio.dumps({"名字": "中文"}, indent=2)

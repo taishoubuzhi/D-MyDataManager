@@ -29,13 +29,20 @@ from .item_service import ItemService
 from .library_service import LibraryService, is_uncategorized_category, sanitize_dir_name
 from .maintenance import compact_database, reset_config, reset_runtime_data, reset_to_defaults
 from .content_store import ContentStore, preferred_codec
-from . import cover_service
+from . import cover_service, media_service
 from .cover_service import (
     build_cover,
-    ffmpeg_executable,
     grab_video_frame,
     reset_covers,
 )
+from .media_service import (
+    DecodedFrame,
+    MediaError,
+    MediaInfo,
+    MediaStream,
+    SubtitleCue,
+)
+from .media_service import probe as probe_media
 from .pip_api import PipApi
 from .plugin_service import (
     PluginExportResult,
@@ -65,6 +72,7 @@ __all__ = [
     "DatabaseExportResult",
     "DatabaseImportResult",
     "DatabaseInfo",
+    "DecodedFrame",
     "DownloadApi",
     "ExportResult",
     "ExportService",
@@ -73,11 +81,15 @@ __all__ = [
     "ItemService",
     "LibraryService",
     "MODE_LABELS",
+    "MediaError",
+    "MediaInfo",
+    "MediaStream",
     "PluginExportResult",
     "PluginHost",
     "PluginInfo",
     "PluginService",
     "PipApi",
+    "SubtitleCue",
     "TaxonomyService",
     "UserInfo",
     "UserService",
@@ -86,13 +98,14 @@ __all__ = [
     "build_features",
     "compact_database",
     "cover_service",
-    "ffmpeg_executable",
     "grab_video_frame",
     "import_replace",
     "inspect_package",
     "is_uncategorized",
     "is_uncategorized_category",
+    "media_service",
     "overview",
+    "probe_media",
     "reset_covers",
     "plugin_service",
     "preferred_codec",

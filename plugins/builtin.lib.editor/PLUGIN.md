@@ -1,6 +1,6 @@
 # 编辑器库（builtin.lib.editor）
 
-编辑器插件的公共工具箱：编辑器基类、窗口外壳、编辑器注册表，外加「按规则决定用哪个编辑器编辑」的调度实现与「编辑器」配置页。
+编辑器插件的公共工具箱：编辑器基类、编辑器内容页、编辑器注册表，外加「按规则决定用哪个编辑器编辑」的调度实现与「编辑器」配置页。
 编辑行为整体由本插件提供（扩展接口 `editor.open`）；程序本体只剩调度门面与类型别名（`app.services.editor_service`），注册表、规则、界面都在这里。
 数据管理页右键的「编辑器 ▸」子菜单由程序本体搭出来（`ManagePage.editor_menu_items()` / `_build_editor_menu()` 读 `app.services.editor_service.editors_for()`），
 本插件不贡献菜单项——禁用后子菜单仍在，只是只剩「系统默认程序 / 交给系统选择…」；
@@ -17,7 +17,7 @@
 | provider.py | 扩展接口实现 EditorOpenApi：edit_path / edit_with / open_external、注册表段与规则的读 / 写 / 重置门面 |
 | window.py | 打开调度：build_window / open_page_via_host（经界面工具库弹独立窗口）/ edit_editor |
 | config_page.py | 「编辑器」配置页 EditorConfigPage（**插件页面**，用 builtin.lib.ui 的 SplitPage 与控件工厂搭出来） |
-| editor_window.py | 编辑器窗口外壳 EditorWindow：文件名 / 编辑器名 /「保存」「用系统编辑器打开」「定位文件」/ 内容区、未保存提示 |
+| editor_window.py | 编辑器内容页 EditorWindow：内容区 + 通过 attach_popup(popup) 把「保存」「用系统编辑器打开」「定位文件」挂到弹窗外壳的标题栏、未保存提示（页面不再自画标题栏） |
 
 **具体怎么编辑一种文件**（文本页、表格编辑器等）不属于本库：每个编辑器插件在自己的目录里实现。
 
@@ -57,7 +57,9 @@ EditorPlugin 提供：
 - `Editor` / `EditorRegistry` / `editor_registry` / `reset_registry` / `KIND_INTERNAL` / `KIND_EXTERNAL` / `KINDS`：注册表（见 `registry.py`）。
 - EditorOpenApi(ctx, rules=None, registry=None)：扩展接口实现（见下）；EditorRules(config_file=None, registry=None) / EditorRule / EditorDecision：规则模型与决策。
 - EditorConfigPage(ctx, api)：配置页；build_window / open_page_via_host / edit_editor / host_name：调度辅助。
-- EditorWindow(path, build, name, on_saved=None, parent=None)：窗口外壳；build(container) 返回内容控件，异常会退化成一行提示。
+- EditorWindow(path, build, name, on_saved=None, parent=None)：编辑器**内容页**（只有内容区）；build(container) 返回内容控件，异常会退化成一行提示。
+  弹窗外壳建好后由外壳回调 `attach_popup(popup)`，页面这时才把「保存」「用系统编辑器打开」「定位文件」三个按钮与
+  「编辑器名 · 文件信息（· 已修改）」副标题交给外壳标题栏；保存按钮的可用状态由页面按 `is_dirty()` 刷新。
 
 ## 扩展接口 editor.open
 

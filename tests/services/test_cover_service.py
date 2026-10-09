@@ -1,7 +1,7 @@
 """封面规范：图片直接用自己、视频抽第一帧、其它类型不生成，以及「重置封面」的重建逻辑。
 
 封面规则集中在 `app.services.cover_service`，导入、扫描登记、设置页「重置封面」三处共用。
-这里覆盖：按类型的生成策略、没有 ffmpeg 时的优雅退回、重置时清空旧封面并按新规范重建，
+这里覆盖：按类型的生成策略、没有媒体引擎（PyAV）时的优雅退回、重置时清空旧封面并按新规范重建，
 以及界面侧 `item_card.cover_source()` 对图片的回退（`cover_path` 为空时用原文件）。
 """
 
@@ -37,11 +37,11 @@ class CoverBuildCase(IsolatedCase):
             with self.subTest(data_type=data_type):
                 self.assertEqual(cover_service.build_cover("x", "abc123", data_type), "")
 
-    def test_video_without_ffmpeg_falls_back_to_empty(self) -> None:
-        """取不到 ffmpeg 时抽帧失败、返回空串，由界面回退到类型图标，而不是抛错。"""
-        with mock.patch.object(cover_service, "ffmpeg_executable", return_value=""):
+    def test_video_without_engine_falls_back_to_empty(self) -> None:
+        """取不到媒体引擎（PyAV）时抽帧失败、返回空串，由界面回退到类型图标，而不是抛错。"""
+        with mock.patch.object(cover_service.media_service, "available", return_value=False):
             result = cover_service.build_cover("C:/任意/视频.mp4", "abc123", DataType.VIDEO)
-        self.assertEqual(result, "", "没有 ffmpeg 时应退回空封面")
+        self.assertEqual(result, "", "没有媒体引擎时应退回空封面")
 
 
 class CoverResetCase(IsolatedCase):

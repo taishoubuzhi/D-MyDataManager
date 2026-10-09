@@ -1,6 +1,6 @@
 # 查看器库（builtin.lib.viewer）
 
-查看器插件的公共工具箱：查看器基类、窗口外壳、查看器注册表，外加「按规则决定用哪个查看器打开」的调度实现与「查看器」配置页。
+查看器插件的公共工具箱：查看器基类、查看器内容页、查看器注册表，外加「按规则决定用哪个查看器打开」的调度实现与「查看器」配置页。
 打开行为整体由本插件提供（扩展接口 `viewer.open`）；程序本体只剩调度门面与类型别名（`app.services.viewer_service`），注册表、规则、界面都在这里。
 
 ## 目录
@@ -14,7 +14,7 @@
 | provider.py | 扩展接口实现 ViewerOpenApi：open_path / open_viewer / open_external、注册表段与规则的读 / 写 / 重置门面 |
 | window.py | 打开调度：build_window / open_page_via_host（经界面工具库弹独立窗口）/ open_viewer |
 | config_page.py | 「查看器」配置页 ViewerConfigPage（**插件页面**，用 builtin.lib.ui 的 SplitPage 与控件工厂搭出来） |
-| viewer_window.py | 查看器窗口外壳 ViewerWindow：文件名 / 查看器名 / 「用系统程序打开」「定位文件」/ 内容区 |
+| viewer_window.py | 查看器内容页 ViewerWindow：内容区 + 通过 attach_popup(popup) 把「用系统程序打开」「定位文件」挂到弹窗外壳的标题栏（页面不再自画标题栏） |
 
 **具体怎么画一个文件**（文本页、图片页、播放器等）不属于本库：每个查看器插件在自己的目录里实现，
 音频 / 视频的播放控件来自界面工具库 `builtin.lib.ui`（`PlayerPanel` + `format_time`），
@@ -52,7 +52,9 @@ ViewerPlugin 提供：
 - `Viewer` / `ViewerRegistry` / `viewer_registry` / `reset_registry`：注册表（见 `registry.py`）。
 - ViewerOpenApi(ctx, rules=None, registry=None)：扩展接口实现（见下）；ViewerRules(config_file=None, registry=None) / ViewerRule / ViewerDecision：规则模型与决策。
 - ViewerConfigPage(ctx, api)：配置页；build_window / open_page_via_host / open_viewer / host_name：调度辅助。
-- ViewerWindow(path, build, name, parent=None)：窗口外壳；build(container) 返回内容控件，异常会退化成一行提示。
+- ViewerWindow(path, build, name, parent=None)：查看器**内容页**（只有内容区）；build(container) 返回内容控件，异常会退化成一行提示。
+  弹窗外壳建好后由外壳回调 `attach_popup(popup)`，页面这时才把「用系统程序打开」「定位文件」两个按钮与「查看器名 · 文件信息」副标题
+  交给外壳标题栏——文件名 / 查看器名 / 关闭按钮都归外壳一份，避免外层套一圈。
 
 ## 扩展接口 viewer.open
 

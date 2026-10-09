@@ -11,4 +11,10 @@ class TextViewerPlugin(ViewerPlugin):
     def create_view(self, path, parent=None):
         from .text_view import TextViewer
 
-        return TextViewer(path, parent)
+        return TextViewer(
+            path,
+            parent,
+            encoding=str(self.option("encoding", "")),
+            wrap=bool(self.option("wrap", True)),
+            on_option=self.set_option,
+        )

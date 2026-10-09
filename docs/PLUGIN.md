@@ -193,7 +193,7 @@ button = ui.IconTextButton(FluentIcon.HEART, "示例动作", self)   # 图标 + 
   "api_version": ">=1.0 <2.0",
   "entry": "plugin.py",
   "libraries": [
-    {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、窗口外壳 ViewerWindow、注册表 ViewerRegistry"}
+    {"name": "viewer", "module": "plugin.py", "description": "查看器插件基类 ViewerPlugin、内容页 ViewerWindow、注册表 ViewerRegistry"}
   ]
 }
 ```
@@ -242,6 +242,10 @@ class ImageViewerPlugin(ViewerPlugin):
     def create_view(self, path, parent=None):
         return ImageView(path, parent)
 ```
+
+视图控件（`ViewerWindow` / 自己的内容页）**不要自画标题栏**：标题栏由弹窗外壳 `PopupWindow` 提供（`builtin.lib.ui`），
+需要往外壳放按钮就实现 `attach_popup(popup)`（里面调 `popup.add_action(图标, 提示, 回调)`），
+需要设置入口就实现 `settings_items()`（外壳会自动在标题栏加一个齿轮，改一下立即生效并回写插件自己的选项）。
 
 配合清单：
 

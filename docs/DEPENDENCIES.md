@@ -36,6 +36,7 @@
 | `jieba` | `jieba` | 中文分词，自动关键词质量更高 | 中文按退化方式切分，自动关键词质量下降 |
 | `usearch` | `usearch` | 本地向量索引（相似图片 / 语义检索） | 相似图片 / 语义检索不可用 |
 | `sqlite_vec` | `sqlite-vec` | 把向量检索下推到 SQLite | 向量检索只能取回内存里算（更慢、更占内存） |
+| `av` | `av` | **内置媒体引擎（PyAV）**：视频探测、抽第一帧、逐帧解码、内嵌字幕、转封装、转码；wheel 里自带 FFmpeg 库，**不需要另装 `ffmpeg.exe`** | 视频查看器没有「转码兜底」（QtMultimedia 解不开的格式就只能报错）、拿不到时长 / 分辨率 / 字幕轨、视频封面退回类型图标 |
 | `py7zr` | `py7zr` | 7z 压缩包直接列举与解包 | 7z 只能交给系统 bsdtar 兜底 |
 | `pyzipper` | `pyzipper` | 加密 zip 的读取 | 加密 zip 读不了（普通 zip 不受影响） |
 | `rarfile` | `rarfile` | rar 压缩包列举（配合系统 bsdtar） | rar 列不出内容（bsdtar 也帮不上，rarfile 才是入口） |
@@ -64,8 +65,9 @@ pip install huggingface_hub hf-transfer -i https://pypi.tuna.tsinghua.edu.cn/sim
 
 | 工具 | 用途 | 获取方式 |
 | --- | --- | --- |
-| `ffmpeg` | 视频抽帧 / 转码（缩略图、向量化前的解码） | 装 ffmpeg 并加进 `PATH`；或 `pip install imageio-ffmpeg`（程序会优先用 `imageio_ffmpeg.get_ffmpeg_exe()`） |
 | `bsdtar` | rar / 7z 等压缩包的外部解包器（libarchive） | Windows 自带 `C:\Windows\System32\tar.exe`；其它系统装 `libarchive`。启动时 `capabilities.configure_tools()` 会把它设成 `rarfile.BSDTAR_TOOL` |
+
+（**没有 `ffmpeg` 这一项了**：媒体能力由 `requirements.txt` 里的 `av`（PyAV）提供，二进制随 wheel 分发，用户不用自己装、也不会版本对不上。）
 
 ### 2.3 开发 / 门禁 / 基准用
 
@@ -138,5 +140,7 @@ pip install pytest pytest-benchmark pyinstrument -i https://pypi.tuna.tsinghua.e
 - **PyMuPDF 1.28.2 是 AGPL-3.0（或商业授权）**：GPLv3 §13 允许组合分发，但组合体要一并满足 AGPLv3 §13
   ——把程序作为网络服务提供时必须向使用者提供完整源码（单机运行不触发）。要闭源或去掉这条约束，
   需买 PyMuPDF 商业授权或去掉 PDF 正文抽取 / 渲染能力。
-- **LGPL 组件（`py7zr` / `inflate64` / `pyppmd` / `multivolumefile` / `PyQt6-Qt6`）**：Python 侧是模块动态导入、
-  Qt 侧是 DLL 动态加载，用户都能自行替换；`LGPL-2.1-or-later` 本身也允许升级到 GPL，因此不构成冲突。
+- **LGPL 组件（`py7zr` / `inflate64` / `pyppmd` / `multivolumefile` / `PyQt6-Qt6` / `av` 携带的 FFmpeg 库）**：Python 侧是模块动态导入、
+  Qt 侧与 FFmpeg 侧是 DLL 动态加载，用户都能自行替换；`LGPL-2.1-or-later` 本身也允许升级到 GPL，因此不构成冲突。
+  `av` 自身是 BSD-3-Clause，它 wheel 里那份 FFmpeg（`avcodec` / `avformat` / `avfilter` 等）以独立 DLL 形式随包提供，
+  属于 LGPL 的动态链接用法；要换成别的 FFmpeg 构建，替换 wheel 里那几个 DLL 即可。

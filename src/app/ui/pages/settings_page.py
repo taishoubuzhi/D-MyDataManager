@@ -599,7 +599,7 @@ class SettingsPage(ScrollPage):
         if result["failed"]:
             self.toast_warning(
                 "重置封面完成",
-                f"{message}；{result['failed']} 个视频没能抽到第一帧（缺 ffmpeg 或编码不支持）",
+                f"{message}；{result['failed']} 个视频没能抽到第一帧（编码不支持或文件损坏）",
             )
         else:
             self.toast_success("重置封面完成", message)

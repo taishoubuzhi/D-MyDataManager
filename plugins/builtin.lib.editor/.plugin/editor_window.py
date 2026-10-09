@@ -1,7 +1,8 @@
-"""编辑器窗口外壳：文件名 / 编辑器名 / 保存 / 用系统编辑器打开 / 定位文件 / 内容区。
+"""编辑器内容页：只做「页面本身」，窗口标题栏由弹窗工具库（builtin.lib.ui）负责。
 
-内部编辑器控件只要能提供 `save()`（可选 `is_dirty()` / `caption`），外壳就会自动接上保存按钮、
-在关闭前询问未保存的改动。窗口由界面工具库弹出（`builtin.lib.ui` 的 open_page）。
+内容控件只要能提供 `save()`（可选 `is_dirty()` / `caption`），外壳就会自动接上保存按钮、
+在关闭前询问未保存的改动。文件名 / 编辑器名与「保存」「用系统编辑器打开」「定位文件」三个
+动作，通过 `attach_popup(popup)` 交给外壳标题栏，避免外壳与页面各画一条一模一样的标题栏。
 """
 
 from __future__ import annotations
@@ -16,12 +17,9 @@ from qfluentwidgets import FluentIcon
 from app.sdk import ui
 from dm_plugin.builtin.lib.ui.plugin import (
     confirm,
-    icon_button,
     status_label,
-    strong_label,
     toast_success,
     toast_warning,
-    toolbar,
 )
 
 _console = console_for("builtin.lib.editor")
@@ -42,7 +40,7 @@ def _call(widget, name: str):
 
 
 class EditorWindow(QWidget):
-    """通用编辑器窗口：把内容控件的保存能力接到工具条上。"""
+    """通用编辑器内容页：把内容控件的保存能力接到外壳标题栏上。"""
 
     def __init__(self, path, build, name, on_saved=None, parent=None) -> None:
         super().__init__(parent)
@@ -51,26 +49,14 @@ class EditorWindow(QWidget):
         self.editor_name = str(name or "")
         self._on_saved = on_saved
         self.content_widget = None
+        self.popup = None
+        self.save_button = None
+        self._meta_text = self.editor_name
         self.setObjectName("editorWindow")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        bar, bar_layout = toolbar(self)
-        bar_layout.setContentsMargins(14, 10, 14, 10)
-        self.title_label = strong_label(bar, self.path.name)
-        bar_layout.addWidget(self.title_label)
-        self.meta_label = status_label(bar, self.editor_name)
-        bar_layout.addWidget(self.meta_label)
-        bar_layout.addStretch(1)
-        self.save_button = icon_button(bar, FluentIcon.SAVE, "保存", self._on_save)
-        bar_layout.addWidget(self.save_button)
-        self.external_button = icon_button(bar, FluentIcon.LINK, "用系统编辑器打开", self._on_open_external)
-        bar_layout.addWidget(self.external_button)
-        self.reveal_button = icon_button(bar, FluentIcon.FOLDER, "定位文件", self._on_reveal)
-        bar_layout.addWidget(self.reveal_button)
-        root.addWidget(bar)
 
         self.content = QWidget(self)
         self.content_layout = QVBoxLayout(self.content)
@@ -85,6 +71,38 @@ class EditorWindow(QWidget):
         self._timer.timeout.connect(self._refresh_state)
         self._timer.start()
 
+    # ------------------------------------------------------------ 外壳对接
+    def attach_popup(self, popup) -> None:
+        """弹窗外壳创建后调用：把动作按钮与文件信息放到外壳标题栏上。"""
+        self.popup = popup
+        self.save_button = popup.add_action(FluentIcon.SAVE, "保存", self._on_save)
+        popup.add_action(FluentIcon.LINK, "用系统编辑器打开", self._on_open_external)
+        popup.add_action(FluentIcon.FOLDER, "定位文件", self._on_reveal)
+        self._refresh_state()
+        hook = getattr(self.content_widget, "attach_popup", None)
+        if callable(hook):
+            try:
+                hook(popup)
+            except Exception:
+                _console.exception("编辑器内容挂载失败")
+
+    def settings_items(self) -> list[dict]:
+        """转发内容控件声明的设置项，供外壳标题栏上的齿轮用（没有就空）。"""
+        hook = getattr(self.content_widget, "settings_items", None)
+        if not callable(hook):
+            return []
+        try:
+            items = hook()
+        except Exception:
+            _console.exception("读取编辑器设置项失败")
+            return []
+        return list(items) if items else []
+
+    def _set_meta(self, text: str) -> None:
+        self._meta_text = text
+        if self.popup is not None:
+            self.popup.set_meta(text)
+
     # ------------------------------------------------------------ 内容
     def _build_content(self) -> None:
         if self.build is None:
@@ -98,23 +116,22 @@ class EditorWindow(QWidget):
             return
         self.content_widget = widget
         self.content_layout.addWidget(widget, 1)
-        caption_text = str(getattr(widget, "caption", "") or "")
-        if caption_text:
-            self.meta_label.setText(f"{self.editor_name} · {caption_text}" if self.editor_name else caption_text)
 
     def _show_hint(self, text: str) -> None:
         self.content_layout.addWidget(status_label(self.content, text))
 
     def _refresh_state(self) -> None:
         dirty = bool(_call(self.content_widget, "is_dirty"))
-        self.save_button.setEnabled(dirty)
-        if not self.editor_name:
-            return
+        if self.save_button is not None:
+            self.save_button.setEnabled(dirty)
         caption_text = str(getattr(self.content_widget, "caption", "") or "")
-        base = f"{self.editor_name} · {caption_text}" if caption_text else self.editor_name
-        self.meta_label.setText(f"{base} · 已修改" if dirty else base)
+        if self.editor_name:
+            base = f"{self.editor_name} · {caption_text}" if caption_text else self.editor_name
+        else:
+            base = caption_text
+        self._set_meta(f"{base} · 已修改" if dirty and base else base)
 
-    # ------------------------------------------------------------ 工具条
+    # ------------------------------------------------------------ 动作
     def _on_save(self) -> None:
         widget = self.content_widget
         save = getattr(widget, "save", None)
@@ -145,7 +162,7 @@ class EditorWindow(QWidget):
 
     def _on_open_external(self) -> None:
         if not ui.open_default(self.path):
-            self.meta_label.setText("系统无法打开该文件，可在「编辑器」页设为自定义程序")
+            self._set_meta("系统无法打开该文件，可在「编辑器」页设为自定义程序")
 
     def _on_reveal(self) -> None:
         ui.reveal(self.path)

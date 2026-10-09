@@ -5,7 +5,7 @@
 - 想学「怎么写一个插件」，看根目录的 [`PLUGIN.md`](PLUGIN.md)（教程）。
 - 想查「程序开放了哪些扩展点、会广播哪些事件」，看 [`SDK.md`](SDK.md)。
 
-版本：SDK 协议 `1.0`（`src/app/sdk/version.py` 的 `SDK_VERSION`）。插件清单只声明 `api_version`（适配的 SDK 版本范围）；程序自身的协议版本记在 `src/app/core/runtime/runtime.json` 的 `manager_version`（由 `src/app/core/runtime/version.py` 读成 `MANAGER_VERSION`），它已经不是清单字段。
+版本：SDK 协议 `1.1`（`src/app/sdk/version.py` 的 `SDK_VERSION`；1.1 只**新增**了 `app.sdk.media` 与 `media.open` 扩展接口，`">=1.0 <2.0"` 这类旧范围继续满足）。插件清单只声明 `api_version`（适配的 SDK 版本范围）；程序自身的协议版本记在 `src/app/core/runtime/runtime.json` 的 `manager_version`（由 `src/app/core/runtime/version.py` 读成 `MANAGER_VERSION`），它已经不是清单字段。
 
 ## 1. 目录规范
 

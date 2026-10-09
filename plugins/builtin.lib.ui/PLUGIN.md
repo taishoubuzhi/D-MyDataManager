@@ -37,8 +37,20 @@
   - 可点卡片：`click_card(parent, on_click=…)`（返回能整块点击的 `ClickCard`，`app.sdk.ui` 也导出 `ClickCard` 给跨插件用）。
   - 组合构件：`ListPanel`（左栏：搜索 + 列表 + 计数，`set_items([(data, 文本[, 气泡])])` / `filter()` / `select(data)`）、
     `DetailPanel`（右栏：标题 + 说明 + `add_row()` + 操作区）、`SplitPage`（左右两栏页面，`list_panel` / `detail_panel` 属性）、
-    `MediaBar`（播放暂停 / 进度 / 音量条的纯控件）、`PlayerPanel(path, parent=None)`（基于 QtMultimedia 的完整播放控件，
-    类属性 `shows_video` 决定要不要挂视频画面，`QtMultimedia` 到构造时才导入、缺依赖抛 RuntimeError）、
+    `MediaBar`（播放暂停 / 进度 / 音量条的纯控件；`add_action(icon, tooltip, callback, *, anchor="right")`
+    能往条上插动作按钮，`anchor="before-play" / "after-play"` 插在播放键左右、默认插在时间与音量之间；
+    `remove_action(button)` 反向摘掉）、
+    `PlayerPanel(path, parent=None)`（基于 QtMultimedia 的完整播放控件，
+    类属性 `shows_video` 决定要不要挂视频画面，`QtMultimedia` 到构造时才导入、缺依赖抛 RuntimeError；
+    视频画面是 `QGraphicsView` + `QGraphicsVideoItem` **合成绘制**（不是原生 `QVideoWidget` 子窗口），
+    所以提示浮层 / 倍率 / 弹窗能画在画面之上，放大的画面被视口裁掉；
+    `add_action` / `remove_action` 转发给 `MediaBar`，另有 `set_native_size()` 供插件把探测到的分辨率先喂进来；
+    **播放位置**（`seek_by(seconds) -> int` 按秒快进 / 快退、`go_first_frame()` / `go_last_frame()`，
+    三者都**返回本次落到的时间（毫秒）**，方便调用方照着弹提示；`step_frames(frames)` 按帧长挪动，供需要逐帧的场景用）；
+    **画面缩放**（`set_zoom` / `zoom_in` / `zoom_out` / `reset_zoom` / `can_zoom_in` / `can_zoom_out` / `zoom`
+    / `zoomChanged(倍率, 到最小?, 到最大?)` / `zoom_text()`，1.0 = 适应窗口，范围 `MEDIA_ZOOM_MIN` ~ `MEDIA_ZOOM_MAX`），
+    放大后按住画面拖动平移（`_pan_by_mouse()`，平移由 `_pan_limits()` / `_clamp_pan()` 夹住）、
+    `StageOverlay` 是挂在画面容器右下角的浮层提示（`flash(text)` 显示一小会儿后自动隐藏，时长可调））、
     `format_time(milliseconds)`（`1:05` / `1:02:03`）、`image_canvas(parent)`（返回 `(滚动区, 图片标签)`）。
   - 反馈：`toast_success / toast_info / toast_warning / toast_error(parent, title, content)`、`confirm(parent, title, content)`、
     `release_widget`、`clear_layout`。
@@ -48,6 +60,13 @@
     （content_factory(parent) 返回内容控件；buttons 是 [(按钮文字, 回调)]）；`DialogApi.windows()` / `DialogApi.close_all()`；
     `PopupWindow` 标题栏 + 内容区，Esc 或关闭按钮关闭，WA_DeleteOnClose；content_factory 抛异常时退化成一行
     「页面无法显示：…」，不会影响主界面。
+  - 标题栏只有**一条**，且归 `PopupWindow`：内容页不要在页内再画一条「文件名 + 关闭」的栏。内容页需要往外壳放动作时，
+    实现 `attach_popup(popup)` —— `open_page()` 造好内容控件后会回调它（没有该方法就跳过），页面在回调里调
+    `popup.add_action(icon, tooltip, callback)`（插到关闭按钮左侧，返回按钮本体；配套 `popup.remove_action(button)`
+    可反向摘掉，内容页换外壳时用）与 `popup.set_meta(text)` /
+    `popup.set_title(text)`（改副标题 / 标题）、`popup.set_bar_visible(visible)`（整条标题栏显隐）、
+    `popup.set_escape_handler(handler)`（Esc 先给内容页，返回 True 表示不关窗）。查看器与编辑器内容页就是这么做的，见
+    [`plugins/builtin.lib.viewer/PLUGIN.md`](../viewer/PLUGIN.md) 与 [`plugins/builtin.lib.editor/PLUGIN.md`](../editor/PLUGIN.md)。
 
 ## 依赖
 
@@ -64,4 +83,5 @@
 禁用本插件后，查看器会提示缺少界面工具库。
 
 音频 / 视频查看器用的播放控件就是本库的 `PlayerPanel`：`builtin.viewer.audio` 与 `builtin.viewer.video` 的视图分别是
-`class AudioViewer(PlayerPanel)` 与 `class VideoViewer(PlayerPanel)`，只差一个 `shows_video` 开关。
+`class AudioViewer(PlayerPanel)` 与 `class VideoViewer(PlayerPanel)`，只差一个 `shows_video` 开关；视频那个另外把常用动作
+挂到弹窗标题栏（`attach_popup` + `popup.add_action`），没有外壳时（单独用播放控件）自动退回播放条。

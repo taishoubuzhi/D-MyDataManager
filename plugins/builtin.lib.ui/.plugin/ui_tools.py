@@ -14,11 +14,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtCore import Qt, QEvent, QSizeF, QTimer, QUrl, QSignalBlocker, pyqtSignal
+from PyQt6.QtGui import QFontDatabase, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QGraphicsScene,
+    QGraphicsView,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -91,6 +93,26 @@ DURATION_SUCCESS = 2500
 DURATION_INFO = 2500
 DURATION_WARNING = 3000
 DURATION_ERROR = 4000
+
+#: 播放条的可选倍速（MediaBar 的倍速下拉）。
+MEDIA_RATES: tuple[float, ...] = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+
+#: 默认音量（0.0 - 1.0）。
+MEDIA_VOLUME = 0.8
+
+#: 快捷键一次快进 / 快退的秒数。
+MEDIA_SEEK_STEP = 5.0
+
+#: 探测不到帧率时，逐帧步进用的默认帧时长（秒）。
+MEDIA_FRAME_SECONDS = 1 / 30
+
+#: 画面缩放的默认步长与范围（1.0 = 适应窗口；可以缩到比窗口小，放大有上限）。
+MEDIA_ZOOM_STEP = 1.25
+MEDIA_ZOOM_MIN = 0.1
+MEDIA_ZOOM_MAX = 8.0
+
+#: 右下角倍率提示的默认停留时长（毫秒），插件用 `set_zoom_hint()` 覆盖。
+MEDIA_ZOOM_HINT_MS = 1000
 
 
 class PageHeader(QWidget):
@@ -1140,8 +1162,24 @@ class SplitPage(PageTemplate):
         self.body_layout.addLayout(row, 1)
 
 
+def _media_volume(value) -> float:
+    """把音量统一成 0.0 - 1.0：插件选项可能给 0-100 的整数百分比。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return MEDIA_VOLUME
+    if number > 1.0:
+        number /= 100.0
+    return max(0.0, min(1.0, number))
+
+
 class MediaBar:
-    """播放条：播放 / 暂停、进度、时间与音量，播放逻辑由插件绑定回调。"""
+    """播放条：播放 / 暂停、进度、时间、音量 / 静音与倍速，播放逻辑由插件绑定回调。
+
+    插件自己的动作按钮（截图、逐帧、全屏……）走 `add_action()`：默认加在音量左边，
+    传 `anchor="before-play" / "after-play"` 则加在播放按钮左右两侧
+    （逐帧、首末帧这类跟着播放走的动作放这两边）。
+    """
 
     def __init__(
         self,
@@ -1150,11 +1188,21 @@ class MediaBar:
         on_toggle=None,
         on_seek=None,
         on_volume=None,
-        volume: float = 0.8,
+        on_mute=None,
+        on_rate=None,
+        volume: float = MEDIA_VOLUME,
+        muted: bool = False,
+        rate: float = 1.0,
+        rates: Sequence[float] = MEDIA_RATES,
     ) -> None:
         self.host, layout = toolbar(parent, spacing=8)
-        self.button = tool_button(self.host, FluentIcon.PLAY, "播放 / 暂停", on_toggle)
+        self._layout = layout
+        self.button = tool_button(self.host, FluentIcon.PLAY, "播放 / 暂停（空格）", on_toggle)
         layout.addWidget(self.button)
+        # 播放按钮两侧留给「跟着播放走」的动作（逐帧、首末帧）：
+        # add_action(anchor="before-play") 依次往左排，add_action(anchor="after-play") 依次往右排
+        self._before_index = 0
+        self._left_index = layout.count()
         self.slider = Slider(Qt.Orientation.Horizontal, self.host)
         self.slider.setRange(0, 0)
         self.slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1164,14 +1212,122 @@ class MediaBar:
         layout.addWidget(self.slider, 1)
         self.time_label = status_label(self.host, "")
         layout.addWidget(self.time_label)
+        # 插件动作按钮插在这里（音量左边）：先记下位置，之后 add_action 往里插
+        self._action_index = layout.count()
+        self._on_mute = on_mute
+        self._muted = False
+        self.mute_button = tool_button(self.host, FluentIcon.VOLUME, "静音（M）", self._toggle_mute)
+        self.mute_button.setCheckable(True)
+        layout.addWidget(self.mute_button)
         layout.addWidget(caption(self.host, "音量"))
         self.volume = Slider(Qt.Orientation.Horizontal, self.host)
         self.volume.setRange(0, 100)
-        self.volume.setFixedWidth(120)
-        self.volume.setValue(int(max(0.0, min(1.0, float(volume))) * 100))
+        self.volume.setFixedWidth(110)
+        self.volume.setValue(int(round(_media_volume(volume) * 100)))
         if on_volume is not None:
             self.volume.valueChanged.connect(lambda value: on_volume(value / 100.0))
         layout.addWidget(self.volume)
+        self._on_rate = on_rate
+        self.rate_box = ComboBox(self.host)
+        for item in rates or MEDIA_RATES:
+            self.rate_box.addItem(f"{float(item):g}×", userData=float(item))
+        self.rate_box.setFixedWidth(84)
+        self.rate_box.setToolTip("播放倍速")
+        if on_rate is not None:
+            self.rate_box.currentIndexChanged.connect(lambda *_: on_rate(self.rate()))
+        layout.addWidget(self.rate_box)
+        self.set_muted(bool(muted))
+        self.set_rate(rate)
+
+    # ------------------------------------------------------------------ 插件动作
+    def add_action(self, icon, tooltip: str, callback, *, anchor: str = "right") -> ToolButton:
+        """在播放条上追加一个动作按钮（返回按钮本体，插件可继续设置为可选中）。
+
+        `anchor="right"`（默认）落在时间标签与音量之间；`anchor="before-play"` 落在
+        播放按钮左边、`anchor="after-play"` 落在播放按钮右边（逐帧、首末帧这类跟着
+        播放走的动作放这两边）。同一组内按调用顺序从左到右排列。
+        """
+        button = tool_button(self.host, icon, tooltip, callback)
+        anchor = str(anchor)
+        if anchor == "before-play":
+            self._layout.insertWidget(self._before_index, button)
+            self._before_index += 1
+            self._left_index += 1
+            self._action_index += 1
+        elif anchor == "after-play":
+            self._layout.insertWidget(self._left_index, button)
+            self._left_index += 1
+            self._action_index += 1
+        else:
+            self._layout.insertWidget(self._action_index, button)
+            self._action_index += 1
+        return button
+
+    def remove_action(self, button) -> bool:
+        """摘掉之前追加的动作按钮（内容页换外壳、动作要搬到标题栏时用）。
+
+        三个插入下标要跟着回退，否则后面再加动作会插到错的位置。
+        """
+        index = -1
+        for position in range(self._layout.count()):
+            if self._layout.itemAt(position).widget() is button:
+                index = position
+                break
+        if index < 0:
+            return False
+        self._layout.removeWidget(button)
+        button.setParent(None)
+        button.deleteLater()
+        for name in ("_before_index", "_left_index", "_action_index"):
+            if getattr(self, name) > index:
+                setattr(self, name, getattr(self, name) - 1)
+        return True
+
+    # ------------------------------------------------------------------ 音量 / 静音
+    def toggle_mute(self) -> None:
+        """切换静音（快捷键与按钮都走这里）。"""
+        self.set_muted(not self._muted)
+        if self._on_mute is not None:
+            self._on_mute(self._muted)
+
+    def _toggle_mute(self) -> None:
+        self.toggle_mute()
+
+    def set_muted(self, muted: bool) -> None:
+        self._muted = bool(muted)
+        self.mute_button.setChecked(self._muted)
+        self.mute_button.setIcon(FluentIcon.MUTE if self._muted else FluentIcon.VOLUME)
+        self.volume.setEnabled(not self._muted)
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
+
+    def set_volume(self, volume: float) -> None:
+        """外部同步音量（0.0 - 1.0）：只动滑块，回写回调照旧触发。"""
+        self.volume.setValue(int(round(_media_volume(volume) * 100)))
+
+    # ------------------------------------------------------------------ 倍速
+    def rate(self) -> float:
+        data = self.rate_box.currentData()
+        try:
+            return float(data)
+        except (TypeError, ValueError):
+            return 1.0
+
+    def set_rate(self, rate: float) -> None:
+        """选中指定倍速；不在候选里就落到 1.0×。"""
+        target = float(rate or 1.0)
+        for index in range(self.rate_box.count()):
+            value = self.rate_box.itemData(index)
+            if value is not None and abs(float(value) - target) < 1e-6:
+                self.rate_box.setCurrentIndex(index)
+                return
+        for index in range(self.rate_box.count()):
+            value = self.rate_box.itemData(index)
+            if value is not None and abs(float(value) - 1.0) < 1e-6:
+                self.rate_box.setCurrentIndex(index)
+                return
 
     def set_playing(self, playing: bool) -> None:
         self.button.setIcon(FluentIcon.PAUSE if playing else FluentIcon.PLAY)
@@ -1201,28 +1357,122 @@ def _multimedia():
     """延迟导入 QtMultimedia：模块级不导入，没有它的环境仍可导入本库。"""
     try:
         from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
-        from PyQt6.QtMultimediaWidgets import QVideoWidget
+        from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
     except ImportError as exc:  # pragma: no cover - 取决于运行环境
         raise RuntimeError("当前环境缺少 QtMultimedia，无法播放音视频") from exc
-    return QMediaPlayer, QAudioOutput, QVideoWidget
+    return QMediaPlayer, QAudioOutput, QGraphicsVideoItem
+
+
+class StageOverlay(QLabel):
+    """画面右下角的浮动提示（缩放倍率之类），显示一小会儿自动消失。
+
+    挂在画面容器上：容器改尺寸时自己贴回右下角；鼠标事件一律穿透，不挡下面的
+    画面（放大后拖动平移照旧有效）。
+    """
+
+    def __init__(self, parent: QWidget, *, duration: int = MEDIA_ZOOM_HINT_MS) -> None:
+        super().__init__(parent)
+        self._duration = max(200, int(duration))
+        self.setObjectName("stageOverlay")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(
+            "QLabel#stageOverlay { background-color: rgba(0, 0, 0, 170); color: #ffffff;"
+            " border-radius: 6px; padding: 6px 12px; }"
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+        self.hide()
+        parent.installEventFilter(self)
+
+    def set_duration(self, milliseconds: int) -> None:
+        """改提示停留时长（毫秒）。"""
+        self._duration = max(200, int(milliseconds))
+
+    def flash(self, text: str) -> None:
+        """显示一条提示，到时自动藏起来。"""
+        self.setText(str(text))
+        self.adjustSize()
+        self._reposition()
+        self.show()
+        self.raise_()
+        self._timer.start(self._duration)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.parent() and event.type() == QEvent.Type.Resize:
+            self._reposition()
+        return super().eventFilter(obj, event)
+
+    def _reposition(self) -> None:
+        holder = self.parentWidget()
+        if holder is None:
+            return
+        self.move(
+            max(0, holder.width() - self.width() - 16),
+            max(0, holder.height() - self.height() - 16),
+        )
 
 
 class PlayerPanel(QWidget):
-    """通用播放控件：播放 / 暂停、进度、时长、音量与错误提示。
+    """通用播放控件：播放 / 暂停、进度、时长、音量 / 静音、倍速与键盘快捷键。
 
     QtMultimedia 延迟到构造时才导入（模块级导入会让没有它的环境连本库都进不来），
-    缺依赖时抛 RuntimeError。子类置 `shows_video = True` 即改用 QVideoWidget 承载画面，
-    否则显示音频占位区；播放条复用 MediaBar。
+    缺依赖时抛 RuntimeError。子类置 `shows_video = True` 即改用
+    `QGraphicsView` + `QGraphicsVideoItem` 承载画面（画面由 Qt 合成绘制，不是原生
+    窗口），否则显示音频占位区；播放条复用 MediaBar。
+
+    画面缩放只改 `QGraphicsVideoItem` 的显示尺寸与位置，倍率 1.0 就是「适应窗口」，
+    可缩到 `MEDIA_ZOOM_MIN`（比窗口小）、放大到 `MEDIA_ZOOM_MAX`，放大后按住画面
+    拖动即可平移。画面在视口内合成，所以放大溢出会被视口裁掉，浮层提示、弹窗也能
+    盖在画面之上。接入方式与 `zoom_in()` / `zoom_out()` / `reset_zoom()` 三个动作
+    用 `zoomChanged` 同步按钮状态；`set_zoom_hint()` 控制右下角倍率提示的停留时长。
+
+    播放偏好（音量 / 静音 / 倍速 / 循环 / 画面比例 / 缩放步长 / 倍率提示时长）由调用方
+    以 `options` 传入，变化时经 `on_option(key, value)` 回传——界面库不认识程序配置，
+    也就不会把配置读写混进界面代码。插件自己的动作按钮走
+    `add_action(icon, tooltip, callback, anchor=...)`；画面下方还要加内容（如字幕条）
+    就重写 `_build_stage_extra(layout)`。
     """
 
     shows_video = False
 
-    def __init__(self, path: Path, parent: QWidget | None = None) -> None:
+    #: 播放偏好变化时向外播报（插件用它把值存进自己的选项）
+    captionChanged = pyqtSignal(str)
+
+    #: 缩放倍率变化时播报：(倍率, 是否已到最小, 是否已到最大)
+    zoomChanged = pyqtSignal(float, bool, bool)
+
+    def __init__(
+        self,
+        path: Path,
+        parent: QWidget | None = None,
+        *,
+        options: dict | None = None,
+        on_option=None,
+    ) -> None:
         super().__init__(parent)
-        player_cls, audio_cls, video_cls = _multimedia()
+        player_cls, audio_cls, item_cls = _multimedia()
         self._player_cls = player_cls
-        self._video_cls = video_cls
+        self._item_cls = item_cls
         self._path = Path(path)
+        values = dict(options or {})
+        self._volume = _media_volume(values.get("volume", MEDIA_VOLUME))
+        self._muted = bool(values.get("muted", False))
+        self._loop = bool(values.get("loop", False))
+        self._rate = float(values.get("rate", 1.0) or 1.0)
+        self._aspect = str(values.get("aspect") or "fit")
+        self._frame_seconds = MEDIA_FRAME_SECONDS
+        self._zoom = 1.0
+        self._zoom_min = MEDIA_ZOOM_MIN
+        self._zoom_max = MEDIA_ZOOM_MAX
+        self._zoom_step = self._number(values.get("zoom_step"), MEDIA_ZOOM_STEP, lower=1.01)
+        self._zoom_hint = int(self._number(values.get("zoom_hint"), MEDIA_ZOOM_HINT_MS, lower=200))
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._drag_origin = None
+        self._drag_pan = (0.0, 0.0)
+        self._on_option = on_option
         size = 0
         try:
             size = self._path.stat().st_size
@@ -1231,23 +1481,78 @@ class PlayerPanel(QWidget):
         self.caption = f"{self._path.name} · {human_size(size)}"
         self._player = player_cls(self)
         self._audio = audio_cls(self)
-        self._audio.setVolume(0.8)
         self._player.setAudioOutput(self._audio)
         self._surface: QWidget | None = None
+        # 缩放只对视频画面有效：音频没有 stage / 倍率提示，这里先置空
+        self._stage: QWidget | None = None
+        self._overlay: StageOverlay | None = None
+        self._view: QGraphicsView | None = None
+        self._scene: QGraphicsScene | None = None
+        self._item = None
+        self._mouse_target = None
+        self._native: tuple[float, float] | None = None
+        # 播放条构造期就会回调 _on_rate/_on_volume，先把属性放好，方法里才敢碰它
+        self._bar: MediaBar | None = None
         self._build_ui()
         self._player.setSource(QUrl.fromLocalFile(str(self._path)))
 
     # ------------------------------------------------------------------ 界面
+    @staticmethod
+    def _number(value, default, *, lower: float | None = None, upper: float | None = None) -> float:
+        """把选项值转成数字并夹到范围内；转不了就用默认值。"""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        if lower is not None:
+            number = max(lower, number)
+        if upper is not None:
+            number = min(upper, number)
+        return number
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(*COMPACT_MARGINS)
         root.setSpacing(8)
 
         if self.shows_video:
-            video = self._video_cls(self)
-            self._player.setVideoOutput(video)
-            self._surface = video
-            root.addWidget(video, 1)
+            # 画面靠 QGraphicsView 合成绘制：这样浮层提示、弹窗能盖在画面之上，
+            # 放大后的画面也会被视口裁掉，不会溢出去挡住上下工具条。
+            stage = QWidget(self)
+            stage.installEventFilter(self)
+            self._stage = stage
+
+            view = QGraphicsView(stage)
+            view.setFrameShape(QFrame.Shape.NoFrame)
+            view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            view.setStyleSheet("QGraphicsView { background: transparent; border: none; }")
+            scene = QGraphicsScene(view)
+            view.setScene(scene)
+            item = self._item_cls()
+            item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+            scene.addItem(item)
+            item.nativeSizeChanged.connect(self._on_native_size)
+            self._player.setVideoOutput(item)
+
+            # 鼠标事件落在视口上（不是 view 本身），平移要盯着视口
+            viewport = view.viewport()
+            viewport.setMouseTracking(True)
+            viewport.installEventFilter(self)
+            self._view = view
+            self._scene = scene
+            self._item = item
+            self._surface = view
+            self._mouse_target = viewport
+
+            stage_layout = QVBoxLayout(stage)
+            stage_layout.setContentsMargins(0, 0, 0, 0)
+            stage_layout.setSpacing(0)
+            stage_layout.addWidget(view)
+            # 浮层最后建，保证盖在画面之上
+            self._overlay = StageOverlay(stage, duration=self._zoom_hint)
+            root.addWidget(stage, 1)
         else:
             stage = QWidget(self)
             stage_layout = QVBoxLayout(stage)
@@ -1263,21 +1568,276 @@ class PlayerPanel(QWidget):
             stage_layout.addStretch(1)
             root.addWidget(stage, 1)
 
+        self._build_stage_extra(root)
+
         self._bar = MediaBar(
             self,
             on_toggle=self._toggle,
             on_seek=self._on_seek,
-            on_volume=self._audio.setVolume,
-            volume=0.8,
+            on_volume=self._on_volume,
+            on_mute=self._on_mute,
+            on_rate=self._on_rate,
+            volume=self._volume,
+            muted=self._muted,
+            rate=self._rate,
         )
         root.addWidget(self._bar.host)
+
+        self._audio.setVolume(0.0 if self._muted else self._volume)
+        self._apply_rate(self._rate)
+        self.set_aspect(self._aspect)
+        self._apply_zoom()
 
         self._player.positionChanged.connect(self._on_position)
         self._player.durationChanged.connect(self._on_duration)
         self._player.playbackStateChanged.connect(self._on_state)
         self._player.errorOccurred.connect(self._on_error)
+        self._player.mediaStatusChanged.connect(self._on_media_status)
+        self._install_shortcuts()
 
-    # ------------------------------------------------------------------ 行为
+    def _build_stage_extra(self, layout: QVBoxLayout) -> None:
+        """画面与播放条之间的扩展位（默认什么都不放，子类可加字幕条等）。"""
+
+    def _install_shortcuts(self) -> None:
+        """播放快捷键：空格、快进 / 快退、音量、静音。"""
+        QShortcut(QKeySequence("Space"), self, activated=self._toggle)
+        QShortcut(QKeySequence("Right"), self, activated=lambda: self.seek_by(MEDIA_SEEK_STEP))
+        QShortcut(QKeySequence("Left"), self, activated=lambda: self.seek_by(-MEDIA_SEEK_STEP))
+        QShortcut(QKeySequence("Up"), self, activated=lambda: self.nudge_volume(0.05))
+        QShortcut(QKeySequence("Down"), self, activated=lambda: self.nudge_volume(-0.05))
+        QShortcut(QKeySequence("M"), self, activated=self._bar.toggle_mute)
+
+    # ------------------------------------------------------------------ 界面接口
+    def add_action(self, icon, tooltip: str, callback, *, anchor: str = "right"):
+        """在播放条上追加动作按钮（返回按钮本体）；`anchor` 见 `MediaBar.add_action`。"""
+        return self._bar.add_action(icon, tooltip, callback, anchor=anchor)
+
+    def remove_action(self, button) -> bool:
+        """把之前追加的动作按钮从播放条上摘掉；`MediaBar.remove_action` 的转发。"""
+        return self._bar.remove_action(button)
+
+    def save_option(self, key: str, value) -> None:
+        """把播放偏好回写给插件（插件再存进自己的选项），供设置面板等使用。"""
+        self._emit_option(key, value)
+
+    def set_frame_rate(self, fps: float | None) -> None:
+        """告诉播放控件帧率：逐帧步进按它换算时间轴。"""
+        try:
+            value = float(fps or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        self._frame_seconds = 1.0 / value if value > 0.1 else MEDIA_FRAME_SECONDS
+
+    @property
+    def loop(self) -> bool:
+        return self._loop
+
+    def set_loop(self, loop: bool) -> None:
+        self._loop = bool(loop)
+        self._emit_option("loop", self._loop)
+
+    def set_native_size(self, width: int, height: int) -> None:
+        """告诉播放控件视频的原始分辨率（探测得到的，比等播放器自己报早一步）。"""
+        try:
+            usable = int(width) > 1 and int(height) > 1
+        except (TypeError, ValueError):
+            usable = False
+        if not usable:
+            return
+        self._native = (float(width), float(height))
+        self._clamp_pan()
+        self._apply_zoom()
+
+    def _on_native_size(self, size) -> None:
+        """播放器报出真实分辨率：重新摆一次画面（适应窗口要按它算）。"""
+        try:
+            usable = size.width() > 1 and size.height() > 1
+        except AttributeError:  # pragma: no cover - 信号参数异常时不动画面
+            return
+        if not usable:
+            return
+        self._native = (float(size.width()), float(size.height()))
+        self._clamp_pan()
+        self._apply_zoom()
+
+    def set_aspect(self, mode: str) -> None:
+        """画面比例：`fit` 适应窗口（保持比例）/ `stretch` 拉伸铺满。"""
+        self._aspect = "stretch" if str(mode) == "stretch" else "fit"
+        item = self._item
+        if item is None:
+            return
+        ratio = Qt.AspectRatioMode.IgnoreAspectRatio if self._aspect == "stretch" else Qt.AspectRatioMode.KeepAspectRatio
+        item.setAspectRatioMode(ratio)
+        self._clamp_pan()
+        self._apply_zoom()
+
+    @property
+    def aspect(self) -> str:
+        return self._aspect
+
+    # ------------------------------------------------------------------ 画面缩放
+    @property
+    def zoom(self) -> float:
+        """当前缩放倍率（1.0 = 适应窗口）。"""
+        return self._zoom
+
+    def set_zoom_step(self, step: float) -> None:
+        """缩放步长（要大于 1，例如 1.25 表示每次放大 25%）。"""
+        value = self._number(step, self._zoom_step, lower=1.01)
+        self._zoom_step = value
+
+    def set_zoom_hint(self, milliseconds: int) -> None:
+        """右下角倍率提示的停留时长（毫秒）。"""
+        self._zoom_hint = int(self._number(milliseconds, self._zoom_hint, lower=200))
+        if self._overlay is not None:
+            self._overlay.set_duration(self._zoom_hint)
+
+    def can_zoom_in(self) -> bool:
+        return self._zoom < self._zoom_max - 1e-6
+
+    def can_zoom_out(self) -> bool:
+        return self._zoom > self._zoom_min + 1e-6
+
+    def zoom_in(self) -> None:
+        """放大一档（已到上限就停住不动）。"""
+        self.set_zoom(self._zoom * self._zoom_step)
+
+    def zoom_out(self) -> None:
+        """缩小一档（已到下限就停住不动）。"""
+        self.set_zoom(self._zoom / self._zoom_step)
+
+    def reset_zoom(self) -> None:
+        """无条件回到「适应窗口」（倍率 1.0），同时清掉平移。"""
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self.set_zoom(1.0)
+
+    def set_zoom(self, scale: float, *, flash: bool = True) -> None:
+        """设置倍率（超出范围自动夹住），并闪一下右下角的倍率提示。"""
+        value = self._number(scale, self._zoom, lower=self._zoom_min, upper=self._zoom_max)
+        changed = abs(value - self._zoom) > 1e-6
+        self._zoom = value
+        self._clamp_pan()
+        self._apply_zoom()
+        if changed:
+            if flash:
+                self._flash_zoom()
+            self.zoomChanged.emit(self._zoom, not self.can_zoom_out(), not self.can_zoom_in())
+
+    def zoom_text(self) -> str:
+        """当前倍率的展示文案。"""
+        return f"{self._zoom * 100:.0f}%"
+
+    def _flash_zoom(self) -> None:
+        if self._overlay is not None:
+            self._overlay.flash(self.zoom_text())
+
+    def _apply_zoom(self) -> None:
+        """按倍率摆画面：视口不动，只改画面项自己的显示尺寸与位置（视口会裁掉溢出）。"""
+        if self._item is None or self._mouse_target is None or self._scene is None:
+            return
+        viewport = self._mouse_target.size()
+        scene_w = float(max(1, viewport.width()))
+        scene_h = float(max(1, viewport.height()))
+        base_w, base_h = self._stage_box()
+        width = max(1.0, base_w * self._zoom)
+        height = max(1.0, base_h * self._zoom)
+        self._scene.setSceneRect(0.0, 0.0, scene_w, scene_h)
+        self._item.setSize(QSizeF(width, height))
+        self._item.setPos(
+            (scene_w - width) / 2 + self._pan_x,
+            (scene_h - height) / 2 + self._pan_y,
+        )
+
+    def _native_size(self) -> tuple[float, float]:
+        """视频原始尺寸：播放器报的优先，其次探测给的，最后按 16:9 兜底。"""
+        item = self._item
+        if item is not None:
+            try:
+                size = item.nativeSize()
+            except AttributeError:  # pragma: no cover - 非 QtMultimedia 的替身
+                size = None
+            if size is not None and size.width() > 1 and size.height() > 1:
+                return float(size.width()), float(size.height())
+        if self._native is not None:
+            return self._native
+        return 16.0, 9.0
+
+    def _stage_box(self) -> tuple[float, float]:
+        """「适应窗口」下画面的显示尺寸（`stretch` 就是整个视口）。"""
+        if self._mouse_target is None:
+            return 1.0, 1.0
+        viewport = self._mouse_target.size()
+        width = float(max(1, viewport.width()))
+        height = float(max(1, viewport.height()))
+        if self._aspect == "stretch":
+            return width, height
+        native_w, native_h = self._native_size()
+        scale = min(width / native_w, height / native_h)
+        return native_w * scale, native_h * scale
+
+    def _clamp_pan(self) -> None:
+        """平移不能露白：画面比视口大出来的部分才允许推，没放大就不许平移。"""
+        limit_x, limit_y = self._pan_limits()
+        self._pan_x = max(-limit_x, min(limit_x, self._pan_x))
+        self._pan_y = max(-limit_y, min(limit_y, self._pan_y))
+
+    def _pan_limits(self) -> tuple[float, float]:
+        """平移的半幅上限（画面尺寸减去视口尺寸的一半，负数按 0 处理）。"""
+        if self._mouse_target is None or self._zoom <= 1.0 + 1e-6:
+            return 0.0, 0.0
+        base_w, base_h = self._stage_box()
+        viewport = self._mouse_target.size()
+        limit_x = max(0.0, (base_w * self._zoom - viewport.width()) / 2)
+        limit_y = max(0.0, (base_h * self._zoom - viewport.height()) / 2)
+        return limit_x, limit_y
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._clamp_pan()
+        self._apply_zoom()
+
+    def eventFilter(self, obj, event) -> bool:
+        kind = event.type()
+        if obj is self._stage and kind == QEvent.Type.Resize:
+            self._clamp_pan()
+            self._apply_zoom()
+        elif obj is self._mouse_target and kind in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonRelease,
+        ):
+            return self._pan_by_mouse(event)
+        return super().eventFilter(obj, event)
+
+    def _pan_by_mouse(self, event) -> bool:
+        """放大后按住画面拖动即平移（没放大就把事件放过去，不挡别的操作）。"""
+        if self._mouse_target is None or self._zoom <= 1.0 + 1e-6:
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+            self._drag_origin = event.globalPosition().toPoint()
+            self._drag_pan = (self._pan_x, self._pan_y)
+            self._mouse_target.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return True
+        if kind == QEvent.Type.MouseMove:
+            if self._drag_origin is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+                return False
+            point = event.globalPosition().toPoint()
+            self._pan_x = self._drag_pan[0] + (point.x() - self._drag_origin.x())
+            self._pan_y = self._drag_pan[1] + (point.y() - self._drag_origin.y())
+            self._clamp_pan()
+            self._apply_zoom()
+            return True
+        if self._drag_origin is None:  # 松开
+            return False
+        self._drag_origin = None
+        self._mouse_target.unsetCursor()
+        return True
+
+    # ------------------------------------------------------------------ 播放
     def _toggle(self) -> None:
         if self._player.playbackState() == self._player_cls.PlaybackState.PlayingState:
             self._player.pause()
@@ -1299,14 +1859,104 @@ class PlayerPanel(QWidget):
         if self._player.duration() > 0 and abs(self._player.position() - value) > 800:
             self._player.setPosition(value)
 
+    def _on_media_status(self, status) -> None:
+        """单文件循环：播完回到开头接着播。"""
+        if self._loop and status == self._player_cls.MediaStatus.EndOfMedia:
+            self._player.setPosition(0)
+            self._player.play()
+
+    def seek_by(self, seconds: float) -> int:
+        """按秒快进 / 快退（负数即后退），不越过首尾；返回实际落到的位置（毫秒）。"""
+        duration = self._player.duration()
+        target = self._player.position() + int(float(seconds) * 1000)
+        if duration > 0:
+            target = min(target, max(0, duration - 200))
+        target = max(0, int(target))
+        self._player.setPosition(target)
+        return target
+
+    def step_frames(self, frames: int) -> None:
+        """逐帧步进：先暂停，再按帧时长挪动时间轴（帧率未知时用 30fps 估算）。"""
+        if self._player.playbackState() == self._player_cls.PlaybackState.PlayingState:
+            self._player.pause()
+        self.seek_by(int(frames) * self._frame_seconds)
+
+    def go_first_frame(self) -> int:
+        """跳到第一帧（开头）；返回位置（毫秒）。"""
+        self._player.setPosition(0)
+        return 0
+
+    def go_last_frame(self) -> int:
+        """跳到最后一帧（留一点余量，免得正好落在「播放结束」上触发循环）；返回位置（毫秒）。"""
+        duration = self._player.duration()
+        if duration <= 0:
+            return max(0, int(self._player.position()))
+        target = max(0, int(duration) - 200)
+        self._player.setPosition(target)
+        return target
+
+    def nudge_volume(self, delta: float) -> None:
+        """音量增减（0.0 - 1.0 的比例）；静音状态下先取消静音。"""
+        if self._muted and delta > 0:
+            self._on_mute(False)
+        self._bar.set_volume(max(0.0, min(1.0, self._volume + float(delta))))
+
+    # ------------------------------------------------------------------ 选项回写
+    def _emit_option(self, key: str, value) -> None:
+        if self._on_option is None:
+            return
+        try:
+            self._on_option(key, value)
+        except Exception:  # 存偏好失败不该影响播放
+            pass
+
+    def _on_volume(self, value: float) -> None:
+        self._volume = max(0.0, min(1.0, float(value)))
+        if not self._muted:
+            self._audio.setVolume(self._volume)
+        if self._bar is not None and self._bar.volume.value() != int(round(self._volume * 100)):
+            with QSignalBlocker(self._bar.volume):  # 外部改音量时把滑块也拨过去（别绕回来）
+                self._bar.set_volume(self._volume)
+        self._emit_option("volume", int(round(self._volume * 100)))
+
+    def _on_mute(self, muted: bool) -> None:
+        self._muted = bool(muted)
+        self._audio.setVolume(0.0 if self._muted else self._volume)
+        if self._bar is not None:
+            self._bar.set_muted(self._muted)
+        self._emit_option("muted", self._muted)
+
+    def _on_rate(self, rate: float) -> None:
+        self._apply_rate(rate)
+        if self._bar is not None and abs(self._bar.rate() - self._rate) > 1e-6:
+            with QSignalBlocker(self._bar.rate_box):  # 外部改倍速时把下拉框也切过去
+                self._bar.set_rate(self._rate)
+        self._emit_option("rate", f"{self._rate:g}")
+
+    def _apply_rate(self, rate: float) -> None:
+        try:
+            self._rate = max(0.1, min(8.0, float(rate or 1.0)))
+        except (TypeError, ValueError):
+            self._rate = 1.0
+        try:  # 个别后端不支持倍速，忽略即可
+            self._player.setPlaybackRate(self._rate)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------ 出错
     def _on_error(self, error, message: str = "") -> None:
         if error == self._player_cls.Error.NoError:
             return
         text = message or "该格式无法播放"
         self._bar.button.setEnabled(False)
-        self.caption = f"{self._path.name} · 播放失败：{text}"
+        self.set_caption(f"{self._path.name} · 播放失败：{text}")
         if self._surface is None:
             self._hint.setText(f"无法播放：{text}（可在「查看器」页改为继承系统默认程序）")
+
+    def set_caption(self, text: str) -> None:
+        """更新说明文字，并让外壳（查看器标题栏）跟着变。"""
+        self.caption = str(text or "")
+        self.captionChanged.emit(self.caption)
 
     def stop(self) -> None:
         self._player.stop()
@@ -1451,6 +2101,14 @@ __all__ = [
     "list_view",
     "ListPanel",
     "MediaBar",
+    "MEDIA_FRAME_SECONDS",
+    "MEDIA_RATES",
+    "MEDIA_SEEK_STEP",
+    "MEDIA_VOLUME",
+    "MEDIA_ZOOM_HINT_MS",
+    "MEDIA_ZOOM_MAX",
+    "MEDIA_ZOOM_MIN",
+    "MEDIA_ZOOM_STEP",
     "page_header",
     "PAGE_MARGINS",
     "PAGE_SPACING",
@@ -1475,6 +2133,7 @@ __all__ = [
     "section_card",
     "spin_box",
     "SplitPage",
+    "StageOverlay",
     "status_label",
     "strong_label",
     "text_area",

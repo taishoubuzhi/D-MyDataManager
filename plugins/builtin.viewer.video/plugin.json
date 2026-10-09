@@ -1,9 +1,9 @@
 {
   "id": "builtin.viewer.video",
   "name": "内置视频播放器",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "api_version": ">=1.0 <2.0",
-  "description": "播放 mp4 / mkv / avi 等视频，支持播放暂停、进度与音量；播放控件用 builtin.lib.ui 的通用播放控件 PlayerPanel。",
+  "description": "播放 mp4 / mkv / avi 等视频：播放暂停、进度、音量、倍速、循环、全屏、前一秒 / 后一秒 / 首末帧（都有提示）、画面缩放、截图、内嵌字幕与音轨选择；窗口标题栏带设置入口，系统解码器播不了时可转码兜底。",
   "author": "D-MyDataManager",
   "builtin": true,
   "entry": "plugin.py",
@@ -13,6 +13,85 @@
     },
     {
       "id": "builtin.lib.ui"
+    }
+  ],
+  "options": [
+    {
+      "key": "volume",
+      "label": "默认音量",
+      "kind": "int",
+      "default": 80,
+      "minimum": 0,
+      "maximum": 100,
+      "description": "打开视频时的音量（0 - 100）。拖动音量条会更新这个值。"
+    },
+    {
+      "key": "muted",
+      "label": "默认静音",
+      "kind": "bool",
+      "default": false,
+      "description": "打开视频时先静音。按 M 或点喇叭按钮会更新这个值。"
+    },
+    {
+      "key": "rate",
+      "label": "默认倍速",
+      "kind": "choice",
+      "default": "1",
+      "choices": {
+        "0.5": "0.5×",
+        "0.75": "0.75×",
+        "1": "1.0×（默认）",
+        "1.25": "1.25×",
+        "1.5": "1.5×",
+        "2": "2.0×"
+      },
+      "description": "打开视频时的播放倍速。"
+    },
+    {
+      "key": "loop",
+      "label": "循环播放",
+      "kind": "bool",
+      "default": false,
+      "description": "打开视频时循环播放（播完回到开头）。"
+    },
+    {
+      "key": "aspect",
+      "label": "画面比例",
+      "kind": "choice",
+      "default": "fit",
+      "choices": {
+        "fit": "适应窗口（保持比例，可能留黑边）",
+        "stretch": "拉伸铺满（可能变形）"
+      },
+      "description": "画面在窗口里的显示方式。"
+    },
+    {
+      "key": "subtitle",
+      "label": "显示内嵌字幕",
+      "kind": "bool",
+      "default": true,
+      "description": "文件里有内嵌字幕轨时，自动在画面下方显示。按 B 可以随时开关。"
+    },
+    {
+      "key": "zoom_step",
+      "label": "缩放步长",
+      "kind": "choice",
+      "default": "1.25",
+      "choices": {
+        "1.15": "1.15×（细腻）",
+        "1.25": "1.25×（默认）",
+        "1.5": "1.5×（快速）"
+      },
+      "description": "每次点放大 / 缩小时的倍率变化幅度。"
+    },
+    {
+      "key": "zoom_hint",
+      "label": "倍率提示时长",
+      "kind": "int",
+      "default": 1000,
+      "minimum": 200,
+      "maximum": 5000,
+      "description": "缩放后右下角显示当前倍率的时长（毫秒）。"
     }
   ]
 }

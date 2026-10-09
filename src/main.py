@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from loguru import logger  # noqa: E402
 from qfluentwidgets import FluentTranslator, Theme, setTheme  # noqa: E402
 
-from app.core.runtime import jsonio, paths # noqa: E402
+from app.core.runtime import jsonio, paths, qt_media # noqa: E402
 from app.core.manifest import manifest_kit  # noqa: E402
 from app.core.plugins.app_ui import APP_UI_EXTENSION, AppUiApi  # noqa: E402
 from app.core.config import Language, config  # noqa: E402
@@ -34,8 +34,9 @@ from app.sdk.download import DOWNLOAD_EXTENSION  # noqa: E402
 from app.sdk.export import EXPORT_EXTENSION  # noqa: E402
 from app.sdk.items import ITEMS_EXTENSION  # noqa: E402
 from app.sdk.manifest import MANIFEST_EXTENSION  # noqa: E402
+from app.sdk.media import MEDIA_EXTENSION  # noqa: E402
 from app.sdk.pip import PIP_EXTENSION  # noqa: E402
-from app.services import download_api, export_api, pip_api  # noqa: E402
+from app.services import download_api, export_api, media_api, media_service, pip_api  # noqa: E402
 from app.services.console_service import ConsoleOutput  # noqa: E402
 from app.services.item_api import ItemsApi  # noqa: E402
 from app.services.layout_migration import migrate_layout, migrate_uncategorized  # noqa: E402
@@ -149,6 +150,13 @@ def _report_previous_session() -> None:
 def _bootstrap_data() -> None:
     """建目录、开库并补齐基础数据（此时资源文件夹已放行）。"""
     paths.ensure_dirs()
+    # 媒体临时目录里可能留着上次进程崩溃时的转码半成品，启动时清掉（超过 24 小时的一律删）
+    try:
+        removed = media_service.clear_stale()
+        if removed:
+            logger.info("已清理遗留的媒体临时产物 {} 个", removed)
+    except Exception as exc:  # noqa: BLE001 - 清理失败不影响启动
+        logger.debug("清理媒体临时产物失败：{}", exc)
     init_db()
     with session_scope() as session:
         seed(session)
@@ -225,6 +233,8 @@ def main() -> int:
     if "--self-check" in sys.argv and (code := _run_selfcheck()) is not None:
         return code
     setup_logging()
+    # Qt 自带的 FFmpeg 会把容器信息、编解码器探测消息直接写进控制台，先压到只报错
+    qt_media.silence_ffmpeg_logs()
     _stage(1, f"日志系统已就绪（级别 {config.logLevel.value}、控制台输出 {config.logToConsole.value}）")
     _apply_dpi_scale()
     _stage(2, f"界面缩放已应用（{config.dpiScale.value}）")
@@ -276,6 +286,9 @@ def main() -> int:
     plugin_service.bootstrap(PIP_EXTENSION, pip_api.api())
     # 导出接口：插件用 app.sdk.export 把选中的数据交给程序本体导成压缩包
     plugin_service.bootstrap(EXPORT_EXTENSION, export_api.api())
+    # 媒体接口：插件用 app.sdk.media 做探测 / 抽帧 / 逐帧 / 转封装 / 转码 / 切片 / 抽音轨 / 字幕
+    # （ffmpeg 能力统一由程序本体通过 PyAV 提供，插件不自己调用外部程序）
+    plugin_service.bootstrap(MEDIA_EXTENSION, media_api.api())
     # 载入插件：SDK 横幅、每个插件的「已载入」与最后的汇总都由插件系统自己播报
     plugin_service.load_viewers()
     _stage(7, "插件系统已就绪")

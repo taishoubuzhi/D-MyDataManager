@@ -11,23 +11,33 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
-_MARKERS = ("CLAUDE.md", "TODO.md")
+# 判定「检出根」的标志：用随仓库分发的稳定文件，而不是只在开发机上存在的标记文件。
+# 打包（pyappify）是在用户机上按 tag 克隆 git 仓库再跑 src/main.py，
+# 旧标记 CLAUDE.md / TODO.md 都不在版本库里，靠它们判定必然失败（见 docs/index/library-storage/paths.md）。
+_SOURCE_ENTRY = Path("src") / "main.py"
+_REQUIREMENTS = Path("requirements.txt")
+
+
+def looks_like_project_root(candidate: Path) -> bool:
+    """目录是否像本项目的检出根（同时有源码入口 `src/main.py` 与依赖清单 `requirements.txt`）。"""
+    return (candidate / _SOURCE_ENTRY).is_file() and (candidate / _REQUIREMENTS).is_file()
 
 
 def _find_project_root(start: Path) -> Path:
+    """从 start 逐级向上找检出根；找不到就按源码位置反推（`<根>/src/app/core` 往上 3 层）。"""
     for parent in start.parents:
-        if (parent / "src").is_dir() and any((parent / m).exists() for m in _MARKERS):
+        if looks_like_project_root(parent):
             return parent
-    return start.parents[3]
+    return APP_DIR.parents[2]
 
+
+APP_DIR = Path(__file__).resolve().parents[1]
+SRC_DIR = APP_DIR.parent
 
 if getattr(sys, "frozen", False):  # 打包后以可执行文件所在目录为准
     ROOT = Path(sys.executable).resolve().parent
 else:
     ROOT = _find_project_root(Path(__file__).resolve())
-
-APP_DIR = Path(__file__).resolve().parents[1]
-SRC_DIR = APP_DIR.parent
 
 # 静态资源（随代码分发）
 RESOURCE_DIR = APP_DIR / "resource"
@@ -51,6 +61,12 @@ DEFAULT_EXPORT_DIR = ROOT / "exports"
 #: 放在程序目录下而不是资源文件夹里：资源文件夹默认是 ACL 保护 + 隐藏目录，
 #: 把下载塞进去既容易被锁住，也让用户找不着自己下的东西。
 DEFAULT_DOWNLOAD_DIR = ROOT / "downloads"
+
+#: 媒体临时目录（`<根>/.tmp/media`）：转码 / 转封装 / 抽帧导出的中间产物落在这里。
+#: 由 `app.services.media_service` 负责及时清理：任务结束即删本次产物、播放窗口关闭即删、
+#: 进程退出（atexit）兜底清空、启动时清掉上次遗留的陈旧文件。
+TMP_DIR = ROOT / ".tmp"
+MEDIA_TMP_DIR = TMP_DIR / "media"
 
 # 资源文件夹内部结构：数据库、库文件夹都由 apply_resource_root() 按配置重算
 DATA_DIR = DEFAULT_RESOURCE_DIR

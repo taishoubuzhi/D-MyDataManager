@@ -29,7 +29,7 @@ __all__ = [
     "satisfies",
 ]
 
-SDK_VERSION = "1.0"
+SDK_VERSION = "1.1"
 
 _VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
 _OPERATORS = (">=", "<=", "^", "~", ">", "<", "=")

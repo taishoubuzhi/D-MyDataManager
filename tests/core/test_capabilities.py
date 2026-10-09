@@ -73,12 +73,19 @@ class CapabilityCase(unittest.TestCase):
             self.assertIn("全部可用", capabilities.summary_text())
 
     def test_tool_capabilities_have_tool_hints(self):
-        for name in ("ffmpeg", "bsdtar"):
+        for name in ("bsdtar",):
             with self.subTest(name=name):
                 item = capabilities.capability(name)
                 self.assertEqual(item.kind, capabilities.KIND_TOOL)
                 if not item.available:
                     self.assertTrue(item.hint, f"{name} 缺失时必须有安装提示")
+
+    def test_media_engine_is_a_python_package_with_hint(self):
+        """媒体引擎（PyAV）是随 requirements.txt 装的 Python 包，缺失时必须有安装提示。"""
+        item = capabilities.capability("av")
+        self.assertEqual(item.kind, capabilities.KIND_PYTHON)
+        if not item.available:
+            self.assertTrue(item.hint, "av 缺失时必须有安装提示")
 
     def test_configure_tools_points_rarfile_at_bsdtar(self):
         changed = capabilities.configure_tools()

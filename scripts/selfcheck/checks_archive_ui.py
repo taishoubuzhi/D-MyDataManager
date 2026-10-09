@@ -1073,6 +1073,33 @@ def image_viewer(case: Case) -> None:
         finally:
             _drop_widget(tiny)
 
+        # 打开即自适应：视口由外层弹窗布局逐步撑大，打开后应重新适配到铺满
+        # （回归：旧实现只在自身 resizeEvent 里重算，视口变大后再也不会适配）
+        from app.core.plugins.extensions import extension_registry
+
+        dialog = extension_registry.provider("dialog")
+        _expect(problems, dialog is not None, "界面工具库应提供 dialog 扩展")
+        if dialog is not None:
+            host_viewer = ImageViewer(SAMPLE_IMAGE, None)
+            popup = dialog.open_page(
+                title=SAMPLE_IMAGE.name,
+                content_factory=lambda _container: host_viewer,
+                meta="图片查看器",
+            )
+            try:
+                for _ in range(3):
+                    ensure_app().processEvents()
+                view_width, view_height = host_viewer._viewport_size()
+                expected = host_viewer._fit_scale()
+                _expect(problems, view_width > 400, f"弹窗里的视口应已撑开，实际 {view_width}×{view_height}")
+                _expect(
+                    problems,
+                    abs(host_viewer._scale - expected) < 0.01,
+                    f"弹窗打开后应重新适配（视口 {view_width}×{view_height}，实际 {host_viewer._scale:.3f}，应为 {expected:.3f}）",
+                )
+            finally:
+                _drop_widget(popup)
+
         if registered is not None and callable(registered.factory):
             built = registered.factory(SAMPLE_IMAGE, None)
             _expect(problems, isinstance(built, ImageViewer), "内置工厂应返回图片查看器")
@@ -1083,6 +1110,690 @@ def image_viewer(case: Case) -> None:
         _drop_widget(viewer)
         dispose_window(window)
     assert not problems, "图片查看器检查未通过：" + "；".join(problems)
+
+
+@check("window_single_titlebar", "pages")
+def window_single_titlebar(case: Case) -> None:
+    """查看器 / 编辑器页面不再自画标题栏：文件名、查看器名与动作按钮只由弹窗外壳画一份。"""
+    install_builtin_plugins()
+    ensure_app()
+    from PyQt6.QtWidgets import QLabel, QWidget
+    from qfluentwidgets import TransparentToolButton
+
+    from app.core.plugins.extensions import extension_registry
+    from dm_plugin.builtin.lib.editor.plugin import EditorWindow
+    from dm_plugin.builtin.lib.viewer.plugin import ViewerWindow
+
+    dialog = extension_registry.provider("dialog")
+    if dialog is None:
+        raise AssertionError("界面工具库应提供 dialog 扩展，无法检查标题栏唯一性")
+
+    problems: list[str] = []
+
+    def title_buttons(popup) -> list:
+        layout = popup._bar_layout
+        buttons = []
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if isinstance(widget, TransparentToolButton):
+                buttons.append(widget)
+        return buttons
+
+    viewer = ViewerWindow(SAMPLE_IMAGE, lambda container: QLabel("内容", container), "图片查看器")
+    viewer_popup = dialog.open_page(
+        title=SAMPLE_IMAGE.name,
+        content_factory=lambda _container: viewer,
+        meta="临时标题",
+    )
+    try:
+        ensure_app().processEvents()
+        _expect(problems, getattr(viewer, "popup", None) is viewer_popup, "查看器页面应拿到弹窗外壳")
+        _expect(problems, not hasattr(viewer, "title_label"), "查看器页面不应再自画标题栏（外层套一圈）")
+        _expect(
+            problems,
+            viewer_popup.title_label.text() == SAMPLE_IMAGE.name,
+            f"外壳标题应为文件名，实际 {viewer_popup.title_label.text()!r}",
+        )
+        _expect(
+            problems,
+            viewer_popup.meta_label.text() == "图片查看器",
+            f"副标题应由查看器页面写一次，实际 {viewer_popup.meta_label.text()!r}",
+        )
+        buttons = title_buttons(viewer_popup)
+        _expect(problems, len(buttons) == 3, f"外壳标题栏应只有「打开 / 定位 / 关闭」三个按钮，实际 {len(buttons)}")
+    finally:
+        _drop_widget(viewer_popup)
+
+    class _DirtyStub(QWidget):
+        """最小编辑器控件：只有 is_dirty() / caption，用来验证保存按钮挂在外壳上。"""
+
+        caption = "1 行"
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.dirty = False
+
+        def is_dirty(self):
+            return self.dirty
+
+    editor = EditorWindow(case.root / "selfcheck_editor.txt", _DirtyStub, "文本编辑器")
+    editor_popup = dialog.open_page(
+        title="selfcheck_editor.txt",
+        content_factory=lambda _container: editor,
+        meta="临时标题",
+    )
+    try:
+        ensure_app().processEvents()
+        _expect(problems, getattr(editor, "popup", None) is editor_popup, "编辑器页面应拿到弹窗外壳")
+        _expect(problems, not hasattr(editor, "title_label"), "编辑器页面不应再自画标题栏（外层套一圈）")
+        _expect(problems, editor.save_button is not None, "保存按钮应挂到外壳标题栏上")
+        _expect(
+            problems,
+            editor.save_button is not None and not editor.save_button.isEnabled(),
+            "没有未保存改动时保存按钮应禁用",
+        )
+        buttons = title_buttons(editor_popup)
+        _expect(problems, len(buttons) == 4, f"编辑器外壳标题栏应有「保存 / 打开 / 定位 / 关闭」四个按钮，实际 {len(buttons)}")
+        stub = editor.content_widget
+        if isinstance(stub, _DirtyStub):
+            stub.dirty = True
+        editor._refresh_state()
+        _expect(
+            problems,
+            editor.save_button is not None and editor.save_button.isEnabled(),
+            "有未保存改动时保存按钮应可用",
+        )
+        _expect(
+            problems,
+            "已修改" in editor_popup.meta_label.text(),
+            f"有未保存改动时副标题应提示已修改，实际 {editor_popup.meta_label.text()!r}",
+        )
+    finally:
+        _drop_widget(editor_popup)
+
+    assert not problems, "查看器 / 编辑器标题栏检查未通过：" + "；".join(problems)
+
+
+def _sample_video(path: Path) -> Path:
+    """现场造一段 1 秒 / 10 帧 / 96×64 的样例视频（自检素材不入库，随临时目录删掉）。"""
+    import av
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with av.open(str(path), mode="w") as container:
+        stream = container.add_stream("mpeg4", rate=10)
+        stream.width, stream.height = 96, 64
+        stream.pix_fmt = "yuv420p"
+        for index in range(10):
+            image = Image.new("RGB", (96, 64), ((index * 20) % 256, 80, 160))
+            frame = av.VideoFrame.from_image(image)
+            frame.pts = index
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    return path
+
+
+@check("video_viewer", "pages")
+def video_viewer(case: Case) -> None:
+    """视频查看器：探测信息、播放条动作、选项回写、逐帧换算与「转码兜底」确认。"""
+    from unittest import mock
+
+    from qfluentwidgets import FluentIcon, ToolButton
+
+    from app.core.plugins.extensions import extension_registry
+    from app.sdk.media import MEDIA_EXTENSION
+    from app.services import media_api, media_service
+    from app.services.plugin_service import plugin_service
+    from app.services.viewer_service import open_api
+
+    install_builtin_plugins()
+    # `dm_plugin` 是插件服务载入内置插件时登记的包名，必须先装插件再导入
+    from dm_plugin.builtin.lib.ui.plugin import MEDIA_FRAME_SECONDS, MEDIA_ZOOM_MAX, MEDIA_ZOOM_MIN
+    from dm_plugin.builtin.viewer.video import video_view as video_module
+
+    registry = open_api()
+    _fixture, window = build_window(case)
+    previous = extension_registry.provider(MEDIA_EXTENSION)
+    plugin_service.bootstrap(MEDIA_EXTENSION, media_api.api())
+
+    problems: list[str] = []
+    engine = media_service.available()
+    sample = case.root / "selfcheck_video.mp4"
+    if engine:
+        _sample_video(sample)
+
+    # 兜底确认一律不真弹框（headless 下弹窗会卡住自检），把问答与提示记下来断言
+    asked: list[str] = []
+    toasts: list[str] = []
+    original_confirm = video_module.confirm
+    original_toasts = (
+        video_module.toast_success,
+        video_module.toast_error,
+        video_module.toast_info,
+    )
+    video_module.confirm = lambda *args, **_kwargs: asked.append(str(args[1] if len(args) > 1 else "")) or False
+    video_module.toast_success = lambda *_args, **_kwargs: None
+    video_module.toast_error = lambda *_args, **_kwargs: None
+    video_module.toast_info = lambda _parent=None, title="", content="", **_kwargs: toasts.append(str(title))
+
+    viewer = None
+    try:
+        info = plugin_service.get("builtin.viewer.video")
+        _expect(problems, info is not None and info.enabled, "内置视频插件应已启用")
+        registered = registry.viewer_by_id("builtin.viewer.video")
+        _expect(problems, registered is not None, "内置视频查看器应注册为 builtin.viewer.video")
+        _expect(problems, registered is not None and registered.host == "dialog", "内置视频查看器应交由弹窗插件托管")
+        _expect(problems, "mp4" in registry.extensions(), "查看器注册表应包含 mp4")
+        _expect(problems, "mkv" in registry.extensions(), "查看器注册表应包含 mkv")
+        capabilities = " ".join(registered.capabilities) if registered is not None else ""
+        for word in ("倍速", "全屏", "截图", "字幕"):
+            _expect(problems, word in capabilities, f"视频查看器能力里应有「{word}」，实际 {capabilities!r}")
+
+        options: list[tuple[str, object]] = []
+        viewer = video_module.VideoViewer(
+            sample,
+            window,
+            options={"volume": 40, "muted": True, "rate": "1.5", "loop": True, "aspect": "stretch"},
+            on_option=lambda key, value: options.append((key, value)),
+        )
+        _expect(problems, abs(viewer._volume - 0.4) < 1e-6, f"音量选项应换算成 0.4，实际 {viewer._volume}")
+        _expect(problems, viewer._muted is True, "静音选项应生效")
+        _expect(problems, viewer.loop is True, "循环选项应生效")
+        _expect(problems, abs(viewer._rate - 1.5) < 1e-6, f"倍速选项应生效，实际 {viewer._rate}")
+        _expect(problems, viewer._bar.rate() == 1.5, f"播放条应选中 1.5×，实际 {viewer._bar.rate()}")
+        _expect(problems, viewer._bar.muted is True, "播放条静音按钮应与选项一致")
+        _expect(problems, viewer.aspect == "stretch", f"画面比例选项应生效，实际 {viewer.aspect}")
+        _expect(problems, not viewer._subtitle_label.isVisible(), "没有字幕时字幕条不该占位")
+        if engine:
+            _expect(problems, viewer._info is not None, "应探测到媒体信息")
+            _expect(problems, "96x64" in viewer.caption, f"副标题应带上分辨率，实际 {viewer.caption!r}")
+            _expect(problems, "00:01" in viewer.caption, f"副标题应带上时长，实际 {viewer.caption!r}")
+            _expect(
+                problems,
+                abs(viewer._frame_seconds - 0.1) < 1e-6,
+                f"探测到 10fps 后一帧应为 0.1 秒，实际 {viewer._frame_seconds}",
+            )
+        else:
+            _expect(
+                problems,
+                abs(viewer._frame_seconds - MEDIA_FRAME_SECONDS) < 1e-9,
+                "没有引擎时逐帧步长应退回 1/30 秒",
+            )
+
+        viewer.resize(640, 420)
+        viewer.show()
+        ensure_app().processEvents()
+
+        tips: list[str] = []
+        slots: list[tuple[int, str]] = []
+        layout = viewer._bar._layout
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if isinstance(widget, ToolButton):
+                slots.append((index, widget.toolTip()))
+        tips = [tip for _index, tip in slots]
+        for word in (
+            "跳到第一帧",
+            "后退一秒",
+            "前进一秒",
+            "跳到最后一帧",
+            "缩小画面",
+            "放大画面",
+            "重置缩放",
+            "循环播放",
+            "截取当前画面",
+            "把音轨导出成音频文件",
+            "全屏",
+        ):
+            _expect(problems, any(word in tip for tip in tips), f"播放条上应有「{word}」动作，实际 {tips}")
+
+        # 首末帧 / 前后一秒要贴着播放按钮两侧
+        def _slot(word: str) -> int:
+            return next(index for index, tip in slots if word in tip)
+
+        def _where(widget) -> int:
+            for index in range(layout.count()):
+                if layout.itemAt(index).widget() is widget:
+                    return index
+            return -1
+
+        play_index = _where(viewer._bar.button)
+        _expect(problems, play_index >= 0, "播放按钮应在播放条上")
+        _expect(
+            problems,
+            _slot("跳到第一帧") < _slot("后退一秒") < play_index < _slot("前进一秒") < _slot("跳到最后一帧"),
+            f"首末帧 / 前后一秒应围绕播放按钮排列（播放按钮在 {play_index}），实际 {tips}",
+        )
+
+        # 首 / 末帧的图标必须一眼能看出是「跳到头 / 跳到尾」，不能用「↺10 / ↻30」那种快退快进图标
+        glyphs: dict[str, bytes] = {}
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if isinstance(widget, ToolButton):
+                image = widget.icon().pixmap(24, 24).toImage()
+                glyphs[widget.toolTip()] = bytes(image.constBits().asarray(image.sizeInBytes()))
+
+        def _glyph(icon) -> bytes:
+            image = icon.icon().pixmap(24, 24).toImage()
+            return bytes(image.constBits().asarray(image.sizeInBytes()))
+
+        first_tip = next(tip for tip in glyphs if "跳到第一帧" in tip)
+        last_tip = next(tip for tip in glyphs if "跳到最后一帧" in tip)
+        _expect(problems, glyphs[first_tip] == _glyph(FluentIcon.PAGE_LEFT), "跳到第一帧要用 PAGE_LEFT 图标")
+        _expect(problems, glyphs[last_tip] == _glyph(FluentIcon.PAGE_RIGHT), "跳到最后一帧要用 PAGE_RIGHT 图标")
+        _expect(problems, glyphs[first_tip] != _glyph(FluentIcon.SKIP_BACK), "跳到第一帧不该用「向前 10 秒」图标")
+        _expect(problems, glyphs[last_tip] != _glyph(FluentIcon.SKIP_FORWARD), "跳到最后一帧不该用「向后 30 秒」图标")
+
+        # 四个位置动作（首 / 末帧、前 / 后一秒）都要弹提示，标题点名动作、正文给当前位置
+        del toasts[:]
+        viewer._go_first()
+        viewer._seek_forward()
+        viewer._go_last()
+        viewer._seek_back()
+        _expect(
+            problems,
+            toasts == ["已跳到第一帧", "前进一秒", "已跳到最后一帧", "后退一秒"],
+            f"首末帧与前后一秒都应给出提示，实际 {toasts}",
+        )
+
+        viewer._on_rate(2.0)
+        viewer._on_volume(0.25)
+        viewer._on_mute(False)
+        _expect(problems, abs(viewer._bar.rate() - 2.0) < 1e-6, "选 2× 后播放条应切到 2×")
+        _expect(problems, ("rate", "2") in options, f"倍速应回写成选项，实际 {options}")
+        _expect(problems, ("volume", 25) in options, f"音量应回写成百分比，实际 {options}")
+        _expect(problems, ("muted", False) in options, f"静音应回写成选项，实际 {options}")
+
+        viewer._toggle_loop()
+        _expect(
+            problems,
+            viewer.loop is False and viewer._loop_button.isChecked() is False,
+            "循环按钮应能关掉循环",
+        )
+        _expect(problems, ("loop", False) in options, f"循环变化应回写成选项，实际 {options}")
+        _expect(problems, "循环播放：关" in toasts, f"切换循环应给出当前状态提示，实际 {toasts}")
+        viewer._toggle_loop()
+        _expect(problems, "循环播放：开" in toasts, f"再切回应提示已开启，实际 {toasts}")
+
+        # 画面缩放：1.0 = 适应窗口、能缩到 0.x、到极限禁用按钮、重置无条件回 1.0、右下角显示倍率
+        _expect(problems, abs(viewer.zoom - 1.0) < 1e-6, f"打开时应按适应窗口显示（1.0），实际 {viewer.zoom}")
+        _expect(problems, viewer._zoom_out_button.isEnabled(), "1.0 还能往 0.x 缩，缩小按钮应可用")
+        _expect(problems, viewer._zoom_in_button.isEnabled(), "还能放大时放大按钮应可用")
+        _expect(problems, viewer._zoom_reset_button.isEnabled(), "重置缩放按钮应始终可用")
+        viewer._zoom_in()
+        _expect(problems, abs(viewer.zoom - 1.25) < 1e-6, f"默认步长 1.25 应放大到 1.25 倍，实际 {viewer.zoom}")
+        _expect(problems, viewer._zoom_out_button.isEnabled(), "放大后缩小按钮应可用")
+        _expect(problems, viewer._overlay.text() == "125%", f"右下角应显示当前倍率，实际 {viewer._overlay.text()!r}")
+        viewer.set_zoom(MEDIA_ZOOM_MIN)
+        _expect(
+            problems,
+            viewer._overlay.text() == "10%",
+            f"缩到 0.x 时右下角仍要显示倍率，实际 {viewer._overlay.text()!r}",
+        )
+        _expect(problems, not viewer.can_zoom_out(), "到最小倍率后不该还能缩小")
+        _expect(problems, not viewer._zoom_out_button.isEnabled(), "到最小倍率时缩小按钮应禁用")
+        viewer.set_zoom(MEDIA_ZOOM_MAX)
+        _expect(problems, viewer.can_zoom_in() is False, "到最大倍率后不该还能放大")
+        _expect(problems, not viewer._zoom_in_button.isEnabled(), "到最大倍率时放大按钮应禁用")
+        viewer._zoom_reset()
+        _expect(
+            problems,
+            abs(viewer.zoom - 1.0) < 1e-6 and viewer._zoom_out_button.isEnabled(),
+            f"重置应无条件回到适应窗口（1.0），实际 {viewer.zoom}",
+        )
+        _expect(problems, viewer._pan_x == 0.0 and viewer._pan_y == 0.0, "重置后应清掉画面平移")
+        _expect(problems, "全屏" in viewer._fullscreen_button.toolTip(), "全屏按钮应有提示")
+
+        # 放大后拖动平移，且平移被视口裁住（不会推到工具条上面去）
+        viewer.set_zoom(4.0)
+        limit_x, limit_y = viewer._pan_limits()
+        _expect(problems, limit_x > 0 and limit_y > 0, "放大后应允许在视口内拖动平移")
+        viewer._pan_x = limit_x * 10
+        viewer._pan_y = limit_y * 10
+        viewer._clamp_pan()
+        _expect(
+            problems,
+            abs(viewer._pan_x - limit_x) < 1e-6 and abs(viewer._pan_y - limit_y) < 1e-6,
+            f"平移应被夹在视口内（x={viewer._pan_x}, y={viewer._pan_y}）",
+        )
+        # 画面项再大也不出视口：场景矩形始终等于视口尺寸（溢出由视口裁掉）
+        scene_rect = viewer._scene.sceneRect()
+        viewport = viewer._mouse_target.size()
+        _expect(
+            problems,
+            abs(scene_rect.width() - viewport.width()) < 1.0
+            and abs(scene_rect.height() - viewport.height()) < 1.0,
+            f"场景应等于视口大小（画面溢出交给视口裁切），实际 {scene_rect}",
+        )
+        viewer._zoom_reset()
+
+        # 有弹窗外壳时：常用动作进标题栏，播放条只留播放相关的动作
+        dialog = extension_registry.provider("dialog")
+        _expect(problems, dialog is not None, "界面工具库应提供 dialog 扩展，无法检查标题栏动作")
+        if dialog is not None:
+            from qfluentwidgets import TransparentToolButton
+
+            from dm_plugin.builtin.lib.viewer.plugin import ViewerWindow
+
+            box = dialog.open_page(
+                "视频",
+                lambda holder: ViewerWindow(
+                    sample,
+                    lambda container: video_module.VideoViewer(
+                        sample, container, options={"loop": True}, on_option=lambda *_: None
+                    ),
+                    "视频",
+                    holder,
+                ),
+            )
+            ensure_app().processEvents()
+            try:
+                title_tips = [button.toolTip() for button in box.findChildren(TransparentToolButton)]
+                for word in ("截取当前画面", "把音轨导出成音频文件", "循环播放", "缩小画面", "全屏", "设置"):
+                    _expect(
+                        problems,
+                        any(word in tip for tip in title_tips),
+                        f"标题栏上应有「{word}」，实际 {title_tips}",
+                    )
+                inner = box.content_widget.content_widget
+                inner_tips: list[str] = []
+                inner_layout = inner._bar._layout
+                for index in range(inner_layout.count()):
+                    widget = inner_layout.itemAt(index).widget()
+                    if isinstance(widget, ToolButton):
+                        inner_tips.append(widget.toolTip())
+                _expect(
+                    problems,
+                    any("截取当前画面" in tip for tip in inner_tips) is False
+                    and any("跳到第一帧" in tip for tip in inner_tips),
+                    f"有标题栏时播放条只该留播放相关动作，实际 {inner_tips}",
+                )
+            finally:
+                box.close()
+                ensure_app().processEvents()
+
+        # 标题栏「设置」入口的取值来源：内容页自己声明设置项
+        items = viewer.settings_items()
+        keys = [str(item.get("key")) for item in items]
+        _expect(
+            problems,
+            keys == ["volume", "muted", "rate", "loop", "aspect", "subtitle", "zoom_step", "zoom_hint"],
+            f"视频查看器的设置项应覆盖播放偏好与缩放，实际 {keys}",
+        )
+        by_key = {str(item["key"]): item for item in items}
+        _expect(
+            problems,
+            by_key["aspect"]["kind"] == "choice" and "fit" in by_key["aspect"]["choices"],
+            "画面比例应是下拉设置项",
+        )
+        _expect(
+            problems,
+            by_key["zoom_hint"]["kind"] == "int" and by_key["zoom_hint"]["value"] == 1000,
+            f"倍率提示时长应是数字项且默认 1000 毫秒，实际 {by_key['zoom_hint']}",
+        )
+        by_key["aspect"]["on_change"]("fit")
+        _expect(problems, viewer.aspect == "fit", "设置项改了应立即生效")
+        _expect(problems, ("aspect", "fit") in options, f"设置项改了应回写选项，实际 {options}")
+
+        steps: list[float] = []
+        original_seek = viewer.seek_by
+        viewer.seek_by = lambda seconds: steps.append(seconds)
+        try:
+            viewer.step_frames(3)
+        finally:
+            viewer.seek_by = original_seek
+        expected = 0.3 if engine else MEDIA_FRAME_SECONDS * 3
+        _expect(
+            problems,
+            bool(steps) and abs(steps[-1] - expected) < 1e-6,
+            f"逐帧 3 帧应移动 {expected:.4f} 秒，实际 {steps}",
+        )
+
+        viewer._update_subtitle(0.2)
+        _expect(problems, not viewer._subtitle_label.isVisible(), "没有字幕条目时字幕条应保持隐藏")
+        viewer._toggle_subtitle()
+        _expect(
+            problems,
+            viewer._subtitle_on is False and not viewer._subtitle_label.isVisible(),
+            "关掉字幕后字幕条应立刻隐藏",
+        )
+
+        # 没有媒体接口时只提示、不问用户
+        asked.clear()
+        viewer._fallback_tried = False
+        with mock.patch.object(video_module.media, "available", return_value=False):
+            viewer._on_error(viewer._player_cls.Error.FormatError, "这个容器解不了")
+        _expect(problems, not asked, "没有媒体接口时不该问用户转码")
+        _expect(
+            problems,
+            "无法转码兜底" in viewer.caption,
+            f"没有媒体接口时应说明无法兜底，实际 {viewer.caption!r}",
+        )
+
+        # 有引擎时：先问用户，拒绝就不转
+        asked.clear()
+        viewer._fallback_tried = False
+        viewer._on_error(viewer._player_cls.Error.FormatError, "这个容器解不了")
+        _expect(problems, bool(asked), "系统播放器报错时应弹确认框问用户是否转码")
+        _expect(problems, "已取消转码" in viewer.caption, f"用户拒绝后应写明已取消，实际 {viewer.caption!r}")
+        _expect(problems, viewer._worker is None, "用户拒绝后不该起后台任务")
+
+        if engine:
+            # 用户同意：后台重新封装到临时文件，窗口关闭时删掉产物
+            video_module.confirm = lambda *_args, **_kwargs: True
+            viewer._fallback_tried = False
+            viewer._on_error(viewer._player_cls.Error.FormatError, "这个容器解不了")
+            worker = viewer._worker
+            _expect(problems, worker is not None, "同意后应起后台转封装任务")
+            if worker is not None:
+                _expect(problems, worker.wait(30000), "后台转封装应在 30 秒内完成")
+                for _ in range(3):
+                    ensure_app().processEvents()
+                temp_file = viewer._fallback_path
+                _expect(
+                    problems,
+                    bool(temp_file) and Path(temp_file).is_file(),
+                    f"应产出可播放的临时文件，实际 {temp_file!r}",
+                )
+                _expect(
+                    problems,
+                    temp_file == "" or "临时文件" in viewer.caption,
+                    f"完成后应告知已换容器 / 已转码，实际 {viewer.caption!r}",
+                )
+                viewer._release()
+                _expect(
+                    problems,
+                    not temp_file or not Path(temp_file).exists(),
+                    f"关掉窗口后临时文件应被删除，实际仍在 {temp_file!r}",
+                )
+
+        if registered is not None and callable(registered.factory):
+            built = None
+            try:
+                built = registered.factory(sample, None)
+                _expect(
+                    problems,
+                    built is not None and abs(built._volume - 0.8) < 1e-6,
+                    f"插件默认音量应为 80（折合 0.8），实际 {getattr(built, '_volume', None)}",
+                )
+                _expect(problems, built is not None and built._subtitle_on is True, "默认应打开内嵌字幕开关")
+            finally:
+                _drop_widget(built)
+    finally:
+        video_module.confirm = original_confirm
+        video_module.toast_success, video_module.toast_error, video_module.toast_info = original_toasts
+        _drop_widget(viewer)
+        dispose_window(window)
+        plugin_service.bootstrap(MEDIA_EXTENSION, previous if previous is not None else media_api.api())
+    assert not problems, "视频查看器检查未通过：" + "；".join(problems)
+
+
+@check("viewer_settings", "pages")
+def viewer_settings(case: Case) -> None:
+    """内容页声明 settings_items() 后，标题栏多一个「设置」齿轮，里面的项改一下立即生效。"""
+    install_builtin_plugins()
+    ensure_app()
+    from PyQt6.QtWidgets import QWidget
+    from qfluentwidgets import CheckBox, ComboBox, SpinBox, TransparentToolButton
+
+    from app.core.plugins.extensions import extension_registry
+    from dm_plugin.builtin.lib.ui import settings as ui_settings
+    from dm_plugin.builtin.lib.viewer.plugin import ViewerWindow
+
+    dialog = extension_registry.provider("dialog")
+    if dialog is None:
+        raise AssertionError("界面工具库应提供 dialog 扩展，无法检查设置入口")
+
+    problems: list[str] = []
+
+    class _SettingsStub(QWidget):
+        """最小内容页：只声明设置项，用来验证齿轮与设置对话框的装配。"""
+
+        caption = ""
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.popup = None
+            self.changed: list[tuple[str, object]] = []
+            self.enabled = True
+            self.step = "1.1"
+            self.volume = 80
+
+        def attach_popup(self, popup):
+            self.popup = popup
+
+        def settings_items(self):
+            return [
+                {
+                    "key": "enabled",
+                    "label": "启用",
+                    "kind": "bool",
+                    "value": self.enabled,
+                    "description": "开关一项。",
+                    "on_change": self._set_enabled,
+                },
+                {
+                    "key": "step",
+                    "label": "步长",
+                    "kind": "choice",
+                    "value": self.step,
+                    "choices": {"1.1": "细腻", "1.25": "默认"},
+                    "on_change": self._set_step,
+                },
+                {
+                    "key": "volume",
+                    "label": "音量",
+                    "kind": "int",
+                    "value": self.volume,
+                    "minimum": 0,
+                    "maximum": 100,
+                    "step": 5,
+                    "suffix": "%",
+                    "on_change": self._set_volume,
+                },
+            ]
+
+        def _set_enabled(self, value):
+            self.enabled = bool(value)
+            self.changed.append(("enabled", self.enabled))
+
+        def _set_step(self, value):
+            self.step = str(value)
+            self.changed.append(("step", self.step))
+
+        def _set_volume(self, value):
+            self.volume = int(value)
+            self.changed.append(("volume", self.volume))
+
+    class _Recorder(QWidget):
+        """替换 FormDialog：记下设置行，但不进模态循环（自检里 exec() 会卡住）。"""
+
+        made: list = []
+
+        def __init__(self, parent=None, **kwargs):
+            super().__init__(parent)
+            self.kwargs = kwargs
+            self.rows: list[QWidget] = []
+            self.hints: list[str] = []
+            self.buttons: dict = {}
+            _Recorder.made.append(self)
+
+        def add_widget(self, widget):
+            self.rows.append(widget)
+
+        def add_hint(self, text):
+            self.hints.append(str(text))
+
+        def set_buttons(self, **kwargs):
+            self.buttons = dict(kwargs)
+
+        def exec(self):
+            return 0
+
+    stub = _SettingsStub()
+    viewer = ViewerWindow(case.root / "selfcheck_settings.txt", lambda container: stub, "测试查看器")
+    original_dialog = ui_settings.FormDialog
+    ui_settings.FormDialog = _Recorder
+    popup = dialog.open_page(
+        title="selfcheck_settings.txt",
+        content_factory=lambda _container: viewer,
+        meta="临时标题",
+    )
+    try:
+        ensure_app().processEvents()
+        _expect(problems, stub.popup is popup, "内容页应拿到弹窗外壳（设置项也归它管）")
+        buttons = [
+            popup._bar_layout.itemAt(index).widget()
+            for index in range(popup._bar_layout.count())
+            if isinstance(popup._bar_layout.itemAt(index).widget(), TransparentToolButton)
+        ]
+        _expect(
+            problems,
+            len(buttons) == 4,
+            f"有设置项时标题栏应是「打开 / 定位 / 设置 / 关闭」四个按钮，实际 {len(buttons)}",
+        )
+        gear = next((button for button in buttons if button.toolTip() == "设置"), None)
+        _expect(problems, gear is not None, "标题栏应有「设置」齿轮按钮")
+
+        _expect(problems, len(ui_settings.settings_items(stub)) == 3, "应读出内容页声明的 3 项设置")
+        _expect(problems, ui_settings.settings_items(QWidget()) == [], "没声明设置项的内容页应读不到设置")
+        _expect(problems, ui_settings.attach_settings(popup, QWidget()) is False, "没有设置项时不该加齿轮")
+
+        if gear is not None:
+            gear.click()
+        _expect(problems, len(_Recorder.made) == 1, f"点齿轮应弹出一次设置对话框，实际 {len(_Recorder.made)}")
+        if _Recorder.made:
+            recorder = _Recorder.made[0]
+            _expect(problems, len(recorder.rows) == 3, f"设置对话框应有 3 行，实际 {len(recorder.rows)}")
+            _expect(
+                problems,
+                recorder.buttons.get("yes") == "完成",
+                f"设置对话框应只有「完成」按钮，实际 {recorder.buttons}",
+            )
+            _expect(problems, bool(recorder.hints), "设置对话框应有即时生效的说明")
+            boxes = recorder.rows[0].findChildren(CheckBox) if recorder.rows else []
+            combos = recorder.rows[1].findChildren(ComboBox) if len(recorder.rows) > 1 else []
+            spins = recorder.rows[2].findChildren(SpinBox) if len(recorder.rows) > 2 else []
+            _expect(problems, len(boxes) == 1, "bool 设置项应是一个勾选框")
+            _expect(problems, len(combos) == 1, "choice 设置项应是一个下拉框")
+            _expect(problems, len(spins) == 1, "int 设置项应是一个数字框")
+            if boxes:
+                boxes[0].setChecked(False)
+            if combos:
+                combos[0].setCurrentIndex(1)
+            if spins:
+                spins[0].setValue(35)
+            _expect(
+                problems,
+                stub.changed == [("enabled", False), ("step", "1.25"), ("volume", 35)],
+                f"设置项改动应立即生效，实际 {stub.changed}",
+            )
+    finally:
+        ui_settings.FormDialog = original_dialog
+        _drop_widget(popup)
+    assert not problems, "查看器设置入口检查未通过：" + "；".join(problems)
 
 
 @check("plugin_page_contributions", "pages")

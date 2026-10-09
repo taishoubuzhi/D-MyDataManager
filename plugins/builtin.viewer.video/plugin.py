@@ -6,9 +6,24 @@ from dm_plugin.builtin.lib.viewer.plugin import ViewerPlugin
 
 
 class VideoViewerPlugin(ViewerPlugin):
-    """播放视频文件，播放控制由界面工具库的 PlayerPanel 提供。"""
+    """播放视频文件：播放控制来自界面工具库的 PlayerPanel，探测 / 截图 / 字幕 /
+    音轨 / 转码兜底来自程序本体的媒体接口（`app.sdk.media`）。"""
 
     def create_view(self, path, parent=None):
         from .video_view import VideoViewer
 
-        return VideoViewer(path, parent)
+        return VideoViewer(
+            path,
+            parent,
+            options={
+                "volume": self.option("volume", 80),
+                "muted": self.option("muted", False),
+                "rate": self.option("rate", "1"),
+                "loop": self.option("loop", False),
+                "aspect": self.option("aspect", "fit"),
+                "subtitle": self.option("subtitle", True),
+                "zoom_step": self.option("zoom_step", "1.25"),
+                "zoom_hint": self.option("zoom_hint", 1000),
+            },
+            on_option=self.set_option,
+        )

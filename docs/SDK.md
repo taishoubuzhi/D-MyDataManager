@@ -43,6 +43,7 @@ class HelloPlugin(Plugin):
 | `app.sdk.download` | 程序本体**唯一**的下载队列 | `DOWNLOAD_EXTENSION`（`download.open`）、`request`、`enqueue`、`choose_target`、`default_dir`、`jobs`、`find`、`pause` / `resume` / `cancel` / `retry` / `forget`、`pause_all` / `resume_all` / `cancel_all` / `clear_finished`、`DownloadRef`；要做自己的任务行就用 `manager()` 与 `DownloadManager` / `DownloadOptions` / `DownloadJob` / `STATE_*` / `part_path` |
 | `app.sdk.pip` | pip 安装引擎（**只集成、不对用户开放**） | `PIP_EXTENSION`（`pip.install`）、`install`、`wait`、`pause` / `resume` / `cancel` / `forget`、`PipRef`、`task_log`、`venv_python`、`import_name`、`check_wheels`、`missing_program_packages` |
 | `app.sdk.export` | 把选中的数据交给程序本体导出 | `EXPORT_EXTENSION`（`export.open`）、`packages`、`plan`、`directory`、`choose_directory`、`variables`、`ExportRef`、`PackageRef`、`PlanRef`，以及命名模板的 `render` / `preview` / `VARIABLES` / `VARIABLE_MAP` / `safe_filename` |
+| `app.sdk.media` | 程序本体**唯一**的媒体引擎（PyAV，进程内自带 FFmpeg 库） | `MEDIA_EXTENSION`（`media.open`）、`available`、`engine_version`、`probe`、`frame`、`iter_frames`、`subtitle`、`remux`、`transcode`、`clip`、`extract_audio`、`temp_dir` / `temp_path` / `cleanup_temp`、`format_time`，快照类型 `MediaInfo` / `MediaStream` / `SubtitleCue` / `DecodedFrame`，错误 `MediaError` / `MediaCancelled`；插件**不许自己 `import av` 或 `subprocess` 调 ffmpeg**（详见 [`index/viewer-editor/media.md`](index/viewer-editor/media.md)） |
 | `app.sdk.library` | 取别的插件暴露的库 | `library`、`requires` |
 | `app.sdk.manifest` | 受程序管理的 JSON 清单 | `MANIFEST_EXTENSION`、`describe`、`load`、`query`、`diff`、`update`、`write`、`reset`、`backup`、`backups`、`raw`、`entries`、`ids`、`items_of`、`record_of`、`register`、`value_of`、`available` |
 | `app.sdk.version` | 版本与版本范围 | `SDK_VERSION`、`parse_version`、`parse_range`、`satisfies`、`compare_versions`、`range_text` |
@@ -261,7 +262,7 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 - `kind` 是**元数据**（「查看器」/「编辑器」页的分组与图标），不是插件类型；一个插件可以注册多个查看器 / 编辑器。
 - 注册后会出现在对应配置页的插件下拉里，用户可以按扩展名指定用哪个；规则分别存 `.configs/viewers.json` / `.configs/editors.json`。
 - **推荐做法**（也是内置 7 个查看器与 2 个编辑器的做法）：登记 `opener` 让插件自己建窗口、自己弹，界面代码完全住在插件里；内置工具箱是 `builtin.lib.viewer` 的 `plugin.py`（`ViewerPlugin` 基类 + `ViewerWindow` + 注册表）与 `builtin.lib.editor` 的 `plugin.py`（`EditorPlugin` 基类 + `EditorWindow` + 注册表）——继承基类只实现 `create_view(path, parent=None)` / `create_editor(path, parent=None)`，登记与弹窗都由基类完成。只给 `factory` 的老式写法仍可用（程序用宿主把控件包一层）。
-- `kind="internal"` 的编辑器控件若提供 `save()`（`True` 或 `(bool, str)`）与 `is_dirty()`，窗口外壳会据此启用「保存」、显示「已修改」并在关闭前询问未保存改动；`kind="external"` 表示不提供程序内控件，交给系统默认程序编辑（登记 `opener` 即可）。
+- `kind="internal"` 的编辑器控件若提供 `save()`（`True` 或 `(bool, str)`）与 `is_dirty()`，编辑器内容页会据此启用外壳标题栏的「保存」、显示「已修改」并在关闭前询问未保存改动；`kind="external"` 表示不提供程序内控件，交给系统默认程序编辑（登记 `opener` 即可）。
 - 程序侧调度在 `app.services.viewer_service` / `app.services.editor_service`（插件看不到）；插件侧写 `ctx.require("viewer.open")` / `ctx.require("editor.open")` 或直接继承工具库基类。
 - 页面注册成 `plugin.<key>` 路由，程序把它挂进主窗口堆叠页并按需加左侧导航项；左侧导航内置页面顺序固定（设置恒在最下面），插件页面按载入顺序追加、最多显示 7 个，超出的只出现在「页面管理」页里。
 
@@ -277,6 +278,7 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 | `download.open` | 程序本体（`app.services.download_api`） | `app.sdk.download` | 本文第 12 节 |
 | `pip.install` | 程序本体（`app.services.pip_api`） | `app.sdk.pip` | 本文第 12 节 |
 | `export.open` | 程序本体（`app.services.export_api`） | `app.sdk.export` | 本文第 13 节 |
+| `media.open` | 程序本体（`app.services.media_api`） | `app.sdk.media` | 本文第 14 节 |
 
 `viewer.open` / `editor.open` 由查看器 / 编辑器工具库提供，见 5.3。
 
@@ -506,7 +508,43 @@ if result is not None:                    # None = 用户取消
 - 导出是**同步做完**的：`packages()` 返回时文件已经在盘上，每个压缩包里都带一份 `清单-*.csv`。
 - 写盘用的是「先写 `.part` 再原子改名」，中途失败不会留下半个压缩包（`.part` 会被清掉）。
 
-## 14. 排查清单
+## 14. 媒体（`app.sdk.media`）
+
+播放器、抽帧、字幕、转码这类事**不许插件各自实现**：引擎是程序本体的
+`app.services.media_service`（PyAV 进程内，wheel 自带 FFmpeg 库），插件只用 `app.sdk.media`。
+**不要 `import av`、不要 `subprocess` 调 ffmpeg / ffprobe** —— 各写一套的结果就是「有的系统能跑、有的缺东西」。
+
+```python
+from app.sdk import media
+
+if media.available() and (info := media.probe(path)):     # 程序注册了 media.open
+    print(info.summary_text)                              # 时长 · 分辨率 · 编码
+    print(info.duration_text, info.has_audio, info.subtitles)
+
+cover = media.frame(path, target, at=5.0, size=512)       # 抽一帧；失败返回空串（不抛错）
+for frame in media.iter_frames(path, start=0.0, count=30, step=2):
+    print(frame.index, frame.time, frame.image.size)      # image 是 Pillow 的 Image
+
+cues = media.subtitle(path)                               # 内嵌字幕轨；没有就空列表
+media.transcode(path, media.temp_path(".mp4"), scale=1280, on_progress=..., cancel=...)
+media.cleanup_temp(target)                                # 临时产物用完自己删
+```
+
+| 用途 | 成员 |
+| --- | --- |
+| 自述 | `MEDIA_EXTENSION`（`media.open`）、`provider()`、`available()`（只表示程序注册了接口）、`engine_version()` |
+| 读（取不到就降级，不抛错） | `probe(path) -> MediaInfo \| None`、`frame(source, target, *, at=None, size=DEFAULT_FRAME_SIZE) -> str`、`iter_frames(source, *, start=None, count=None, step=1, size=None)`、`subtitle(source, *, stream=None) -> list[SubtitleCue]` |
+| 写（失败抛 `MediaError`，取消抛 `MediaCancelled`） | `remux(source, target, *, container="mp4", keep_audio=None, keep_subtitle=None, on_progress=None, cancel=None)`、`transcode(source, target, *, vcodec=..., acodec=..., scale=None, on_progress=None, cancel=None)`、`clip(source, target, *, start=0.0, duration=None, container="mp4")`、`extract_audio(source, target, *, codec="copy", on_progress=None, cancel=None)` |
+| 快照 | `MediaInfo`（`container` / `duration` / `bit_rate` / `streams` / `metadata`；属性 `videos` / `audios` / `subtitles` / `has_video` / `has_audio` / `width_height` / `duration_text` / `summary_text`，方法 `describe_streams()`）、`MediaStream`（`describe()`、`resolution_text`、`track_text`）、`SubtitleCue`（`is_active(position)`）、`DecodedFrame`（`index` / `time` / `image`） |
+| 工具 | `format_time(seconds)`（`MM:SS` / `HH:MM:SS`）、`temp_dir()`、`temp_path(suffix="")`、`cleanup_temp(target) -> bool` |
+
+- 每个函数都是**同步阻塞**的：在插件自己的工作线程里跑，界面线程只接信号。
+- 临时产物落 `<根>/.tmp/media`：用 `temp_path()` 起名，用完 `cleanup_temp()`；程序在退出与下次启动时还会兜底清理。
+- 参数是**白名单**（`vcodec` / `acodec` / `scale` / `crf` / `preset`），不接受任意命令行参数。
+- `av` 没装时 `available()` 仍可能为真（那说的是接口注册），真正的引擎能力看 `probe()` 是否为 `None`、`frame()` 是否返回空串；要做能力判断就用这些返回值，别假设引擎一定在。
+- 详细实现、单位换算的坑与测试见 [`index/viewer-editor/media.md`](index/viewer-editor/media.md)。
+
+## 15. 排查清单
 
 | 症状 | 先看 |
 | --- | --- |

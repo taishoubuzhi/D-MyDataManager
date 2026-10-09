@@ -4,19 +4,17 @@
 
 - **图片**：不写 `cover_path`——卡片直接用原文件作封面，省掉一份重复的缩略图，
   也不再依赖缓存目录里的副本（用户 m00003 第 3 条）。
-- **视频**：导入时用 ffmpeg 抽第一帧，存到 `全局/covers/<checksum>.png` 并写进
-  `cover_path`；抽帧失败（没装 ffmpeg、编码不支持）时退回空值，界面显示默认类型图标
-  （用户 m00003 第 2 条）。
+- **视频**：导入时用媒体引擎（`app.services.media_service`）在进程内解出第一帧，存到
+  `全局/covers/<checksum>.png` 并写进 `cover_path`；解不出来（文件损坏、编码不支持）时
+  退回空值，界面显示默认类型图标（用户 m00003 第 2 条）。
 - 其它类型没有封面概念，`cover_path` 一律清空。
 
-ffmpeg 的定位顺序：PATH 上的 `ffmpeg` → `imageio-ffmpeg` 自带的 ffmpeg →
-`.models/runtime` 下的 venv（「模型」页装运行环境时顺带装的 imageio-ffmpeg）。
+抽帧不再依赖外部 ffmpeg 可执行文件（`av` 的 wheel 自带 FFmpeg 库），以前那套
+「PATH → imageio-ffmpeg → 模型运行环境 venv」的定位逻辑整体删掉了。
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 from loguru import logger
@@ -24,71 +22,16 @@ from sqlalchemy import select
 
 from ..core.config import config, cover_dir, library_root
 from ..db.models import DataItem, DataType
-
-#: 单次抽帧的超时（秒）；超时当作抽帧失败，不拖住导入
-FRAME_TIMEOUT = 30
+from . import media_service
 
 VIDEO_SUFFIXES = frozenset(
     {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg"}
 )
 
 
-def _ffmpeg_from_python() -> str:
-    """`imageio-ffmpeg` 自带的 ffmpeg 可执行文件路径（没装则空串）。"""
-    try:
-        import imageio_ffmpeg  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 - 没装是正常情况
-        return ""
-    try:
-        return str(imageio_ffmpeg.get_ffmpeg_exe() or "")
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("定位 imageio-ffmpeg 失败：{}", exc)
-        return ""
-
-
-def _ffmpeg_from_runtime() -> str:
-    """模型运行环境（`<模型根>/runtime/<profile>/venv`）里装的 imageio-ffmpeg。
-
-    模型根目录由 `lib.model` 路径层决定（默认程序目录下的 `.models`，用户可改到别处），
-    所以这里把该插件模块当只读依赖导入；插件不可用时直接跳过（不抛错）。
-    """
-    try:
-        from dm_plugin.lib.model import paths as model_paths  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001 - 插件没装 / 没启用是正常情况
-        return ""
-    try:
-        root = Path(model_paths.runtime_root())
-    except Exception as exc:  # noqa: BLE001 - 模型目录建不出来就用别的来源
-        logger.debug("定位模型运行环境目录失败：{}", exc)
-        return ""
-    if not root.is_dir():
-        return ""
-    for venv in sorted(root.glob("*/venv")):
-        for candidate in (venv / "Scripts" / "ffmpeg.exe", venv / "bin" / "ffmpeg"):
-            if candidate.is_file():
-                return str(candidate)
-    return ""
-
-
-def ffmpeg_executable() -> str:
-    """找到可用的 ffmpeg（PATH → 当前解释器 → 模型运行环境）；没有返回空串。"""
-    found = shutil.which("ffmpeg")
-    if found:
-        return found
-    for resolver in (_ffmpeg_from_python, _ffmpeg_from_runtime):
-        path = resolver()
-        if path and Path(path).is_file():
-            return path
-    return ""
-
-
 def grab_video_frame(source: str | Path, checksum: str, size: int | None = None) -> str:
-    """抽视频第一帧保存为封面，返回封面路径；失败返回空串。"""
-    if not checksum:
-        return ""
-    executable = ffmpeg_executable()
-    if not executable:
-        logger.info("未找到 ffmpeg，视频封面退回默认图标")
+    """抽视频第一帧保存为封面，返回封面路径；失败返回空串（不抛错）。"""
+    if not checksum or not source:
         return ""
     covers = cover_dir()
     covers.mkdir(parents=True, exist_ok=True)
@@ -96,33 +39,20 @@ def grab_video_frame(source: str | Path, checksum: str, size: int | None = None)
     if target.exists():
         return str(target)
     limit = size or config.coverSize.value
-    command = [
-        executable,
-        "-y",
-        "-loglevel",
-        "error",
-        "-i",
-        str(source),
-        "-frames:v",
-        "1",
-        "-vf",
-        f"scale={limit}:{limit}:force_original_aspect_ratio=decrease",
-        str(target),
-    ]
+    produced = media_service.frame(source, target, size=limit)
+    if not produced:
+        logger.info("视频首帧抽不出来（文件损坏或编码不支持），封面退回默认图标：{}", Path(source).name)
+        _remove_partial(target)
+        return ""
+    return produced
+
+
+def _remove_partial(target: Path) -> None:
+    """删掉可能残留的半张封面（写到一半失败时会有）。"""
     try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            timeout=FRAME_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as exc:  # noqa: BLE001 - 抽帧失败不该拖垮导入
-        logger.debug("抽取视频首帧失败：{}", exc)
-        return ""
-    if result.returncode != 0 or not target.is_file():
-        logger.debug("抽取视频首帧失败：{}", result.stderr.decode("utf-8", "replace")[:200])
-        return ""
-    return str(target)
+        target.unlink(missing_ok=True)
+    except OSError as exc:  # noqa: BLE001 - 清理失败不影响导入
+        logger.debug("清理半成品封面失败：{}", exc)
 
 
 def build_cover(source: str | Path, checksum: str, data_type: DataType) -> str:
@@ -197,7 +127,6 @@ def _source_of(item: DataItem) -> str:
 __all__ = [
     "VIDEO_SUFFIXES",
     "build_cover",
-    "ffmpeg_executable",
     "grab_video_frame",
     "reset_covers",
 ]

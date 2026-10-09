@@ -511,12 +511,17 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 封面规则集中在一个服务里：`src/app/services/cover_service.py`，导入、扫描登记（`LibraryService` 的「扫描并登记」）与设置页「重置封面」三处共用，界面侧只认 `DataItem.cover_path` 与 `item_card.cover_source(item)`：
 
 - **图片**：不再生成缩略图副本，`cover_path` 留空，卡片直接拿**库内那份原文件**当封面——`cover_source()` 在 `cover_path` 为空且类型是图片时调 `_image_cover_path()`，**先把 `file_path`（库内相对路径）拼到 `library_root()` 上**，库内文件不在了才退回导入来源 `source_path`，两处都没有才返回空串（显示类型图标）。**不能**改用 `item_api._absolute_path()`：那个函数优先返回导入时的外部 `source_path`，原文件被移走 / 删除后封面就取不到了（用户 m01544：重置封面后部分图片退回默认图标）。视频抽帧用的 `cover_service._source_of()` 同理，也是库内优先。这样封面目录里不会为一堆图片各存一份重复内容。
-- **视频**：导入时用 ffmpeg 抽**第一帧**，`ffmpeg -y -loglevel error -i <源文件> -frames:v 1 -vf scale=<Cover-Size>:<Cover-Size>:force_original_aspect_ratio=decrease <全局>/covers/<checksum>.png`，成功才写进 `cover_path`。
+- **视频**：导入时用**内置媒体引擎**（`app/services/media_service.py`，底层 PyAV）抽**第一帧**：`media_service.frame(源文件, 目标, size=<Cover-Size>)` 内部走 `av.open()` → 解出第一帧 → Pillow 缩放 → 存成 PNG，成功才写进 `cover_path`。引擎是随程序装的 `av`，**不再需要用户自己装 `ffmpeg`，也没有 `PATH` / `imageio-ffmpeg` / 模型运行环境三级定位这套东西了**（旧实现整体删除）。**抽帧失败不算错误**：`grab_video_frame()` 返回空串、日志记一条 info，卡片退回类型图标，导入流程照常完成。抽出来的若是个空 / 半截文件会即时删掉。
 - **其它类型**：没有封面概念，`cover_path` 一律清空，界面显示类型图标。
 
-ffmpeg 的定位顺序（`ffmpeg_executable()`）：PATH 上的 `ffmpeg` → 当前解释器装的 `imageio-ffmpeg` 自带的 ffmpeg →「模型」页装的运行环境（`<模型根>/runtime/<profile>/venv`，模型根默认是程序目录下的 `.models`，路径层由 `plugins/lib.model/.plugin/paths.py` 决定）。**取不到 ffmpeg 或抽帧失败都不算错误**：`grab_video_frame()` 返回空串、日志记一条 debug，卡片退回类型图标，导入流程照常完成。
+媒体引擎与程序本体只隔着一层门面：服务侧是 `src/app/services/media_service.py`（真正调 PyAV 的地方），服务门面是 `src/app/services/media_api.py`，插件侧的唯一入口是 `src/app/sdk/media.py`（扩展接口名 `media.open`，由 `main.py` 在启动时 `plugin_service.bootstrap(MEDIA_EXTENSION, media_api.api())` 注册）。**引擎缺失（没装 `av`）只降级、不报错**：`media_service.available()` 为假，`probe()` 返回 `None`、`frame()` 返回空串，封面退回类型图标，视频查看器没有「转码兜底」。临时产物统一放 `.tmp/media`（`paths.MEDIA_TMP_DIR`），关窗 / 任务结束即删、进程退出兜底清空、启动时清掉超过一天的陈旧文件。
+**控制台不再刷 libav 日志**：播放视频时 QtMultimedia 自带的那份 FFmpeg 会往 stderr 打一大段 `Input #0 …`，还会探测硬件编解码器
+（`[h264_mf] …` / `[hevc_mf] could not find any MFT …`，用户 m02529 第 1 条把它当成报错）。这些是 libav 的全局日志等级吐出来的，
+`src/app/core/runtime/qt_media.py` 的 `silence_ffmpeg_logs()`（`main.py` 在 `setup_logging()` 之后调一次）用 `ctypes` 打开
+`PyQt6/Qt6/bin/avutil-*.dll` 并把等级压到 `AV_LOG_PANIC`；PyAV 自己那份（`av.libs/`）由 `media_service._silence_logs()` 压到 ERROR。
+两处都只影响**日志**：真正的播放失败照旧由 `QMediaPlayer.errorOccurred` 走到界面上。
 
-设置页「维护 → 重置封面」（`SettingsPage._reset_covers()`）走 `cover_service.reset_covers(session)`：先删掉 `全局/covers/` 下现有的封面文件、再把所有非删除项的旧 `cover_path` 清空，然后按上面的规范重新生成一遍（图片留空、视频重新抽帧、其它类型清空），返回 `{"items", "covers", "cleared", "failed"}` 并在提示里报出生成、清理与失败数量。数据文件本身不受影响。
+设置页「维护 → 重置封面」（`SettingsPage._reset_covers()`）走 `cover_service.reset_covers(session, on_event=...)`：先删掉 `全局/covers/` 下现有的封面文件、再把所有非删除项的旧 `cover_path` 清空，然后按上面的规范重新生成一遍（图片留空、视频重新抽帧、其它类型清空），返回 `{"items", "covers", "cleared", "failed"}` 并在提示里报出生成、清理与失败数量。数据文件本身不受影响。
 
 ## 表格与列表通用件
 
@@ -711,19 +716,39 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 ### 查看器
 
 内置的查看器是一套「工具库 + 七个具体插件」：`builtin.lib.viewer`（`plugin.py` 提供 `ViewerPlugin` 基类与 `ViewerWindow`
-窗口外壳，`registry.py` 提供注册表 `ViewerRegistry`）、`builtin.lib.ui`（`provides: dialog` / `ui`，提供弹窗外壳、页面模板与控件工厂），以及
+查看器内容页，`registry.py` 提供注册表 `ViewerRegistry`）、`builtin.lib.ui`（`provides: dialog` / `ui`，提供弹窗外壳、页面模板与控件工厂），以及
 `builtin.viewer.image` / `builtin.viewer.text` / `builtin.viewer.markdown` / `builtin.viewer.spreadsheet` / `builtin.viewer.archive` / `builtin.viewer.audio` / `builtin.viewer.video`
 （图片 / 文本 / Markdown / 表格 / 压缩包 / 音频 / 视频）—— 每个查看器的视图代码就放在**自己的插件目录**里
 （例如 `plugins/builtin.viewer.image/.plugin/image_view.py`），程序里没有任何查看器界面代码；音频与视频的播放控件由界面工具库提供
 （`builtin.lib.ui` 的 `PlayerPanel` 与 `format_time()`，`QtMultimedia` 到真正播放时才导入），
 两个插件都直接继承它（`AudioViewer` / `VideoViewer`），只差一个 `shows_video` 开关。
+视频查看器（`plugins/builtin.viewer.video/.plugin/video_view.py`）在 `PlayerPanel` 之上加了一层，按钮分成上下两处：
+**标题栏**放画面相关的常用动作——**缩小画面 / 放大画面 / 重置缩放**、循环播放、截图（存到图片导出目录）/ 导出音频 / 音轨选择 / 内嵌字幕开关 / **全屏**，
+加上外壳自动补的**设置齿轮**；**播放条**只留播放本身的东西，按「播放按钮」分两段：**左边**是「跳到第一帧（Home）」「后退一秒（F）」，
+**右边**是「前进一秒（G）」「跳到最后一帧（End）」（首末帧用 `PAGE_LEFT` / `PAGE_RIGHT` 图标，不是「↺10 / ↻30」那种快进快退）；
+这四个位置动作每次都会弹一条提示，告诉你刚跳到哪儿（「已跳到第一帧 · 当前位置 0:00」这类）。
+全屏后按钮自己换成「退出全屏」（标题栏保留，按钮就在上面；Esc 也能退出），切换循环播放会弹一条提示说明当前是开还是关（用户 m02529 第 5 条）。
+**画面缩放**：画面用 `QGraphicsView` + `QGraphicsVideoItem` **合成绘制**（不再是原生 `QVideoWidget` 子窗口，所以浮层提示、倍率、设置对话框都能画在画面之上，
+放大的画面也被视口裁掉、不会盖住上下工具条）；1.0 = 适应窗口，可以缩到 `MEDIA_ZOOM_MIN`（0.1，变成 0.x）也能放到 `MEDIA_ZOOM_MAX`（8.0），
+到两端时放大 / 缩小按钮自动变灰，「重置缩放」无条件回到 1.0；放大后可以直接**按住画面拖动平移**（平移被 `_clamp_pan()` 夹在视口内），
+每次缩放都会在**右下角浮出当前倍率**（默认 1 秒，时长由选项 `zoom_hint` 决定）。
+倍速与音量 / 静音 / 画面比例（适应 / 拉伸）等偏好走**插件选项**（`.data/viewer.json` 同级的那份选项，键 `volume` / `muted` / `rate` / `loop` / `aspect` / `subtitle` / `zoom_step` / `zoom_hint`，都是全局偏好）；
+「截图」按当前 `_position` 让 **`app.sdk.media`** 抽一帧（`media.frame()`），**帧步进**用 `media.MEDIA_FRAME_SECONDS` 与 `media_service` 探到的帧率换算成秒；播放前先用 `app.sdk.media.probe()` 拿时长 / 分辨率 / 字幕轨。
+**转码兜底**：系统多媒体后端解不开（`errorOccurred`）时，若 `media.available()` 为真就弹确认框问「要不要转码到临时文件再播」，用户同意才在后台线程（`_FallbackWorker`，`QThread` + `QEventLoop`）里 `media.transcode()` 成同目录的 `.tmp/media/*.mp4` 再 `setSource()` 播放，**不同意就取消播放**（不静默转码）；这些临时文件在**关窗时删除**，删不掉（播放器还占着句柄）就重试几次，仍不行交给 `media_service` 的退出兜底清理。**没有「静默转码」的开关**：每一次都由用户点确认（用户 m00259 第 4 条）。
 每个查看器把显示名、`kind`、宿主、扩展名、能力写在自己的 `.data/viewer.json` 里；基类的 `setup()` 读它、`ctx.require("dialog")`
 之后调 `ctx.add_viewer(...)` 登记，子类只实现 `create_view(path, parent=None)` 返回视图控件。查看器控件是普通 `QWidget`，
 构造签名 `(path, parent=None)`，可提供 `caption` 属性作为补充说明。
 
 弹窗由插件自己完成：基类在登记查看器时同时登记 `opener`（`ViewerPlugin.open_view()`），它用自己目录里的视图配上
-`ViewerWindow` 外壳，再向 `dialog` 扩展接口（`builtin.lib.ui` 用 `ctx.provide("dialog", DialogApi())` 登记）要一个独立顶层
+`ViewerWindow` 内容页，再向 `dialog` 扩展接口（`builtin.lib.ui` 用 `ctx.provide("dialog", DialogApi())` 登记）要一个独立顶层
 窗口（Esc 或标题栏关闭按钮退出）；缺少该插件时提示「缺少弹窗工具库（dialog），请到「插件」页启用后重试」。
+标题栏只有**一条**：文件名与「关闭」由弹窗外壳画，查看器名 / 文件信息与「用系统程序打开」「定位文件」两个按钮由内容页在
+外壳回调 `attach_popup(popup)` 时交给它（编辑器同构，只是动作换成「保存」「用系统编辑器打开」「定位文件」），页面自己不再画第二条标题栏。
+**设置入口也在这条标题栏上**：内容页实现 `settings_items()`（返回 `key` / `label` / `kind`（bool / int / choice）/ `value` / `description` / `choices` / 单位与范围 / `on_change`），
+外壳（`plugins/builtin.lib.ui/.plugin/dialog_host.py` 的 `PopupWindow._attach_content()`）先转交 `attach_popup()`、再问一次设置项，有就往关闭按钮左边加一个齿轮
+（`FluentIcon.SETTING`，机制在 `plugins/builtin.lib.ui/.plugin/settings.py`）；点开的对话框里**改一下立即生效并回写插件选项**（没有「确定」，
+底部只有「完成」/「关闭」）。当前声明设置项的查看器：视频（音量 / 静音 / 倍速 / 循环 / 画面比例 / 内嵌字幕 / 缩放步长 / 倍率提示时长）、
+图片（打开时适应窗口 / 缩放步长 / 平滑缩放）、文本（默认编码 / 自动换行）；`ViewerWindow` / `EditorWindow` 只负责把 popup 转给内容页并转发设置项。
 程序侧只剩调度：`app.services.viewer_service` 的 `open_path()` / `open_viewer_with()` / `open_system()` 通过 `viewer.open` 扩展接口把活儿交给插件
 （`plugins/builtin.lib.viewer/.plugin/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。
 数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开（`Layout/Double-Click-Action` 选成「打开编辑器」时改走 `app.services.editor_service` 的 `edit_path()`，`ManagePage._open_in_editor()`；没装编辑器插件时编辑器门面自己退回系统默认程序）；
@@ -743,8 +768,8 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 
 数据编辑走的是与查看器**平行**的一套机制：程序侧 `app.services.editor_service` 只留类型别名（`EditorInfo` / `EditorFactory` / `EditorOpener`）与调度门面
 （`edit_path()` / `edit_with()` / `open_system()`，拿不到 `editor.open` 接口时退回系统默认编辑器）；
-注册表、规则（`.configs/editors.json`）与窗口外壳都在工具库插件 `builtin.lib.editor`（`plugin.py` 提供 `EditorPlugin` 基类与 `EditorWindow`
-窗口外壳，`registry.py` 提供 `EditorRegistry`）里。数据管理页右键的「编辑器」子菜单由程序本体搭出来
+注册表、规则（`.configs/editors.json`）与内容页都在工具库插件 `builtin.lib.editor`（`plugin.py` 提供 `EditorPlugin` 基类与 `EditorWindow`
+编辑器内容页，`registry.py` 提供 `EditorRegistry`）里。数据管理页右键的「编辑器」子菜单由程序本体搭出来
 （`ManagePage.editor_menu_items()` / `_build_editor_menu()` 读 `app.services.editor_service.editors_for()`），所以禁用 `builtin.lib.editor` 后菜单仍然在，
 只是只剩「系统默认程序 / 交给系统选择…」。
 编辑器分两种 `kind`：`internal` 在程序内用可编辑控件改内容（控件若提供 `save()` / `is_dirty()`，窗口会启用「保存」按钮、显示「已修改」并在关闭前

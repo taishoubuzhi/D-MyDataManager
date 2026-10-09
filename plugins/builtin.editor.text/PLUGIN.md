@@ -22,11 +22,11 @@
 ## 行为
 
 - 打开时用 `app.sdk.data.read_text()` 做编码探测，下拉可在 `自动检测` 与 `app.sdk.data.ENCODINGS` 间切换；超过 `TEXT_LIMIT` 的大文件按只读处理，保存返回失败并提示。
-- 控件提供 `is_dirty()` 与 `save()`：窗口外壳据此启用「保存」按钮、显示「已修改」，关闭前询问未保存改动。
+- 控件提供 `is_dirty()` 与 `save()`：编辑器内容页据此启用外壳标题栏的「保存」按钮、显示「已修改」，关闭前询问未保存改动。
 - 保存写回原文件（沿用探测 / 选择的编码），成功后走 `builtin.lib.editor` 的 `_on_saved()` → `ctx.host.refresh_path()`，重算条目 checksum / size / 内容并广播刷新。
-- 工具条上的「用系统编辑器打开」「定位文件」由窗口外壳提供。
+- 「保存」「用系统编辑器打开」「定位文件」由编辑器内容页在 `attach_popup()` 时挂到弹窗外壳的标题栏上。
 
 ## 依赖
 
-- builtin.lib.editor（编辑器基类与窗口外壳）
-- builtin.lib.ui（窗口 / 控件工厂）
+- builtin.lib.editor（编辑器基类与内容页）
+- builtin.lib.ui（弹窗外壳 / 控件工厂）

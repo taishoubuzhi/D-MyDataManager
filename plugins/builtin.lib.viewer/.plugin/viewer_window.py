@@ -1,7 +1,7 @@
-"""查看器内容页外壳：文件名 + 查看器名 + 系统打开 / 定位文件 + 内容区。
+"""查看器内容页：只做「页面本身」，窗口标题栏由弹窗工具库（builtin.lib.ui）负责。
 
-窗口装饰（标题栏、关闭按钮）由弹窗工具库（builtin.lib.ui）负责；本模块只做「页面本身」，
-内容由调用方通过 `build(container)` 造出来，所以外壳与具体查看器无关。
+文件名 / 查看器名与「用系统程序打开」「定位文件」两个动作，通过 `attach_popup(popup)`
+交给外壳标题栏，避免像以前那样外壳与页面各画一条一模一样的标题栏（外层套一圈）。
 """
 
 from __future__ import annotations
@@ -13,12 +13,7 @@ from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon
 
 from app.sdk import ui
-from dm_plugin.builtin.lib.ui.plugin import (
-    icon_button,
-    status_label,
-    strong_label,
-    toolbar,
-)
+from dm_plugin.builtin.lib.ui.plugin import status_label
 
 _console = console_for("builtin.lib.viewer")
 
@@ -27,7 +22,7 @@ DEFAULT_HOST = "dialog"
 
 
 class ViewerWindow(QWidget):
-    """查看器内容页：工具栏 + 查看器控件；窗口装饰由弹窗插件负责。"""
+    """查看器内容页：内容区 + 交给外壳的动作按钮；窗口装饰由弹窗插件负责。"""
 
     def __init__(self, path, build, name: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,24 +30,14 @@ class ViewerWindow(QWidget):
         self.build = build
         self.viewer_name = str(name or "")
         self.content_widget: QWidget | None = None
+        self.popup = None
+        self._caption = ""
+        self._meta_text = self.viewer_name
         self.setObjectName("viewerWindow")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        bar, bar_layout = toolbar(self)
-        bar_layout.setContentsMargins(14, 10, 14, 10)
-        self.title_label = strong_label(bar, self.path.name)
-        bar_layout.addWidget(self.title_label)
-        self.meta_label = status_label(bar, self.viewer_name)
-        bar_layout.addWidget(self.meta_label)
-        bar_layout.addStretch(1)
-        self.external_button = icon_button(bar, FluentIcon.LINK, "用系统程序打开", self._on_open_external)
-        bar_layout.addWidget(self.external_button)
-        self.reveal_button = icon_button(bar, FluentIcon.FOLDER, "定位文件", self._on_reveal)
-        bar_layout.addWidget(self.reveal_button)
-        root.addWidget(bar)
 
         self.content = QWidget(self)
         self.content_layout = QVBoxLayout(self.content)
@@ -62,6 +47,43 @@ class ViewerWindow(QWidget):
 
         self._build_content()
 
+    # ------------------------------------------------------------------ 外壳对接
+    def attach_popup(self, popup) -> None:
+        """弹窗外壳创建后调用：把动作按钮与文件信息放到外壳标题栏上。
+
+        内容页（真正画画面的那个控件）若自己也实现 `attach_popup(popup)`，一并转交；
+        设置项由内容页的 `settings_items()` 声明，外壳据此在标题栏加齿轮。
+        """
+        self.popup = popup
+        popup.add_action(FluentIcon.LINK, "用系统程序打开", self._on_open_external)
+        popup.add_action(FluentIcon.FOLDER, "定位文件", self._on_reveal)
+        self._sync_meta()
+        hook = getattr(self.content_widget, "attach_popup", None)
+        if callable(hook):
+            try:
+                hook(popup)
+            except Exception:  # 内容页的挂载失败不影响查看器显示
+                _console.exception("查看器内容挂载失败")
+
+    def settings_items(self) -> list[dict]:
+        """设置项统一由内容页声明，这里只做转发（内容页没有就返回空列表）。"""
+        hook = getattr(self.content_widget, "settings_items", None)
+        if not callable(hook):
+            return []
+        try:
+            return list(hook() or ())
+        except Exception:  # noqa: BLE001 - 内容页取设置项失败按「没有设置」处理
+            _console.exception("读取查看器设置项失败")
+            return []
+
+    def _sync_meta(self) -> None:
+        """把「查看器名 · 文件信息」写进外壳副标题（外壳还没挂上时先记在本地）。"""
+        text = f"{self.viewer_name} · {self._caption}" if self._caption else self.viewer_name
+        self._meta_text = text
+        if self.popup is not None:
+            self.popup.set_meta(text)
+
+    # ------------------------------------------------------------------ 内容
     def _build_content(self) -> None:
         if self.build is None:
             self._show_hint("该查看器没有提供界面，请改用系统程序打开。")
@@ -74,17 +96,31 @@ class ViewerWindow(QWidget):
             return
         self.content_widget = widget
         self.content_layout.addWidget(widget, 1)
-        caption = str(getattr(widget, "caption", "") or "")
-        if caption:
-            self.meta_label.setText(f"{self.viewer_name} · {caption}" if self.viewer_name else caption)
+        self._caption = str(getattr(widget, "caption", "") or "")
+        self._watch_caption(widget)
+        self._sync_meta()
+
+    def _watch_caption(self, widget) -> None:
+        """内容页若提供 `captionChanged` 信号，就在它改说明文字时同步外壳副标题。"""
+        signal = getattr(widget, "captionChanged", None)
+        connect = getattr(signal, "connect", None)
+        if callable(connect):
+            connect(self._on_caption_changed)
+
+    def _on_caption_changed(self, text) -> None:
+        self._caption = str(text or "")
+        self._sync_meta()
 
     def _show_hint(self, text: str) -> None:
         """查看器缺界面或构建失败时，退化成一行提示（不留空白区）。"""
         self.content_layout.addWidget(status_label(self.content, text))
 
+    # ------------------------------------------------------------------ 动作
     def _on_open_external(self) -> None:
         if not ui.open_default(self.path):
-            self.meta_label.setText("系统无法打开该文件，可在「查看器」页设为自定义程序")
+            self._meta_text = "系统无法打开该文件，可在「查看器」页设为自定义程序"
+            if self.popup is not None:
+                self.popup.set_meta(self._meta_text)
 
     def _on_reveal(self) -> None:
         ui.reveal(self.path)

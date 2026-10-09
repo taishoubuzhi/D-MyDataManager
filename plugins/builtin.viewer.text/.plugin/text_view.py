@@ -27,10 +27,20 @@ AUTO_ENCODING = "自动检测"
 
 
 class TextViewer(QWidget):
-    def __init__(self, path: Path, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        parent: QWidget | None = None,
+        *,
+        encoding: str = "",
+        wrap: bool = True,
+        on_option=None,
+    ) -> None:
         super().__init__(parent)
         self._path = Path(path)
-        self._encoding = ""
+        self._encoding = "" if not encoding or encoding == AUTO_ENCODING else str(encoding)
+        self._wrap_on = bool(wrap)
+        self._on_option = on_option
         self.caption = self._path.name
         self._build_ui()
         self._load()
@@ -44,7 +54,7 @@ class TextViewer(QWidget):
         row.addWidget(caption(bar, "编码"))
         self._combo = combo_box(bar, items=(AUTO_ENCODING, *ENCODINGS), width=140, on_change=self._on_encoding)
         row.addWidget(self._combo)
-        self._wrap = check_box(bar, text="自动换行", checked=True, on_change=self._on_wrap)
+        self._wrap = check_box(bar, text="自动换行", checked=self._wrap_on, on_change=self._on_wrap)
         row.addWidget(self._wrap)
         row.addWidget(icon_button(bar, FluentIcon.COPY, "复制全文", self._on_copy))
         row.addStretch(1)
@@ -54,6 +64,7 @@ class TextViewer(QWidget):
 
         self._edit = text_area(self, read_only=True, monospace=True)
         root.addWidget(self._edit, 1)
+        self._on_wrap(self._wrap_on)
 
     # ------------------------------------------------------------------ 行为
     def _load(self) -> None:
@@ -81,9 +92,57 @@ class TextViewer(QWidget):
         self._load()
 
     def _on_wrap(self, checked: bool = True) -> None:
+        self._wrap_on = bool(checked)
         mode = QPlainTextEdit.LineWrapMode.WidgetWidth if checked else QPlainTextEdit.LineWrapMode.NoWrap
         self._edit.setLineWrapMode(mode)
 
     def _on_copy(self) -> None:
         QApplication.clipboard().setText(self._edit.toPlainText())
         self.status_label.setText("已复制到剪贴板")
+
+    # ------------------------------------------------------------------ 设置面板
+    def settings_items(self) -> list[dict]:
+        """标题栏「设置」入口里的项：默认编码与自动换行，改完立即生效。"""
+        choices = {AUTO_ENCODING: f"{AUTO_ENCODING}（推荐）"}
+        choices.update({name: name for name in ENCODINGS})
+        return [
+            {
+                "key": "encoding",
+                "label": "默认编码",
+                "kind": "choice",
+                "value": self._combo.currentText(),
+                "choices": choices,
+                "description": "读文件时优先用它；选「自动检测」按内容猜。",
+                "on_change": self._pick_encoding,
+            },
+            {
+                "key": "wrap",
+                "label": "自动换行",
+                "kind": "bool",
+                "value": bool(self._wrap_on),
+                "description": "长行按窗口宽度折到下一行显示。",
+                "on_change": self._pick_wrap,
+            },
+        ]
+
+    def save_option(self, key: str, value: object) -> None:
+        """把设置项的变化回写给插件（没有回调时只在本窗口生效）。"""
+        if self._on_option is not None:
+            self._on_option(key, value)
+
+    def _pick_encoding(self, value) -> None:
+        text = str(value)
+        self._encoding = "" if text == AUTO_ENCODING else text
+        self._combo.blockSignals(True)
+        self._combo.setCurrentText(text)
+        self._combo.blockSignals(False)
+        self._load()
+        self.save_option("encoding", text)
+
+    def _pick_wrap(self, value) -> None:
+        checked = bool(value)
+        self._wrap.blockSignals(True)
+        self._wrap.setChecked(checked)
+        self._wrap.blockSignals(False)
+        self._on_wrap(checked)
+        self.save_option("wrap", checked)

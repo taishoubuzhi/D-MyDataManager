@@ -30,4 +30,5 @@ class ImageViewerPlugin(ViewerPlugin):
             fit_on_open=bool(self.option("fit_on_open", self.DEFAULT_FIT_ON_OPEN)),
             zoom_step=zoom_step,
             smooth=bool(self.option("smooth_scaling", self.DEFAULT_SMOOTH)),
+            on_option=self.set_option,
         )
