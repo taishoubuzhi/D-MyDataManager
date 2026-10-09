@@ -3,6 +3,7 @@
 > `scripts/` 放**程序运行与运维需要的脚本**：维护者能在仓库里直接跑，也随发布载荷分发（自检、插件桩、
 > 示例数据、性能基准）。开发期单元测试在 `tests/`，规范见 [`TESTS.md`](TESTS.md)。
 > 本文件声明每个脚本的作用、临时目录约定，以及新增脚本必须遵守的规范。
+> 功能定位请查 [`index/INDEX.md`](index/INDEX.md)；测试与自检的取舍规范见 [`index/testing/unit.md`](index/testing/unit.md) 与 [`index/testing/selfcheck.md`](index/testing/selfcheck.md)。
 
 ## 1. 文件清单
 
@@ -23,8 +24,8 @@
 | 分层 | 项数 | 覆盖 | 检查模块 |
 | --- | --- | --- | --- |
 | `data` | 6 | 库结构与内容仓库（业务表、FTS5、触发器、blob 布局、配置落盘） | `checks_data.py`、`checks_model.py`、`checks_autolabel.py` |
-| `services` | 68 | 服务层行为（导入 / 导出 / 存档 / 用户 / 插件载入 / 统计） | `checks_services.py`、`checks_plugins.py`、`checks_plugin_layout.py`、`checks_editor_ui.py`、`checks_model.py`、`checks_logging.py` |
-| `pages` | 71 | 页面结构（offscreen 建页面，断言结构、权限装配与界面回归） | `checks_pages.py`、`checks_manage_ui.py`、`checks_tags_ui.py`、`checks_archive_ui.py`、`checks_contributions.py`、`checks_navigation.py`、`checks_model.py`、`checks_autolabel.py` |
+| `services` | 76 | 服务层行为（导入 / 导出 / 存档 / 用户 / 插件载入 / 统计） | `checks_services.py`、`checks_plugins.py`、`checks_plugin_layout.py`、`checks_editor_ui.py`、`checks_model.py`、`checks_logging.py` |
+| `pages` | 87 | 页面结构（offscreen 建页面，断言结构、权限装配与界面回归） | `checks_pages.py`、`checks_manage_ui.py`、`checks_tags_ui.py`、`checks_archive_ui.py`、`checks_contributions.py`、`checks_navigation.py`、`checks_model.py`、`checks_autolabel.py` |
 | `flows` | 4 | 端到端流程（导入 → 筛选 → 移动 → 存档 → 还原） | `checks_flows.py`、`checks_tags_ui.py` |
 
 ```powershell
@@ -38,9 +39,10 @@
 
 - **新增检查**：在对应层的 `checks_*.py` 里写一个函数并加 `@check("名字", "分层")` 装饰器，函数体只调用公开契约；
   名字必须唯一，检查之间互不影响（每项自带隔离环境，由 `Case` 提供）。
+  完整规范（含界面检查的窗口回收、`MODULES` 登记、项数同步）见 [`index/testing/selfcheck.md`](index/testing/selfcheck.md)。
 - 模块与分层在 `selfcheck/harness.py` 的 `MODULES` 里登记；同名的 `checks_model.py` / `checks_autolabel.py` /
   `checks_tags_ui.py` 被多层复用，只是注册的检查分层不同。
-- 门禁侧（`tests/verify.py`）不直接跑四层合一：`pages` 的 71 项 Qt offscreen 检查在同一长驻进程里偶发原生崩溃
+- 门禁侧（`tests/verify.py`）不直接跑四层合一：`pages` 的 72 项 Qt offscreen 检查在同一长驻进程里偶发原生崩溃
   （退出码 `3221225477` = `0xC0000005`），所以按 12 项一组拆进独立进程；分块后仍偶发时自动重跑一次
   （崩溃点会漂移、同一块重跑必过，属环境问题而非检查失败）。
 

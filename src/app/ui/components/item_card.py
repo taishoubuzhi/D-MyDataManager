@@ -2,17 +2,58 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CardWidget, CheckBox
 
-from ...db.models import DataItem
+from ...core.config import library_root
+from ...db.models import DataItem, DataType
 from ..framework import accent_color, accent_name, elide, format_datetime, format_size, type_icon, type_name
 from .cover_loader import cover_loader
 
 COVER_SIZE = 48
 CHECK_TIP = "勾选以多选（Ctrl / Shift + 左键也可以多选）"
+
+
+def _image_cover_path(item: DataItem) -> str:
+    """图片用作封面的那个文件：**优先库内那一份**，库内没有了才退回导入来源。
+
+    注意不能直接用 `item_api._absolute_path()`：那个函数优先返回导入时的外部 `source_path`，
+    原文件被移走 / 删除后封面就取不到了（用户 m01544 第 2 条：重置封面后部分图片退回默认图标）。
+    图片的封面就是它自己，库内文件在就一定能显示；两处都没有才返回空串、由界面显示类型图标。
+    """
+    raw = str(item.file_path or "")
+    if raw:
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            try:
+                candidate = Path(library_root()) / candidate
+            except Exception:  # noqa: BLE001 - 库根读不出来时按原路径试
+                candidate = Path(raw)
+        if candidate.is_file():
+            return str(candidate)
+    source = str(item.source_path or "")
+    if source:
+        candidate = Path(source)
+        if candidate.is_absolute() and candidate.is_file():
+            return source
+    return ""
+
+
+def cover_source(item: DataItem) -> str:
+    """卡片要加载的封面路径。
+
+    图片按规范不再存封面副本（用户 m00003 第 3 条），直接用**库内的自己**当封面；
+    视频等其它类型仍用 `cover_path`（导入时抽的第一帧），没有就让界面显示类型图标。
+    """
+    if item.cover_path:
+        return str(item.cover_path)
+    if item.type is DataType.IMAGE:
+        return _image_cover_path(item)
+    return ""
 
 
 def _accent_rgba(alpha: float) -> str:
@@ -37,7 +78,7 @@ class CoverLabel(QLabel):
         token = self._request
         self.clear()
         self.setPixmap(type_icon(item.type).icon().pixmap(self._size // 2, self._size // 2))
-        path = item.cover_path
+        path = cover_source(item)
         if not path:
             return
         loader = cover_loader()
@@ -316,4 +357,4 @@ class ItemListRow(QWidget):
         self.menuRequested.emit(self._item, event.globalPos())
 
 
-__all__ = ["CHECK_TIP", "CoverLabel", "ItemCard", "ItemListRow"]
+__all__ = ["CHECK_TIP", "CoverLabel", "ItemCard", "ItemListRow", "cover_source"]

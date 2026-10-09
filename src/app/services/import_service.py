@@ -25,6 +25,7 @@ from ..repositories import (
     ItemRepository,
     TagRepository,
 )
+from . import cover_service
 from . import feature_service
 from .blob_store import sha256_of
 from .library_service import LibraryService
@@ -248,8 +249,8 @@ class ImportService:
             self._add_version(item, "导入")
 
         item.tags = self.tags.ensure_many(list(item.tag_names) + list(tags or []), user_id=item.user_id)
-        if data_type is DataType.IMAGE:
-            item.cover_path = feature_service.make_cover(path, checksum)
+        # 封面：图片直接用自己（封面路径留空，界面回退到原文件）；视频取第一帧；其余类型不生成
+        item.cover_path = cover_service.build_cover(path, checksum, data_type)
         _checksum, store_rel, _size = self.store.put_file(target, name=name, mime=mime)
         self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)
@@ -415,8 +416,8 @@ class ImportService:
             is_hidden=is_hidden,
         )
         item.tags = self.tags.ensure_many(tags or [], user_id=item.user_id)
-        if data_type is DataType.IMAGE:
-            item.cover_path = feature_service.make_cover(path, checksum)
+        # 封面规则与导入一致：图片用自己、视频取第一帧、其余留空
+        item.cover_path = cover_service.build_cover(path, checksum, data_type)
         _checksum, store_rel, _size = self.store.put_file(path, name=path.name, mime=mime)
         self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)

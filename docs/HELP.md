@@ -2,6 +2,9 @@
 
 运行、依赖与自检脚本见 `README.md`。这里只记录与资源、文案相关的操作。
 
+> 找某个功能的具体实现时，**先看功能索引 [`index/INDEX.md`](index/INDEX.md)**（两级结构
+> `index/<功能>/<子功能>.md`，具体到文件、函数与行号）；本文档很长，按需查对应小节即可，不要通读。
+
 ## 资源目录
 
 `src/app/resource/` 下的图片由代码通过文件系统路径读取（见 `src/app/core/runtime/paths.py` 的 `RESOURCE_DIR` / `IMAGE_DIR`）：
@@ -256,10 +259,11 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 勾 = 全选，`_syncing` 守卫防回环，与每行的复选框双向同步）、已选数量、「移动到分类…」、「标签管理」、「关键词管理」、
 「批量重命名…」与「清空选择」，没有选中项时这些批量按钮（`_batch_buttons`）一并禁用。
 
-左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），并把它连同**所有子孙分类**一起交给 `ItemFilter.category_ids`、把勾选的文件行交给 `ItemFilter.item_ids`（两者取并集），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；勾选后中间列表会把这些数据一并**选中**（`_load_items(select_checked=True)` 把过滤结果整批写进 `_selected`，原本没显示出来的数据也因此显示出来）；单击分类行仍是单选并清空勾选集合，`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
+左栏分类树（`src/app/ui/components/category_tree.py`）的每个分类节点都带复选框，**「全部数据」根节点也是三态复选框**（勾上即全选整棵树）：勾选集合由 `checked_categories()` 读出（只收真正勾选的分类，根节点不计入）、`set_nodes(..., checked=...)` 写回，`itemChanged` → `checkedChanged` → `ManagePage._on_category_checked()` 后回到第 1 页重新查数据。`ManagePage._load_items()` 以勾选集合为准（勾选集合非空时忽略单选），并把它连同**所有子孙分类**一起交给 `ItemFilter.category_ids`、把勾选的文件行交给 `ItemFilter.item_ids`（两者取并集），全部取消勾选时回落到最后点过的分类（`_category_id`）或「全部数据」；勾选后中间列表会把这些数据一并**选中**（`_load_items(select_checked=True)` 把过滤结果整批写进 `_selected`，原本没显示出来的数据也因此显示出来）；单击分类行仍是单选并清空勾选集合（例外见下一段的 Ctrl / Shift 多选），`refresh()` 重建树期间由 `_syncing_tree` 守卫，不会误清勾选。
 三态级联与汇总：勾选一个分类会把它下面的所有子分类一起勾上（`_apply_state()` 递归向下），子分类的状态再向上汇总（`_aggregate_state()`：子分类全勾 = 勾、全不勾 = 空、否则半选；`_aggregate_all()` 自底向上逐层汇总），所以「全部数据」根节点天然反映整棵树的状态；`_on_item_changed()` 把半选按勾选处理，`_updating` 守卫防止级联过程里信号回环，`set_checked_categories()` 期间不触发 `checkedChanged`。
 分类栏底部的「仅显示分类」复选框（`ManagePage.only_categories_box`，默认勾选）决定分类栏要不要列文件：勾选时树里只有分类节点；取消勾选后 `set_nodes(..., files=..., only_categories=False)` 按 `category_id` 把数据项挂到各自分类下面（目录在前、文件在后，组内按名称排序），**「未分类」不再单列节点**——它的文件本来就在用户名文件夹下，因此直接挂在「全部数据」下面。文件行只带**两态**复选框（本身没有子节点），与它同级的子分类一起参与父节点的三态汇总（`_aggregate_state()` 只看 `childCount()`，级联与汇总不必区分行类型）：勾选一个文件就是把它加进 `ItemFilter.item_ids`，勾选父分类则整棵子树（含文件行）一起勾上，只勾中一部分时父节点是半选。文件行右键没有菜单，单击它等于「跳到该数据项」（`fileSelected` → `ManagePage.focus_item()`）；文件行的可见性与中间列表一致——只有打开「显示隐藏项」或「回收站」时，隐藏 / 已删除的数据才会出现在分类栏里。这个开关记在配置项 `Layout/Only-Show-Categories`（`.configs/config.json` 的 `Layout` 组），下次打开按上次的样子恢复。
 勾选后可点左栏的「批量移动」/「批量删除」：两个按钮只在勾选了**非根分类**（`_eligible_category_ids()` 排除根分类与固定的「未分类」）时启用；批量移动的目标是树里当前选中的分类（选中「全部数据」= 移到顶层），目标是待移动分类自身或其子孙时拒绝，逐个走 `TaxonomyService.move_category()`；批量删除先确认，子分类上移会与同级分类重名的（`promotion_conflicts()` 非空）跳过并在提示里说明数量，其余走 `delete_category()`（其中的数据变成未分类）；勾上「全部数据」时整棵树都处于勾选状态（此时按钮一并禁用：顶层没有可移动的去处、顶层分类也不能整体删除，提示会改成「已全选「全部数据」…」，处理器同样会拒绝这次操作）；批量移动时若所选分类本来就都在目标分类下，会提示「无需移动」而不再走一次无意义的提交。
+分类栏还支持**快捷多选**与**排序**：单选之外，`Ctrl + 左键`逐个加选、`Shift + 左键`选中区间（`CategoryTree` 用 `ExtendedSelection`，`selected_categories()` 把文件行折算成它所属分类并按出现顺序去重、根节点不参与），选中的分类会同步勾选，`ManagePage._on_category_selected()` 在选中项多于一个时**不退回单选过滤**、直接交给勾选集合走批量操作；分类栏上方是排序控件——下拉框 `category_sort_box`（`SORT_MODES`：默认顺序 / 按名称 / 按数据量 / 按最新导入，缺省「默认顺序」即分类自己的 `sort_order`，写 `Layout/Category-Sort-Mode`）与「正序 / 逆序」切换按钮（写 `Layout/Category-Sort-Reverse`；按钮可勾选，图标随状态在 `FluentIcon.UP`（正序）与 `FluentIcon.DOWN`（逆序）之间切换，由 `ManagePage._update_sort_button()` 统一设置，用户 m01544 第 1 条要求两种顺序一眼可辨），排序键由 `CategoryTree._sort_key()` 计算（名称不区分大小写、数据量用分类的 `total_count`、最新导入用 `CategoryNode.latest_at`＝该分类下最近一条数据的导入时间，由 `CategoryRepository.latest_imports()` 一次查询算出），「未分类」始终排在最后；分类行插入时先记下元数据（`_remember_sort_meta()`，键是分类 id——`QTreeWidgetItem` 在 PyQt6 里不可哈希），重建后由零间隔 `QTimer` 推迟到事件循环空闲时统一重排（`_apply_sort_now()`：把分类行整体摘下再按序插回，文件行因此仍留在分类行之后）；分类名过长时分类栏自动换行显示、不再被截断：`CategoryTree` 同时开了 `setWordWrap(True)` + `ElideNone` + `setUniformRowHeights(False)`，但有些 Qt 平台 / 样式下 `QTreeView` 不理会 `setWordWrap`，所以文本本身由纯函数 `_wrap_label()`（按显示宽度折行，全角算 2、半角算 1，阈值 `LABEL_WRAP_UNITS = 22`）插好换行符；`category_label()` 的折行只影响显示，`file_label()` 返回的仍是未折行的原名，分类栏里文件的排序因此不受影响。勾选后除「批量移动」/「批量删除」外还有「批量重命名」（`_renameable_category_ids()` 只排除固定的「未分类」，根分类可以改名）：与文件批量重命名同一套 `BatchRenameDialog` 流程（替换 / 覆盖 / 插入 / 删除），同级的其它分类名作为 `reserved` 预留给重名检查，改名失败（同级重名）的逐个跳过并在提示里说明数量。
 中间标题行右侧的「分类栏」/「筛选栏」两个可切换按钮（`tree_toggle_button` / `filter_toggle_button`）分别显示 / 隐藏左右两栏，
 显隐状态分别记进 `Layout/Show-Category-Panel` / `Layout/Show-Filter-Panel`，重启后按上次的样子复原。
 左侧分类栏默认**全部收起**（配置项 `Layout/Expand-Categories` 打开后启动即展开），用户手动展开 / 收起某个分类后刷新列表仍按用户的
@@ -501,6 +505,18 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 驱动 `ImportJob.run()`，把清单事件转成 Qt 信号（`progressed` / `evented` / `jobReady` / `stateChanged` / `finished_job`），
 主线程只做界面更新；暂停 / 取消通过线程安全的 `ImportControl` 传进去。结束后 emit `itemsChanged` / `librariesChanged` / `categoriesChanged`；
 `ImportPage.refresh()` 与其它页面一致，用来在进入页面时重建用户 / 分类 / 标签候选项，并再扫一次残留清单。
+
+## 封面
+
+封面规则集中在一个服务里：`src/app/services/cover_service.py`，导入、扫描登记（`LibraryService` 的「扫描并登记」）与设置页「重置封面」三处共用，界面侧只认 `DataItem.cover_path` 与 `item_card.cover_source(item)`：
+
+- **图片**：不再生成缩略图副本，`cover_path` 留空，卡片直接拿**库内那份原文件**当封面——`cover_source()` 在 `cover_path` 为空且类型是图片时调 `_image_cover_path()`，**先把 `file_path`（库内相对路径）拼到 `library_root()` 上**，库内文件不在了才退回导入来源 `source_path`，两处都没有才返回空串（显示类型图标）。**不能**改用 `item_api._absolute_path()`：那个函数优先返回导入时的外部 `source_path`，原文件被移走 / 删除后封面就取不到了（用户 m01544：重置封面后部分图片退回默认图标）。视频抽帧用的 `cover_service._source_of()` 同理，也是库内优先。这样封面目录里不会为一堆图片各存一份重复内容。
+- **视频**：导入时用 ffmpeg 抽**第一帧**，`ffmpeg -y -loglevel error -i <源文件> -frames:v 1 -vf scale=<Cover-Size>:<Cover-Size>:force_original_aspect_ratio=decrease <全局>/covers/<checksum>.png`，成功才写进 `cover_path`。
+- **其它类型**：没有封面概念，`cover_path` 一律清空，界面显示类型图标。
+
+ffmpeg 的定位顺序（`ffmpeg_executable()`）：PATH 上的 `ffmpeg` → 当前解释器装的 `imageio-ffmpeg` 自带的 ffmpeg →「模型」页装的运行环境（`<模型根>/runtime/<profile>/venv`，模型根默认是程序目录下的 `.models`，路径层由 `plugins/lib.model/.plugin/paths.py` 决定）。**取不到 ffmpeg 或抽帧失败都不算错误**：`grab_video_frame()` 返回空串、日志记一条 debug，卡片退回类型图标，导入流程照常完成。
+
+设置页「维护 → 重置封面」（`SettingsPage._reset_covers()`）走 `cover_service.reset_covers(session)`：先删掉 `全局/covers/` 下现有的封面文件、再把所有非删除项的旧 `cover_path` 清空，然后按上面的规范重新生成一遍（图片留空、视频重新抽帧、其它类型清空），返回 `{"items", "covers", "cleared", "failed"}` 并在提示里报出生成、清理与失败数量。数据文件本身不受影响。
 
 ## 表格与列表通用件
 

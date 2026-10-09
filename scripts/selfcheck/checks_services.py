@@ -59,7 +59,8 @@ def import_file_cover(case: Case) -> None:
     item = result.added[0]
     assert item.type_name, "缺少类型名"
     assert item.size > 0, "文件项大小应为正"
-    assert item.cover_path, "图片项没有生成封面"
+    # 新封面规范：图片直接用自己当封面，不再往 cover_path 里存副本
+    assert not item.cover_path, f"图片项不该再持有封面副本：{item.cover_path}"
     path = LibraryService(session).abs_path(item)
     assert path is not None and Path(path).exists(), f"库内文件不存在：{path}"
 

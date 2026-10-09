@@ -1,4 +1,4 @@
-"""数据特征：MIME、图片尺寸与封面、感知哈希、文本统计。"""
+"""数据特征：MIME、图片尺寸、感知哈希、文本统计。"""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from ..core.runtime import paths
-from ..core.config import config, cover_dir
 from ..db.models import DataItem, DataType, Feature
 
 try:  # 内容嗅探（能认出改了扩展名的文件）；缺依赖时只看扩展名
@@ -67,29 +65,6 @@ def image_size(source: str | Path) -> tuple[int, int] | None:
     except Exception as exc:
         logger.debug("读取图片尺寸失败：{}", exc)
         return None
-
-
-def make_cover(source: str | Path, checksum: str, size: int | None = None) -> str:
-    """为图片生成方形缩略图，返回封面文件路径（失败返回空串）。"""
-    if not checksum:
-        return ""
-    try:
-        from PIL import Image
-
-        covers = cover_dir()
-        paths.make_dir(covers)
-        target = covers / f"{checksum}.png"
-        if target.exists():
-            return str(target)
-        limit = size or config.coverSize.value
-        with Image.open(source) as image:
-            image = image.convert("RGB")
-            image.thumbnail((limit, limit))
-            image.save(target, "PNG")
-        return str(target)
-    except Exception as exc:
-        logger.debug("生成封面失败：{}", exc)
-        return ""
 
 
 def perceptual_hash(source: str | Path, hash_size: int = 8) -> str:

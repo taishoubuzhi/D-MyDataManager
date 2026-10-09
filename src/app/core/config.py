@@ -78,6 +78,16 @@ class Config(QConfig):
     # 分类栏只显示分类；关掉后每个分类下面列出该分类文件夹里的文件
     onlyShowCategories = ConfigItem("Layout", "Only-Show-Categories", True, BoolValidator())
     expandedFilters = ConfigItem("Layout", "Expanded-Filters", [])
+    # 分类栏排序方式：default=默认顺序（分类自己的 sort_order）、name=按名称、
+    # count=按数据量、latest=按最新导入数据时间
+    categorySortMode = OptionsConfigItem(
+        "Layout",
+        "Category-Sort-Mode",
+        "default",
+        OptionsValidator(["default", "name", "count", "latest"]),
+    )
+    # 分类栏正序 / 逆序（False = 正序）
+    categorySortReverse = ConfigItem("Layout", "Category-Sort-Reverse", False, BoolValidator())
     simpleDisplay = OptionsConfigItem(
         "Layout", "Simple-Display", SIMPLE_DEFAULT, OptionsValidator(list(SIMPLE_MODES))
     )

@@ -1400,3 +1400,115 @@ def manage_refresh_sees_plugin_writes(case: Case) -> None:
         plugin_service.bootstrap(APP_UI_EXTENSION, previous_ui if previous_ui is not None else api)
         if window is not None:
             dispose_window(window)
+
+
+@check("category_sort", "pages")
+def category_sort(case: Case) -> None:
+    """分类栏排序：默认顺序保持不动，按名称 / 数据量 / 最新导入各自可正序逆序，「未分类」始终最后。"""
+    import datetime as dt
+    import types
+    from unittest import mock
+
+    from PyQt6 import sip
+
+    from app.ui.components.category_tree import CategoryTree
+
+    app = ensure_app()
+    problems: list[str] = []
+    moment_old = dt.datetime(2026, 1, 1, 8, 0, 0)
+    moment_new = dt.datetime(2026, 9, 9, 18, 0, 0)
+
+    def node(category_id: int, name: str, total: int, latest):
+        category = types.SimpleNamespace(id=category_id, name=name, parent_id=None)
+        return types.SimpleNamespace(
+            category=category, depth=0, item_count=total, total_count=total, latest_at=latest
+        )
+
+    # 用假节点直接驱动排序：真分类会走磁盘，这里只验排序算法本身
+    with mock.patch("app.ui.components.category_tree.is_uncategorized", return_value=False):
+        tree = CategoryTree()
+        tree.set_nodes(
+            [
+                node(1, "Beta", 5, moment_new),
+                node(2, "alpha", 20, moment_old),
+                node(3, "Gamma", 1, None),
+            ],
+            total=26,
+        )
+        tree.apply_sort()
+        root = tree.topLevelItem(0)
+        labels = lambda: [root.child(i).text(0) for i in range(root.childCount())]
+
+        if tree.sort_mode() != "default":
+            problems.append(f"默认排序模式应为 default，实际 {tree.sort_mode()}")
+        if labels() != ["Beta (5)", "alpha (20)", "Gamma (1)"]:
+            problems.append(f"默认顺序不该改动分类次序，实际 {labels()}")
+
+        tree.set_sort("name", False)
+        tree.apply_sort()
+        if labels() != ["alpha (20)", "Beta (5)", "Gamma (1)"]:
+            problems.append(f"按名称正序不对：{labels()}")
+
+        tree.set_sort("name", True)
+        tree.apply_sort()
+        if labels() != ["Gamma (1)", "Beta (5)", "alpha (20)"]:
+            problems.append(f"按名称逆序不对：{labels()}")
+
+        tree.set_sort("count", False)
+        tree.apply_sort()
+        if labels() != ["Gamma (1)", "Beta (5)", "alpha (20)"]:
+            problems.append(f"按数据量正序不对：{labels()}")
+
+        tree.set_sort("count", True)
+        tree.apply_sort()
+        if labels() != ["alpha (20)", "Beta (5)", "Gamma (1)"]:
+            problems.append(f"按数据量逆序不对：{labels()}")
+
+        tree.set_sort("latest", False)
+        tree.apply_sort()
+        # 没有数据的分类算「最旧」，排在最前
+        if labels() != ["Gamma (1)", "alpha (20)", "Beta (5)"]:
+            problems.append(f"按最新导入正序不对：{labels()}")
+
+        tree.set_sort("latest", True)
+        tree.apply_sort()
+        if labels() != ["Beta (5)", "alpha (20)", "Gamma (1)"]:
+            problems.append(f"按最新导入逆序不对：{labels()}")
+
+        if not tree.wordWrap() or tree.textElideMode() != Qt.TextElideMode.ElideNone:
+            problems.append("分类名太长时应在分类栏里换行显示，而不是被省略号截断")
+
+        # 折行是自己在文本里做的：有些 Qt 平台不理会 QTreeView 的 setWordWrap
+        from app.ui.components.category_tree import _wrap_label
+
+        wrapped = _wrap_label("非常长的分类名称" * 4)
+        if "\n" not in wrapped:
+            problems.append(f"过长的分类名应折成多行，实际 {wrapped!r}")
+        if wrapped.replace("\n", "") != "非常长的分类名称" * 4:
+            problems.append(f"折行不该丢字：{wrapped!r}")
+        if _wrap_label("短名") != "短名":
+            problems.append("短名不该被折行")
+
+        # 固定分类（「未分类」）无论怎么排都压在最后
+        with mock.patch(
+            "app.ui.components.category_tree.is_uncategorized",
+            side_effect=lambda category: category is not None and category.name == "未分类",
+        ):
+            fixed_tree = CategoryTree()
+            fixed_tree.set_nodes(
+                [node(1, "Beta", 5, None), node(9, "未分类", 0, None), node(2, "alpha", 20, None)],
+                total=25,
+            )
+            fixed_tree.set_sort("name", True)
+            fixed_tree.apply_sort()
+            fixed_root = fixed_tree.topLevelItem(0)
+            order = [fixed_root.child(i).text(0) for i in range(fixed_root.childCount())]
+            if not order or "未分类" not in order[-1]:
+                problems.append(f"「未分类」应始终排在最后，实际 {order}")
+
+        # 检查过程中不用建窗口，直接回收这两个临时控件
+        sip.delete(fixed_tree)
+        sip.delete(tree)
+        app.processEvents()
+
+    assert not problems, "分类栏排序：" + "；".join(problems[:8])

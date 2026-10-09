@@ -29,6 +29,7 @@ from qfluentwidgets import (
     RoundMenu,
     SegmentedWidget,
     StrongBodyLabel,
+    TransparentToolButton,
 )
 
 from ...core.runtime.signals import signalBus
@@ -87,6 +88,7 @@ from ..dialogs import (
 )
 from ...core.config import DOUBLE_CLICK_EDITOR, config, export_dir
 from ..components.export_dialog import ExportDialog
+from ..components.category_tree import SORT_MODES as CATEGORY_SORT_MODES
 from ..components.category_tree import CategoryTree
 from ..components.filter_panel import FilterPanel
 from ..components.item_card import ItemCard, ItemListRow
@@ -276,7 +278,27 @@ class ManagePage(Page):
         self.tree.fileSelected.connect(self.focus_item)
         self.tree.checkedChanged.connect(self._on_category_checked)
         self.tree.actionRequested.connect(self._on_tree_action)
+        self.tree.sortChanged.connect(self._on_category_sort_changed)
         layout.addWidget(self.tree, 1)
+
+        sort_row = QHBoxLayout()
+        sort_row.setSpacing(6)
+        self.category_sort_box = ComboBox(card)
+        for mode, label in CATEGORY_SORT_MODES:
+            self.category_sort_box.addItem(label, userData=mode)
+        self.category_sort_box.setToolTip("分类排序方式：按名称、按数据量、按最新导入数据时间")
+        self.category_sort_box.currentIndexChanged.connect(self._on_category_sort_mode_changed)
+        self.category_sort_reverse_button = TransparentToolButton(
+            FluentIcon.UP, card
+        )
+        self.category_sort_reverse_button.setCheckable(True)
+        self.category_sort_reverse_button.setToolTip("正序 / 逆序切换")
+        self.category_sort_reverse_button.toggled.connect(self._on_category_sort_reverse_toggled)
+        sort_row.addWidget(self.category_sort_box, 1)
+        sort_row.addWidget(self.category_sort_reverse_button)
+        layout.addLayout(sort_row)
+        self._load_category_sort_config()
+
         self.only_categories_box = CheckBox("仅显示分类", card)
         self.only_categories_box.setToolTip(
             "勾选时分类栏只显示分类；取消勾选后每个分类下面列出该分类文件夹里的文件，"
@@ -288,6 +310,10 @@ class ManagePage(Page):
         self.category_hint = CaptionLabel("勾选分类可批量移动或删除", card)
         self.category_hint.setVisible(False)
         layout.addWidget(self.category_hint)
+        self.category_rename_button = IconTextButton(FluentIcon.EDIT, "批量重命名", card)
+        self.category_rename_button.setToolTip("给勾选的分类按规则批量重命名；「未分类」不能重命名")
+        self.category_rename_button.setEnabled(False)
+        self.category_rename_button.clicked.connect(self._on_category_batch_rename)
         self.category_move_button = IconTextButton(FluentIcon.MOVE, "批量移动", card)
         self.category_move_button.setToolTip(
             "把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）；根分类不能移动"
@@ -300,6 +326,7 @@ class ManagePage(Page):
         self.category_delete_button.clicked.connect(self._on_category_batch_delete)
         batch_row = QHBoxLayout()
         batch_row.setSpacing(6)
+        batch_row.addWidget(self.category_rename_button)
         batch_row.addWidget(self.category_move_button)
         batch_row.addWidget(self.category_delete_button)
         batch_row.addStretch(1)
@@ -1534,11 +1561,24 @@ class ManagePage(Page):
             eligible.append(category_id)
         return eligible
 
+    def _renameable_category_ids(self) -> list[int]:
+        """可批量重命名的勾选分类：只有固定的「未分类」受保护（根分类可以改名）。"""
+        eligible: list[int] = []
+        for category_id in sorted(self._checked_categories):
+            category = self.category_repo.get(category_id)
+            if category is None or is_uncategorized(category):
+                continue
+            eligible.append(category_id)
+        return eligible
+
     def _sync_category_buttons(self) -> None:
         all_checked = self.tree.is_all_checked()
         eligible = bool(self._eligible_category_ids()) and not all_checked
         self.category_move_button.setEnabled(eligible)
         self.category_delete_button.setEnabled(eligible)
+        self.category_rename_button.setEnabled(
+            bool(self._renameable_category_ids()) and not all_checked
+        )
         self.category_hint.setText(
             "已全选「全部数据」：顶层分类不能整体移动或删除，请只勾选要处理的子分类"
             if all_checked
@@ -1643,6 +1683,109 @@ class ManagePage(Page):
         self._checked_items.clear()
         self.refresh()
 
+    def _on_category_batch_rename(self) -> None:
+        """批量重命名勾选的分类：与文件重命名同一套「改名前先看清单」的流程。"""
+        if self.tree.is_all_checked():
+            self.toast_warning("无法重命名", "已全选「全部数据」：请只勾选要重命名的分类")
+            return
+        ids = self._renameable_category_ids()
+        if not ids:
+            self.toast_warning("无法重命名", "「未分类」不能重命名，请先勾选要改名的分类")
+            return
+        selected = set(ids)
+        entries: list[tuple[int, str]] = []
+        reserved: set[str] = set()
+        for category in self.category_repo.roots():
+            if category.id not in selected:
+                reserved.add(category.name)
+        for category_id in ids:
+            category = self.category_repo.get(category_id)
+            if category is None:
+                continue
+            entries.append((category.id, category.name))
+            for sibling in self.category_repo.children_of(category.parent_id):
+                if sibling.id not in selected:
+                    reserved.add(sibling.name)
+        if not entries:
+            return
+        dialog = BatchRenameDialog(entries, parent=self.window(), reserved=reserved)
+        if not dialog.exec():
+            return
+        renames = dialog.renames()
+        changed = 0
+        failed = 0
+        for category_id, new_name in renames:
+            category = self.category_repo.get(category_id)
+            if category is None or new_name == category.name:
+                continue
+            if self.taxonomy.rename_category(category, new_name):
+                changed += 1
+            else:
+                failed += 1
+        if not changed and not failed:
+            self.toast_info("没有改动", "没有需要改名的分类")
+            return
+        self.session.commit()
+        signalBus.categoriesChanged.emit()
+        signalBus.itemsChanged.emit()
+        message = f"已重命名 {changed} 个分类"
+        if failed:
+            message += f"；{failed} 个与同级分类重名，已跳过"
+            self.toast_warning("已重命名分类", message)
+        else:
+            self.toast_success("已重命名分类", message)
+
+    # ------------------------------------------------------------- 分类排序
+    def _load_category_sort_config(self) -> None:
+        """读取持久化的排序方式并套用到分类树与控件（不回写配置、不发信号）。"""
+        mode = str(config.categorySortMode.value or "default")
+        reverse = bool(config.categorySortReverse.value)
+        if mode not in {key for key, _ in CATEGORY_SORT_MODES}:
+            mode = "default"
+        self.tree.set_sort(mode, reverse)
+        self.category_sort_box.blockSignals(True)
+        index = self.category_sort_box.findData(mode)
+        self.category_sort_box.setCurrentIndex(index if index >= 0 else 0)
+        self.category_sort_box.blockSignals(False)
+        self.category_sort_reverse_button.blockSignals(True)
+        self.category_sort_reverse_button.setChecked(reverse)
+        self.category_sort_reverse_button.blockSignals(False)
+        self._update_sort_button(reverse)
+
+    def _save_category_sort_config(self, mode: str, reverse: bool) -> None:
+        """写回配置；`config.set` 自己会保存到配置文件。"""
+        config.set(config.categorySortMode, mode)
+        config.set(config.categorySortReverse, bool(reverse))
+
+    def _update_sort_button(self, reverse: bool) -> None:
+        """同步「正序 / 逆序」按钮的图标与提示：两种顺序要一眼能看出区别。"""
+        self.category_sort_reverse_button.setIcon(
+            FluentIcon.DOWN if reverse else FluentIcon.UP
+        )
+        self.category_sort_reverse_button.setToolTip(
+            "当前：逆序（点击切回正序）" if reverse else "当前：正序（点击切为逆序）"
+        )
+
+    def _on_category_sort_changed(self, mode: str, reverse: bool) -> None:
+        """分类树自己改了排序（例如右键菜单）：同步控件并持久化。"""
+        self._save_category_sort_config(mode, reverse)
+        self.category_sort_box.blockSignals(True)
+        index = self.category_sort_box.findData(mode)
+        self.category_sort_box.setCurrentIndex(index if index >= 0 else 0)
+        self.category_sort_box.blockSignals(False)
+        self.category_sort_reverse_button.blockSignals(True)
+        self.category_sort_reverse_button.setChecked(bool(reverse))
+        self.category_sort_reverse_button.blockSignals(False)
+        self._update_sort_button(bool(reverse))
+
+    def _on_category_sort_mode_changed(self, index: int) -> None:
+        mode = self.category_sort_box.itemData(index) or "default"
+        self.tree.set_sort(str(mode), self.category_sort_reverse_button.isChecked(), notify=True)
+
+    def _on_category_sort_reverse_toggled(self, checked: bool) -> None:
+        self._update_sort_button(bool(checked))
+        self.tree.set_sort(self.tree.sort_mode(), bool(checked), notify=True)
+
     def _on_category_sync(self) -> None:
         """按库文件夹里的真实目录刷新分类树（分类即目录，见 category_sync.py）。"""
         stats = reconcile_categories(self.session)
@@ -1659,6 +1802,10 @@ class ManagePage(Page):
         if self._syncing_tree:
             return
         self._category_id = category_id
+        # Ctrl / Shift 多选：选中即勾选，交给勾选集合走批量操作，不要退回单选过滤
+        if len(self.tree.selected_categories()) > 1:
+            self._on_category_checked()
+            return
         self._checked_categories.clear()
         self._checked_items.clear()
         self.tree.set_checked_categories(set())

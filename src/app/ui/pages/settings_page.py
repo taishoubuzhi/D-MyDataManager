@@ -43,6 +43,7 @@ from ...services import (
     inspect_package,
     timestamp_name,
 )
+from ...services import cover_service
 from ...services.maintenance import compact_database, reset_to_defaults
 from ...services.plugin_service import plugin_service
 from ...services.privacy_service import privacy
@@ -463,6 +464,16 @@ class SettingsPage(ScrollPage):
         self._compact_card.clicked.connect(self._compact_database)
         group.addSettingCard(self._compact_card)
 
+        self._cover_card = ActionCard(
+            "重置封面",
+            FluentIcon.PHOTO,
+            "重置封面数据",
+            "清空现有封面文件，再按当前规范重新生成一遍：图片直接用自己、视频取第一帧",
+            group,
+        )
+        self._cover_card.clicked.connect(self._reset_covers)
+        group.addSettingCard(self._cover_card)
+
         self._reset_card = ActionCard(
             "恢复初始化",
             FluentIcon.DELETE,
@@ -476,7 +487,7 @@ class SettingsPage(ScrollPage):
         self._maintenance_permission_card = SettingCard(
             FluentIcon.INFO,
             "仅默认用户可用",
-            "恢复初始化会清空所有用户的数据与设置",
+            "整理数据库、重置封面与恢复初始化都属于全库操作",
             group,
         )
         group.addSettingCard(self._maintenance_permission_card)
@@ -561,6 +572,37 @@ class SettingsPage(ScrollPage):
         self._reload_session()
         tip.finish("整理完成")
         self.toast_success("整理数据库完成", f"释放 {human_size(result.get('freed', 0))}")
+
+    def _reset_covers(self) -> None:
+        """重置封面：清空 `全局/covers/` 与所有 `cover_path`，再按规范重新生成。"""
+        if not self._require_admin("重置封面"):
+            return
+        if not confirm(
+            self,
+            "重置封面",
+            "将清空现有封面文件并按规范重新生成：图片直接用自己、视频重新抽取第一帧、"
+            "其它类型不再持有封面。\n数据文件本身不受影响，确定继续？",
+        ):
+            return
+        tip = self.busy("正在重置封面", "清空旧封面并按规范重新生成…")
+        try:
+            result = cover_service.reset_covers(self.session)
+            self.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            self.session.rollback()
+            tip.finish("重置失败")
+            self.toast_warning("重置封面失败", str(exc))
+            return
+        signalBus.itemsChanged.emit()
+        tip.finish("重置完成")
+        message = f"生成 {result['covers']} 个视频封面、清理旧封面 {result['cleared']} 个"
+        if result["failed"]:
+            self.toast_warning(
+                "重置封面完成",
+                f"{message}；{result['failed']} 个视频没能抽到第一帧（缺 ffmpeg 或编码不支持）",
+            )
+        else:
+            self.toast_success("重置封面完成", message)
 
     def _reset_to_defaults(self) -> None:
         if not self._require_admin("恢复初始化"):

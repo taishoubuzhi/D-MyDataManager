@@ -63,12 +63,14 @@ REQUIRED = (
     "scripts/tmpenv.py",
     "tests/harness.py",
     "README.md",
+    "AGENT.md",
     "docs/PLUGIN.md",
     "docs/HELP.md",
     "docs/SDK.md",
     "docs/PLUGIN_PROTOCOL.md",
     "docs/SCRIPTS.md",
     "docs/TESTS.md",
+    "docs/index/INDEX.md",
     "icons/icon.png",
 )
 

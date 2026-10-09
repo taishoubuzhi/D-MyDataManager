@@ -496,6 +496,7 @@ def layout_preferences(case: Case) -> None:
     app = ensure_app()
     _fixture, window = build_window(case, show=True)
     problems: list[str] = []
+    saved_reverse = bool(config.categorySortReverse.value)
     try:
         page = window.manage_page
         window.switchTo(page)
@@ -540,12 +541,27 @@ def layout_preferences(case: Case) -> None:
             problems.append("分类栏默认展开，应该默认全部收起")
         if page.tree.topLevelItemCount() and page.tree.topLevelItem(0).isExpanded():
             problems.append("数据管理页的分类栏默认展开，应该默认全部收起")
+
+        # 正序 / 逆序按钮的图标必须不一样，否则用户看不出当前是哪种顺序（用户 m01544 第 1 条）
+        saved_reverse = bool(config.categorySortReverse.value)
+        reverse_button = page.category_sort_reverse_button
+        icons: dict[bool, int] = {}
+        for state in (False, True):
+            reverse_button.setChecked(state)
+            app.processEvents()
+            icons[state] = reverse_button.icon().cacheKey()
+        if icons[False] == icons[True]:
+            problems.append("正序 / 逆序按钮的图标一样，切换时看不出区别")
+        reverse_button.setChecked(saved_reverse)
+        app.processEvents()
+
         assert not problems, "布局偏好未通过：" + "；".join(problems)
     finally:
         config.set(config.pageSize, DEFAULT_PAGE_SIZE)
         config.set(config.showCategoryPanel, True)
         config.set(config.showFilterPanel, True)
         config.set(config.expandedFilters, [])
+        config.set(config.categorySortReverse, saved_reverse)
         dispose_window(window)
 
 

@@ -41,6 +41,7 @@
 | --- | --- |
 | `services/test_batch_rename.py` | 批量改名规则与关键词批量增减的用例：四种改名方式、重名序号、扩展名保护。 |
 | `services/test_category_sync.py` | 分类与库目录的双向同步：分类增 / 改 / 移 / 删都要落到目录上、「未分类」= 用户名文件夹根目录、按磁盘目录刷新分类树（含旧「未分类」目录回迁与空壳分类清理）。 |
+| `services/test_cover_service.py` | 封面规范：图片直接用自己（不存副本）、视频抽第一帧、其它类型不生成、没有 ffmpeg 时优雅退回，以及「重置封面」清空旧文件与旧记录后按规范重建。 |
 | `services/test_hidden.py` | 隐藏数据（`.hiddens/`）的用例：搬动、回搬、清理、扫描与过滤。 |
 | `services/test_item_api.py` | 数据接口（`app.sdk.items` + `app.services.item_api`）的用例。 |
 | `services/test_item_rename.py` | 数据改名用例：改显示名时库内文件一起改名，重名加序号，文件不在库里也不报错。 |
@@ -73,23 +74,45 @@
 | `plugins/test_model_runtime.py` | 模型插件的运行环境与 worker 子进程后端测试。 |
 | `plugins/test_plugin_loading.py` | 插件载入：冲突只影响启用、不影响载入，且启用/禁用变更与不可用原因都要进控制台。 |
 
-## 3. 运行方式（只跑本次改动相关的单元）
+## 3. 运行方式（先判断要不要测，再判断测哪些）
 
 ```powershell
-# 改哪块就只跑哪块（推荐日常）
+# 改哪块就只跑哪块
 .venv\Scripts\python.exe -m unittest tests.core.test_manifest -v
 .venv\Scripts\python.exe -m unittest tests.services.test_tag_permissions tests.services.test_tag_shadows -v
 
 # 只跑某个单元包
 .venv\Scripts\python.exe -m unittest discover -s tests/core -t . -v
 
-# 需要整体回归时（编译 / 插件桩 / 单测 / 自检四层 / pytest / 可选依赖 / 打包冒烟）
+# 自检：整层或指定检查
+.venv\Scripts\python.exe scripts\selfcheck.py --layer pages
+.venv\Scripts\python.exe scripts\selfcheck.py --only category_sort --verbose
+
+# 整体回归（编译 / 插件桩 / 单测 / 自检四层 / pytest / 可选依赖 / 打包冒烟，共 17 步）
 .venv\Scripts\python.exe tests\verify.py                 # --quick 只跑快的四步，--list 列步骤
 $env:DM_KEEP_TMP=1                                       # 保留 .tmp/ 便于排查
 ```
 
-- **不建议每次全量跑**：改一处就跑对应模块；全量 `tests/verify.py` 留给提交前或整批改完时。
+### 3.1 按改动范围决定验证（**不要默认全量**）
+
+| 本次改动的性质 | 需要跑什么 |
+| --- | --- |
+| **只改文档**（`*.md` / 注释 / docstring 文案），无代码语义变化 | **不跑测试** |
+| 只改 `scripts/selfcheck/` 的检查代码 | 只跑受影响的那几条：`scripts\selfcheck.py --only <名字>` |
+| 只改某个纯函数 / 单个服务模块 | 只跑对应的单元测试模块 |
+| 改了界面装配、页面结构、控件行为 | 加跑 `scripts\selfcheck.py --layer pages` |
+| 改了数据层（`db/`、`repositories/`、模型或表结构） | 相关单元测试包 + 全量 `tests\verify.py` |
+| 改了导入 / 存档 / 导出等跨层流程 | 相关单元测试 + `scripts\selfcheck.py --layer flows` |
+| 影响面广，或准备提交 / 发布 | 全量 `tests\verify.py` |
+| **验证失败** | 按错误信息**一次修完所有问题**，再复验一次 |
+
+- **不在改动过程中反复测试**：把手上的改动全部做完再跑一次；改动途中的廉价自查用
+  `python -m compileall -q src` 或目标模块单测即可。
 - 界面用例需要 `QT_QPA_PLATFORM=offscreen`（`tests/verify.py` 会自动带上）。
+- 成片的 `PermissionError [WinError 5]`（系统临时目录）通常是**沙箱环境限制**而非代码问题：
+  门禁里有若干用例要在系统临时目录建删目录，受限环境下会成片失败，换到可写环境再判断。
+- 更细的取舍说明与新增测试 / 新增自检的规范见 [`index/testing/unit.md`](index/testing/unit.md) 与 [`index/testing/selfcheck.md`](index/testing/selfcheck.md)。
+
 
 ## 4. 单元测试规范（新增测试必须遵守）
 
@@ -116,6 +139,10 @@ $env:DM_KEEP_TMP=1                                       # 保留 .tmp/ 便于�
   不要往 `tests/` 根写文件；需要额外目录就用 `tests_tmp("<名字>")`。
 - `.tmp/` 已在 `.gitignore` 中，任何时候都不应进入提交与打包载荷（`tests/smoke_checkout.py` 会检查
   载荷里没有任何名为 `.tmp` 的路径段）。
+- **智能体（AI 助手）在实现功能过程中产生的临时物同样受这条规则约束**：一次性脚本、生成的清单、
+  导出的日志、调试输出等只能落在 `tests/.tmp/` 或 `scripts/.tmp/`，**并在功能确认完成后立即删除**；
+  需要长期保留的结论写进正式文档或测试，不要把排查过程的中间产物留在仓库里。
+  更完整的说明见 [`index/testing/tmp.md`](index/testing/tmp.md)。
 
 ## 6. 与自检套件（`scripts/selfcheck/`）的关系
 

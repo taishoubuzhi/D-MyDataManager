@@ -141,3 +141,17 @@ class CategoryRepository(Repository[Category]):
         if user_id is not None:
             stmt = stmt.where(DataItem.user_id == user_id)
         return {category_id: count for category_id, count in self.session.execute(stmt).all()}
+
+    def latest_imports(self, user_id: int | None = None) -> dict[int, object]:
+        """每个分类里最近导入一条数据的时间（分类栏「按最新导入」排序用）。
+
+        只统计未删除项；分类下没有数据时不出现（排序时按「最旧」处理）。
+        """
+        stmt = (
+            select(DataItem.category_id, func.max(DataItem.created_at))
+            .where(DataItem.is_deleted.is_(False), DataItem.category_id.isnot(None))
+            .group_by(DataItem.category_id)
+        )
+        if user_id is not None:
+            stmt = stmt.where(DataItem.user_id == user_id)
+        return {category_id: latest for category_id, latest in self.session.execute(stmt).all()}

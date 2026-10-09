@@ -14,6 +14,8 @@
 .dsh-acl-recovery/
 /stubs/
 /PyQt-Fluent-Widgets/
+/AGENT.md
+/docs/index/
 
 # —— 不随发布分发的本地样板插件
 /plugins/example.model_usage/
@@ -36,4 +38,5 @@ _*.log
 
 # —— 本地任务清单
 TODO.md
+
 

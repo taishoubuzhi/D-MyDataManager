@@ -23,12 +23,19 @@ from .database_bundle import (
 from .database_bundle import BundleError as DatabaseBundleError
 from .download_api import DownloadApi
 from .export_service import ExportResult, ExportService, ZipExportResult
-from .feature_service import build_features, make_cover, replace_features
+from .feature_service import build_features, replace_features
 from .import_service import ImportResult, ImportService, timestamp_name
 from .item_service import ItemService
 from .library_service import LibraryService, is_uncategorized_category, sanitize_dir_name
 from .maintenance import compact_database, reset_config, reset_runtime_data, reset_to_defaults
 from .content_store import ContentStore, preferred_codec
+from . import cover_service
+from .cover_service import (
+    build_cover,
+    ffmpeg_executable,
+    grab_video_frame,
+    reset_covers,
+)
 from .pip_api import PipApi
 from .plugin_service import (
     PluginExportResult,
@@ -75,14 +82,18 @@ __all__ = [
     "UserInfo",
     "UserService",
     "ZipExportResult",
+    "build_cover",
     "build_features",
     "compact_database",
+    "cover_service",
+    "ffmpeg_executable",
+    "grab_video_frame",
     "import_replace",
     "inspect_package",
     "is_uncategorized",
     "is_uncategorized_category",
-    "make_cover",
     "overview",
+    "reset_covers",
     "plugin_service",
     "preferred_codec",
     "recent",

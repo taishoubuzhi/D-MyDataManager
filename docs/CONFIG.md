@@ -33,6 +33,8 @@
 | 简化显示 | `Simple-Display` | `default` | `none`/`default`/`full` | 三挡位：不简化 / 只简化不会混淆的图标 / 完全简化。旧版布尔值（`true`/`false`）在启动时一次性换算为 `full`/`none` |
 | 提示延迟 | `Tooltip-Delay` | `2000` | 0 – 10 000 毫秒 | `0` 表示立刻弹出 |
 | 双击动作 | `Double-Click-Action` | `viewer` | `viewer`/`editor` | 数据管理页双击条目时打开查看器还是编辑器插件 |
+| 分类排序方式 | `Category-Sort-Mode` | `default` | `default`/`name`/`count`/`latest` | 左侧分类栏排序：默认顺序（分类自己的 `sort_order`）/ 按名称 / 按数据量 / 按最新导入数据时间；「未分类」始终排最后 |
+| 分类排序逆序 | `Category-Sort-Reverse` | `false` | 布尔 | `false` 为正序（升序）、`true` 为逆序（降序） |
 
 ## 4. Log（日志）
 

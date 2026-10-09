@@ -20,6 +20,8 @@ class CategoryNode:
     depth: int
     item_count: int
     total_count: int
+    #: 该分类下最近一条数据的导入时间（没有数据时为 None）；分类栏「按最新导入」排序用
+    latest_at: object | None = None
 
 
 def is_uncategorized(category: Category | None) -> bool:
@@ -70,6 +72,7 @@ class TaxonomyService:
     # ---------------------------------------------------------------- 分类
     def tree(self, include_hidden: bool = True, user_id: int | None = None) -> list[CategoryNode]:
         counts = self.categories.item_counts(user_id=user_id)
+        latest = self.categories.latest_imports(user_id=user_id)
         nodes: list[CategoryNode] = []
         queue: list[tuple[Category, int]] = [
             (category, 0)
@@ -82,7 +85,15 @@ class TaxonomyService:
             category, depth = queue.pop(0)
             own = counts.get(category.id, 0)
             total = own + sum(self._subtree_count(child, counts) for child in category.children)
-            nodes.append(CategoryNode(category, depth, own, total))
+            nodes.append(
+                CategoryNode(
+                    category,
+                    depth,
+                    own,
+                    total,
+                    self._subtree_latest(category, latest),
+                )
+            )
             children = [c for c in category.children if include_hidden or not c.is_hidden]
             queue.extend(
                 (child, depth + 1) for child in sorted(children, key=lambda c: (c.sort_order, c.name))
@@ -93,6 +104,15 @@ class TaxonomyService:
         return counts.get(category.id, 0) + sum(
             self._subtree_count(child, counts) for child in category.children
         )
+
+    def _subtree_latest(self, category: Category, latest: dict[int, object]) -> object | None:
+        """这个分类及其子孙里最近一条数据的导入时间（与 `total_count` 的口径一致）。"""
+        value = latest.get(category.id)
+        for child in category.children:
+            child_value = self._subtree_latest(child, latest)
+            if child_value is not None and (value is None or child_value > value):
+                value = child_value
+        return value
 
     def create_category(
         self,
