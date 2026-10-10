@@ -93,7 +93,7 @@
 .venv\Scripts\python.exe scripts\selfcheck.py --layer pages
 .venv\Scripts\python.exe scripts\selfcheck.py --only category_sort --verbose
 
-# 整体回归（编译 / 插件桩 / 单测 / 自检四层 / pytest / 可选依赖 / 打包冒烟，共 17 步）
+# 整体回归（编译 / 插件桩 / 单测 / 自检四层 / pytest / 可选依赖 / 打包冒烟，共 18 步）
 .venv\Scripts\python.exe tests\verify.py                 # --quick 只跑快的四步，--list 列步骤
 $env:DM_KEEP_TMP=1                                       # 保留 .tmp/ 便于排查
 ```

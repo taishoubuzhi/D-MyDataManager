@@ -9,7 +9,7 @@
 
 | 文件 | 类型 | 作用 |
 | --- | --- | --- |
-| `selfcheck.py` | 入口 | 自检套件入口：四层共 189 项检查（data 6 / services 81 / pages 98 / flows 4），末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
+| `selfcheck.py` | 入口 | 自检套件入口：四层共 190 项检查（data 6 / services 81 / pages 99 / flows 4），末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
 | `selfcheck/` | 包 | 自检套件实现：`harness.py`（注册表 / 隔离环境 / 结果收集）、`cli.py`（命令行）、`fixtures.py`（代表数据）+ 20 个 `checks_*.py` |
 | `tmpenv.py` | 共用工具（非入口） | `tests_tmp()` / `scripts_tmp()` / `TempDir` / `redirect_paths()` / `reset_config()` / `reset_runtime_dirs()`：统一临时目录（`scripts/.tmp/`、`tests/.tmp/`）与隔离运行环境，`tests/` 也复用它 |
 | `plugin_stubs.py` | 入口 | 按插件清单生成 `stubs/dm_plugin/**.pyi`，供 IDE 解析运行期合成包 `dm_plugin.<id>`；`--check` 只校验一致性 |
@@ -40,6 +40,10 @@
 - **新增检查**：在对应层的 `checks_*.py` 里写一个函数并加 `@check("名字", "分层")` 装饰器，函数体只调用公开契约；
   名字必须唯一，检查之间互不影响（每项自带隔离环境，由 `Case` 提供）。
   完整规范（含界面检查的窗口回收、`MODULES` 登记、项数同步）见 [`index/testing/selfcheck.md`](index/testing/selfcheck.md)。
+- **需要插件才能测的检查，自己现写一个探针插件**：用 `checks_plugins.py` 的 `_write_plugin()` 把一份最小插件写进
+  `paths.PLUGIN_DIR`，再 `install_builtin_plugins()` 装载；不要依赖仓库里某份示例插件（`plugin_ui_contributions` /
+  `plugin_contribution_lifecycle` 写 `selfcheck.ui_probe`，`plugin_event_broadcast` 写 `selfcheck.event_probe`），
+  这样干净检出里也能跑。
 - 模块与分层在 `selfcheck/harness.py` 的 `MODULES` 里登记；同名的 `checks_model.py` / `checks_autolabel.py` /
   `checks_tags_ui.py` 被多层复用，只是注册的检查分层不同。
 - 门禁侧（`tests/verify.py`）不直接跑四层合一：`pages` 的 99 项 Qt offscreen 检查在同一长驻进程里偶发原生崩溃
@@ -59,6 +63,11 @@
   且必须在 docstring 里写明这一点。
 - `tmpenv` 在 `redirect_paths()` / `reset_config()` 末尾会核对重定向是否真的生效，不生效直接抛错——因为
   `app.core.config` 首次导入时会执行 `load_config()` 把资源根指回真实目录，这套核对保证脚本不会静默写到真实数据上。
+- **DSH 沙箱里 `tempfile` 建的目录不可写**：`tempfile.mkdtemp()` / `TemporaryDirectory()` 在 Windows 上走
+  `os.mkdir(path, 0o700)`，拿不到沙箱给工作区的写入授权，目录里写不进、退出时也删不掉，会在仓库根留下
+  `pytest-cache-files-*` / `dm_*` 残留（需一次性更宽权限清理）。`tmpenv` 用默认模式建目录，项目自己的临时物不受影响；
+  用系统临时目录的测试在沙箱里必然报 `[WinError 5]`（把 `TEMP` 指到工作区也没用），别误判成代码缺陷，
+  详见 [`index/testing/tmp.md`](index/testing/tmp.md)。
 
 ## 4. 新增脚本规范（必须遵守）
 

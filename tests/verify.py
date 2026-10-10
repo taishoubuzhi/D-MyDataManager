@@ -10,7 +10,7 @@
 `RESULT failures=N`，N>0 时退出码 1。子进程统一带 `PYTHONIOENCODING=utf-8` 与
 `QT_QPA_PLATFORM=offscreen`（Windows 控制台与无头自检都稳）。
 
-`selfcheck` 一步不直接跑四层合一：`pages` 层有 70 项 Qt offscreen 检查，在同一个长驻进程里跑到
+`selfcheck` 一步不直接跑四层合一：`pages` 层有 99 项 Qt offscreen 检查，在同一个长驻进程里跑到
 第 ~60 项会偶发原生崩溃（退出码 3221225477 = 0xC0000005），所以这里把 `pages` 按 12 项一组拆进多个
 独立进程，`data` / `services` / `flows` 各跑一个进程——检查项一个不少，只是换了进程边界。
 分块之后仍偶发（崩溃点会漂移、同一块重跑必过），因此 selfcheck 各步遇到「原生崩溃且没有任何 FAIL 行」
