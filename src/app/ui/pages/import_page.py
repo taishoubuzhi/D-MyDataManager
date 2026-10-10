@@ -55,6 +55,7 @@ from ..components.data_table import fit_columns, fit_table_height, prepare_table
 from ..components.drop_area import DropArea
 from ..components.keyword_input import KeywordInput
 from ..components.tag_picker import TagPicker
+from ..dialogs import CategoryPickerComboBox
 from ..framework import IconTextButton, IconTextPrimaryButton, icon_text_label
 
 _STATUS_LABELS = {"added": "已导入", "skipped": "已跳过", "failed": "失败", "cancelled": "已取消"}
@@ -172,7 +173,7 @@ class ImportPage(ScrollPage):
         self.user_box.setToolTip(self.user_hint.text())
         self.name_edit = LineEdit(card)
         self.name_edit.setPlaceholderText("留空则使用文件名或当前时间")
-        self.category_box = ComboBox(card)
+        self.category_box = CategoryPickerComboBox(card, title="选择导入分类")
         self.category_hint = CaptionLabel("文件导入到所选分类下", card)
         self.category_hint.setVisible(False)
         self.category_box.setToolTip(self.category_hint.text())
@@ -499,9 +500,12 @@ class ImportPage(ScrollPage):
         user_id = self.target_user_id()
         uncategorized = taxonomy.uncategorized_category(user_id=user_id, create=False) if user_id is not None else None
         self.category_box.clear()
-        for node in taxonomy.tree(user_id=user_id):
+        nodes = taxonomy.tree(user_id=user_id)
+        for node in nodes:
             prefix = "　" * node.depth
             self.category_box.addItem(f"{prefix}{node.category.name}", userData=node.category.id)
+        # 层级选择弹窗要拿到完整分类节点，ComboBox 的 item 仍用于显示与取当前值
+        self.category_box.set_picker_nodes(nodes, title="选择导入分类")
         ids = {self.category_box.itemData(index) for index in range(self.category_box.count())}
         # 目标用户切换后旧分类 id 已不属于新树：回落到该用户的「未分类」，否则会默默落到第一个根分类。
         wanted = current if current in ids else (uncategorized.id if uncategorized else None)

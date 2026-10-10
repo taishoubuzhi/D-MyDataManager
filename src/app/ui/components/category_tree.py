@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QModelIndex, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import QAbstractItemView, QTreeWidgetItem, QWidget
 from qfluentwidgets import Action, FluentIcon, RoundMenu, TreeWidget
@@ -64,6 +64,16 @@ def _latest_key(value) -> str:
 #: 一起用——有些 Qt 平台 / 样式下 `QTreeView` 不理会 `setWordWrap`，自己折行能保证长名字
 #: 一定看得全，而不是被省略号截断（用户 m00003 第 1 条）。
 LABEL_WRAP_UNITS = 22
+#: 每深一层就要多让出一个缩进：折行宽度相应减少，否则越深的分类越宽、把分类栏撑到横向溢出
+#: （见 `_wrap_units_for_depth()`，用户 m00117 第 3 条）。
+WRAP_UNITS_PER_DEPTH = 3
+#: 折行宽度的下限：再深也得留几个字，不能折成一列单字。
+MIN_WRAP_UNITS = 10
+
+
+def _wrap_units_for_depth(depth: int) -> int:
+    """按层级算出合理的折行宽度：层级越深，留给文字的水平空间越少。"""
+    return max(MIN_WRAP_UNITS, LABEL_WRAP_UNITS - WRAP_UNITS_PER_DEPTH * max(0, int(depth)))
 
 
 def _wrap_label(text: str, limit: int = LABEL_WRAP_UNITS) -> str:
@@ -85,10 +95,15 @@ def _wrap_label(text: str, limit: int = LABEL_WRAP_UNITS) -> str:
     return "\n".join(lines)
 
 
-def category_label(node: CategoryNode, *, fixed: bool = False) -> str:
-    """分类树里的显示文本：固定分类追加「（固定）」标记，名字太长时折成多行。"""
+def category_label(
+    node: CategoryNode, *, fixed: bool = False, wrap_units: int = LABEL_WRAP_UNITS
+) -> str:
+    """分类树里的显示文本：固定分类追加「（固定）」标记，名字太长时折成多行。
+
+    `wrap_units` 由调用方按层级给出（见 `_wrap_units_for_depth()`）：层级越深可用宽度越小。
+    """
     label = f"{node.category.name} ({node.total_count})"
-    return _wrap_label(f"{label}{FIXED_SUFFIX}" if fixed else label)
+    return _wrap_label(f"{label}{FIXED_SUFFIX}" if fixed else label, wrap_units)
 
 
 def file_label(entry) -> str:
@@ -101,15 +116,29 @@ def file_label(entry) -> str:
 
 
 def menu_entries(*, all_data: bool = False, fixed: bool = False) -> list[tuple[str, str]]:
-    """右键菜单项（action, 文本）：「未分类」是固定分类，不提供任何修改入口。"""
+    """右键菜单项（action, 文本）：「未分类」是固定分类，不提供任何修改入口。
+
+    单个分类的移动只走右键菜单（「移动到另一个分类下」）：勾选 / 多选里的分类不再参与
+    「移动」这类会被层级关系牵连的批量操作（用户 m00117 第 1 条）。
+    """
     if fixed:
         return []
     if all_data:
         return [("add", "新建子分类")]
-    return [("add", "新建子分类"), ("rename", "重命名"), ("delete", "删除分类")]
+    return [
+        ("add", "新建子分类"),
+        ("move", "移动到另一个分类下"),
+        ("rename", "重命名"),
+        ("delete", "删除分类"),
+    ]
 
 
-MENU_ICONS = {"add": FluentIcon.ADD, "rename": FluentIcon.EDIT, "delete": FluentIcon.DELETE}
+MENU_ICONS = {
+    "add": FluentIcon.ADD,
+    "move": FluentIcon.MOVE,
+    "rename": FluentIcon.EDIT,
+    "delete": FluentIcon.DELETE,
+}
 
 
 class CategoryTree(TreeWidget):
@@ -139,12 +168,22 @@ class CategoryTree(TreeWidget):
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.setUniformRowHeights(False)
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # 折行只解决「太长看不全」，层级一深仍会把整行顶出可视区：宁可出横向滚动条，
+        # 也不让右侧内容被裁掉又滑不到（用户 m00117 第 3 条）。
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # 缩进收窄一点：层级深时给文字留出更多空间（qfluentwidgets 的点击展开判定用的是
+        # 同一个 `indentation()`，改这里不会让点击区域错位）。
+        self.setIndentation(14)
         self._updating = False
         self._only_categories = True
+        self._checkable = True
         self._sync_guard = False
         self._syncing_selection = False
         self._cat_children: dict = {}
         self._cat_meta: dict = {}
+        # 分类 id → 层级，供文件行按同样的缩进算折行宽度
+        self._cat_depth: dict[int, int] = {}
         self._sort_mode = "default"
         self._sort_reverse = False
         self._sort_dirty = False
@@ -154,6 +193,8 @@ class CategoryTree(TreeWidget):
         self._sort_timer.timeout.connect(self._apply_sort_now)
         # 用户手动展开 / 收起过的分类 id；None = 还没动过，按配置的默认值来
         self._user_expanded: set | None = None
+        # 刚刚吃掉的那一下是不是「点展开箭头」：松开事件要跟着一起吃掉
+        self._branch_pressed = False
 
     # ------------------------------------------------------------------ 数据
     def set_nodes(
@@ -166,22 +207,36 @@ class CategoryTree(TreeWidget):
         files=None,
         expand: bool | None = None,
         only_categories: bool = True,
+        checkable: bool = True,
+        show_root: bool = True,
     ) -> None:
-        """重建整棵树；`only_categories` 为假时按 `files` 在每个分类下列出文件。"""
+        """重建整棵树；`only_categories` 为假时按 `files` 在每个分类下列出文件。
+
+        `checkable=False` 时不挂复选框：选择目标分类一类的弹窗只关心「选中状态」。
+
+        `show_root=False` 时不建「全部数据」根行，顶级分类直接成为 QTreeWidget 的顶层项。
+        选择类弹窗只要分类本身：以前是先把根行藏起来，但 Qt 里隐藏父项会连整棵子树一起
+        不显示（顶级分类正是挂在根行下面的），弹窗因此变成空白，所以改成压根不建根行。
+        """
         self.blockSignals(True)
         self._sort_timer.stop()
         self._only_categories = bool(only_categories)
+        self._checkable = bool(checkable)
         self._cat_children = {}
         self._cat_meta = {}
+        self._cat_depth = {}
         checked_ids = set(checked or ())
         checked_files = set(checked_items or ())
         self.clear()
-        root = QTreeWidgetItem([f"全部数据 ({total})"])
-        root.setData(0, Qt.ItemDataRole.UserRole, ALL_ID)
-        root.setData(0, KIND_ROLE, KIND_ALL)
-        # 根节点也能勾选：全选 / 半选 / 全不选整棵分类树。
-        root.setFlags(root.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        self.addTopLevelItem(root)
+        root = None
+        if show_root:
+            root = QTreeWidgetItem([f"全部数据 ({total})"])
+            root.setData(0, Qt.ItemDataRole.UserRole, ALL_ID)
+            root.setData(0, KIND_ROLE, KIND_ALL)
+            # 根节点也能勾选：全选 / 半选 / 全不选整棵分类树。
+            if self._checkable:
+                root.setFlags(root.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            self.addTopLevelItem(root)
 
         items: dict[int, QTreeWidgetItem] = {}
         merged_ids: set[int] = set()
@@ -191,11 +246,14 @@ class CategoryTree(TreeWidget):
                 # 「未分类」的文件就在用户名文件夹下：不再单列节点，直接挂到根节点
                 merged_ids.add(node.category.id)
                 continue
-            item = QTreeWidgetItem([category_label(node, fixed=fixed)])
+            item = QTreeWidgetItem(
+                [category_label(node, fixed=fixed, wrap_units=_wrap_units_for_depth(node.depth))]
+            )
             item.setData(0, Qt.ItemDataRole.UserRole, node.category.id)
             item.setData(0, KIND_ROLE, KIND_CATEGORY)
             item.setData(0, FIXED_ROLE, fixed)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            if self._checkable:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             if fixed:
                 item.setToolTip(0, FIXED_TIP)
             parent = items.get(node.category.parent_id) if node.category.parent_id else root
@@ -204,6 +262,7 @@ class CategoryTree(TreeWidget):
             else:
                 parent.addChild(item)
             items[node.category.id] = item
+            self._cat_depth[node.category.id] = node.depth
             self._remember_sort_meta(item, node)
             item.setExpanded(self._wants_expanded(node.category.id, expand))
 
@@ -216,15 +275,27 @@ class CategoryTree(TreeWidget):
                 if target is None:
                     continue
                 for entry in entries:
-                    target.addChild(self._file_item(entry))
+                    target.addChild(
+                        self._file_item(entry, wrap_units=self._file_wrap_units(target, category_id))
+                    )
 
-        root.setExpanded(self._wants_expanded(ALL_ID, expand))
-        self._set_states(checked_ids, checked_files)
+        if root is not None:
+            root.setExpanded(self._wants_expanded(ALL_ID, expand))
+        if self._checkable:
+            self._set_states(checked_ids, checked_files)
         self.blockSignals(False)
         # 重建之后按当前排序方式重排一次（默认「全部数据」在最前、未分类在最后）
         self._sort_dirty = True
         self._schedule_sort()
         self.select_category(selected)
+
+    def _all_root_item(self) -> QTreeWidgetItem | None:
+        """「全部数据」根行；`set_nodes(show_root=False)` 时树上没有根行，返回 None。"""
+        for index in range(self.topLevelItemCount()):
+            item = self.topLevelItem(index)
+            if item.data(0, KIND_ROLE) == KIND_ALL:
+                return item
+        return None
 
     def _group_files(self, files) -> list[tuple[int, list]]:
         """按分类分组文件行，组内按名称排序。"""
@@ -236,13 +307,20 @@ class CategoryTree(TreeWidget):
             groups.setdefault(int(category_id), []).append(entry)
         return [(key, sorted(value, key=file_label)) for key, value in groups.items()]
 
-    def _file_item(self, entry) -> QTreeWidgetItem:
+    def _file_wrap_units(self, target: QTreeWidgetItem, category_id: int) -> int:
+        """文件行比它所属分类再深一层；「未分类」并进根节点时按根下第一层算。"""
+        if target is not None and target.data(0, KIND_ROLE) == KIND_ALL:
+            return _wrap_units_for_depth(1)
+        return _wrap_units_for_depth(self._cat_depth.get(int(category_id), 0) + 1)
+
+    def _file_item(self, entry, wrap_units: int = LABEL_WRAP_UNITS) -> QTreeWidgetItem:
         # 显示时折行；`file_label()` 仍返回未折行的原名，排序按原名走
-        item = QTreeWidgetItem([_wrap_label(file_label(entry))])
+        item = QTreeWidgetItem([_wrap_label(file_label(entry), wrap_units)])
         item.setData(0, Qt.ItemDataRole.UserRole, ALL_ID)
         item.setData(0, KIND_ROLE, KIND_FILE)
         item.setData(0, ITEM_ROLE, int(getattr(entry, "id", 0) or 0))
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        if self._checkable:
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         path = str(getattr(entry, "file_path", "") or "")
         if path:
             item.setToolTip(0, path)
@@ -378,7 +456,13 @@ class CategoryTree(TreeWidget):
                 self.setCurrentItem(item)
                 return
         if self.topLevelItemCount():
-            self.setCurrentItem(self.topLevelItem(0))
+            root = self._all_root_item()
+            if root is not None:
+                self.setCurrentItem(root)
+            else:
+                # 没有「全部数据」根行（选择类弹窗）时不能顺手选中第一个分类：
+                # 上层会把「当前项」当成用户的真实选择（例如把第一个分类自动加进移动表）。
+                self.setCurrentIndex(QModelIndex())
 
     def current_category(self) -> int | None:
         """当前行所属的分类 id：文件行算它所在的那个分类。"""
@@ -482,6 +566,11 @@ class CategoryTree(TreeWidget):
             return
         self._sort_dirty = False
         current_id = self.current_category()
+        # 先把整棵树的展开状态记下来：重排要把行摘下来再插回去，而 Qt 的展开状态挂在模型
+        # 索引上，行一被摘走（哪怕只是把某个分类的子项摘空，它也会变成「没有子项」）就丢了，
+        # 插回去就是收起的。`set_nodes()` 每次刷新都会排队跑一次重排，用户看到的就是
+        # 「刷新后自动折叠」（用户 m01604）。这里统一记、重排结束后统一放回。
+        expanded_snapshot = [(item, item.isExpanded()) for item in self._iter_items()]
         self.blockSignals(True)
         try:
             for parent_id, items in list(self._cat_children.items()):
@@ -489,21 +578,40 @@ class CategoryTree(TreeWidget):
                     continue
                 ordered = self._reordered(items)
                 self._cat_children[parent_id] = ordered
-                # 顶层分类挂在「全部数据」根节点下面（不是 QTreeWidget 的顶层项）
-                parent = self.topLevelItem(0) if parent_id is None else self._parent_item(parent_id)
-                if parent is None:
+                # 顶层分类要么挂在「全部数据」根行下面，要么（没有根行时）直接是顶层项
+                parent = self._sort_parent(parent_id)
+                if parent is None and parent_id is not None:
                     continue
                 for item in ordered:
-                    index = parent.indexOfChild(item)
-                    if index >= 0:
-                        parent.takeChild(index)
+                    if parent is None:
+                        index = self.indexOfTopLevelItem(item)
+                        if index >= 0:
+                            self.takeTopLevelItem(index)
+                    else:
+                        index = parent.indexOfChild(item)
+                        if index >= 0:
+                            parent.takeChild(index)
                 for position, item in enumerate(ordered):
-                    parent.insertChild(position, item)
+                    if parent is None:
+                        self.insertTopLevelItem(position, item)
+                    else:
+                        parent.insertChild(position, item)
+            # 放回展开状态必须在所有层都重排完之后：层与层之间有父子关系，先放回的父级
+            # 可能被后面某一层摘空了子项而再次收起（信号已屏蔽，不会写回用户的展开记录）
+            for item, was_expanded in expanded_snapshot:
+                if item.isExpanded() != was_expanded:
+                    item.setExpanded(was_expanded)
         finally:
             # 重排把当前项摘走过，按分类 id 放回（信号已屏蔽，不会重复通知页面）
             if self.current_category() != current_id:
                 self.select_category(current_id)
             self.blockSignals(False)
+
+    def _sort_parent(self, parent_id) -> QTreeWidgetItem | None:
+        """分类行所在的容器：`None` 表示「全部数据」根行，或（没有根行时的）QTreeWidget 顶层。"""
+        if parent_id is None:
+            return self._all_root_item()
+        return self._parent_item(parent_id)
 
     def _parent_item(self, parent_id) -> QTreeWidgetItem | None:
         for item in self._iter_items():
@@ -553,28 +661,8 @@ class CategoryTree(TreeWidget):
         if item is not None and self._kind(item) == KIND_FILE:
             self.fileSelected.emit(int(item.data(0, ITEM_ROLE)))
             return
-        # Ctrl / Shift 多选：把选中的分类同步勾上，批量操作即按勾选集合执行。
-        # 单选保持原样（不勾选），由页面把它作为单选过滤处理。
-        selected = self.selected_categories()
-        if len(selected) > 1:
-            self._syncing_selection = True
-            try:
-                targets = []
-                for category_id in selected:
-                    target = self._find_category_item(category_id)
-                    if target is not None and target.checkState(0) != Qt.CheckState.Checked:
-                        targets.append(target)
-                if targets:
-                    # 用 `_updating` 压住 itemChanged 的级联回环，级联与汇总在这里做一次
-                    self._updating = True
-                    try:
-                        for target in targets:
-                            self._apply_state(target, Qt.CheckState.Checked)
-                        self._aggregate_all()
-                    finally:
-                        self._updating = False
-            finally:
-                self._syncing_selection = False
+        # 选中状态不再回写复选框：复选框只管「中间列表显示哪些数据」，只有直接点复选框才变；
+        # 批量重命名 / 移动 / 删除都在按钮弹出的弹窗里现挑分类，与选中状态无关（用户 m01932）。
         self.categorySelected.emit(self.current_category())
 
     def _find_category_item(self, category_id: int) -> QTreeWidgetItem | None:
@@ -584,6 +672,55 @@ class CategoryTree(TreeWidget):
             if item.data(0, Qt.ItemDataRole.UserRole) == category_id:
                 return item
         return None
+
+    def viewportEvent(self, event) -> bool:
+        """点展开箭头只切换展开，不改「选中状态」、也不当成「点了这一行」。
+
+        qfluentwidgets 的 `TreeWidget` 把分支指示器挪到了 `level * indentation + 20` 处，
+        点它先切换展开、再照常走基类 —— 于是这一下顺手改了选中 / 当前项：用户只想展开看
+        下级，父分类却被选进了批量移动表 / 批量重命名（用户 m01549 第 1 条）。这里拦掉，
+        箭头就只是箭头。
+        """
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._toggle_branch_at(event.pos())
+        ):
+            self._branch_pressed = True
+            event.accept()
+            return True
+        return super().viewportEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        """吃掉紧跟「点展开箭头」那一下的松开事件。
+
+        基类只在「松开的位置 == 上次记下的按下位置」时才发 `itemClicked`；按下那一下被拦掉了，
+        记下的还是更早的一次真实点击，所以这里必须一起吃掉，否则点箭头照样会把上次点过的分类
+        当成「被点中」。
+        """
+        if self._branch_pressed:
+            self._branch_pressed = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _toggle_branch_at(self, pos) -> bool:
+        """位置落在某个分类行的展开箭头上就切换展开并返回 True。"""
+        item = self.itemAt(pos)
+        if item is None or item.childCount() == 0:
+            return False
+        level = 0
+        cursor = item
+        while cursor.parent() is not None:
+            cursor = cursor.parent()
+            level += 1
+        # 与 qfluentwidgets `TreeWidget.viewportEvent` 的判定式完全一致：改 `indentation()`
+        # 时两边一起变，点击区域不会与画出来的箭头错位。
+        indent = level * self.indentation() + 20
+        if not indent < pos.x() < indent + 10:
+            return False
+        item.setExpanded(not item.isExpanded())
+        return True
 
     def _show_menu(self, pos) -> None:
         item = self.itemAt(pos)

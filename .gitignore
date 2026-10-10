@@ -14,7 +14,7 @@
 .dsh-acl-recovery/
 /stubs/
 /PyQt-Fluent-Widgets/
-/AGENT.md
+/AGENTS.md
 /docs/index/
 
 # —— 不随发布分发的本地样板插件

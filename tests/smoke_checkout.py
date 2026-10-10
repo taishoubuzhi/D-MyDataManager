@@ -54,7 +54,7 @@ FORBIDDEN = (
 )
 
 #: 必须在载荷里的文件
-#: 注意：AGENT.md 与 docs/index/（开发用索引）在 .gitignore 里被排除，不进版本库也不随发布
+#: 注意：AGENTS.md 与 docs/index/（开发用索引）在 .gitignore 里被排除，不进版本库也不随发布
 #: 分发，所以这里不校验它们——载荷清单按 `git ls-files --exclude-standard` 算，被忽略的
 #: 文件永远不在清单里。
 REQUIRED = (

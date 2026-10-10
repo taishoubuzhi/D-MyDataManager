@@ -79,7 +79,10 @@ from ..framework.contributions import icon_of, items, resolve, resolve_with, val
 from ..dialogs import (
     BatchRenameDialog,
     CategoryConflictDialog,
+    CategoryDeleteDialog,
+    CategoryMoveDialog,
     CategoryPickerDialog,
+    CategorySelectDialog,
     DuplicateDialog,
     ItemEditDialog,
     KeywordManagerDialog,
@@ -99,6 +102,14 @@ TOOLBAR_BUTTON_HEIGHT = 32
 TOOLBAR_MAX_ROWS = 2
 TOOLBAR_ROW_SPACING = 4
 TOOLBAR_SCROLLBAR_HEIGHT = 16
+
+#: 分类栏里「复选框」与「批量操作」是两套互不相干的机制（用户 m00117 第 6 条、m01932 第 2 条）：
+#: 复选框只决定中间列表显示哪些数据（只有直接点复选框才会变）；批量重命名 / 移动 / 删除
+#: 一律在按钮弹出的弹窗里现挑分类。
+CATEGORY_TREE_TIP = (
+    "复选框决定中间列表显示哪些数据（只有直接点复选框才会变）；"
+    "批量重命名 / 移动 / 删除请在按钮弹出的弹窗里选分类"
+)
 
 
 def range_ids(order: list[int], anchor: int, target: int) -> set[int]:
@@ -273,7 +284,7 @@ class ManagePage(Page):
 
         self.tree = CategoryTree(card)
         # 分类树的说明改挂在树上：说明文字不显示，鼠标停住才弹出
-        self.tree.setToolTip("勾选分类可批量移动或删除")
+        self.tree.setToolTip(CATEGORY_TREE_TIP)
         self.tree.categorySelected.connect(self._on_category_selected)
         self.tree.fileSelected.connect(self.focus_item)
         self.tree.checkedChanged.connect(self._on_category_checked)
@@ -307,22 +318,22 @@ class ManagePage(Page):
         self.only_categories_box.setChecked(bool(config.onlyShowCategories.value))
         self.only_categories_box.toggled.connect(self._on_only_categories_toggled)
         layout.addWidget(self.only_categories_box)
-        self.category_hint = CaptionLabel("勾选分类可批量移动或删除", card)
+        self.category_hint = CaptionLabel(CATEGORY_TREE_TIP, card)
         self.category_hint.setVisible(False)
         layout.addWidget(self.category_hint)
         self.category_rename_button = IconTextButton(FluentIcon.EDIT, "批量重命名", card)
-        self.category_rename_button.setToolTip("给勾选的分类按规则批量重命名；「未分类」不能重命名")
-        self.category_rename_button.setEnabled(False)
+        self.category_rename_button.setToolTip("在弹窗里选分类，按规则批量重命名；「未分类」不能重命名")
         self.category_rename_button.clicked.connect(self._on_category_batch_rename)
         self.category_move_button = IconTextButton(FluentIcon.MOVE, "批量移动", card)
         self.category_move_button.setToolTip(
-            "把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）；根分类不能移动"
+            "点一个加一个，把要移动的分类攒进「分类移动表」，再选一个目标分类；"
+            "根分类、存在上级 / 下级关系的分类不能一起移动"
         )
-        self.category_move_button.setEnabled(False)
         self.category_move_button.clicked.connect(self._on_category_batch_move)
         self.category_delete_button = IconTextButton(FluentIcon.DELETE, "批量删除", card)
-        self.category_delete_button.setToolTip("删除勾选的分类，其中的数据会变成未分类；根分类与「未分类」不能删除")
-        self.category_delete_button.setEnabled(False)
+        self.category_delete_button.setToolTip(
+            "在弹窗里选分类后删除，其中的数据会变成未分类；根分类与「未分类」不能删除"
+        )
         self.category_delete_button.clicked.connect(self._on_category_batch_delete)
         batch_row = QHBoxLayout()
         batch_row.setSpacing(6)
@@ -640,7 +651,6 @@ class ManagePage(Page):
             only_categories=not self._files_in_tree(),
         )
         self._syncing_tree = False
-        self._sync_category_buttons()
         self.filter_panel.set_options(
             tags=self.tag_repo.names(user_id=user_id),
             keywords=self.tag_repo.distinct_keywords(user_id=user_id),
@@ -682,7 +692,7 @@ class ManagePage(Page):
         if button is not None:
             button.setToolTip(f"当前范围有 {count} 组重复内容" if count else "当前范围没有重复内容")
 
-    def _load_items(self, *, select_checked: bool = False) -> None:
+    def _load_items(self) -> None:
         sort_by, descending = self.filter_panel.sort_option()
         text = self.filter_panel.text()
         category_ids = set(self._checked_categories)
@@ -704,10 +714,6 @@ class ManagePage(Page):
             sort_by=sort_by,
             descending=descending,
         )
-        if select_checked:
-            # 分类栏里勾了什么，中间列表就选中什么（与显示的集合同口径）
-            self._selected = {item.id for item in self.item_repo.query(filters)}
-            self._anchor = None
         self._total = self.item_repo.count(filters)
         self._page = max(0, min(self._page, self.pager_page_count() - 1))
         self._items = self.item_repo.query(
@@ -928,7 +934,6 @@ class ManagePage(Page):
         self._checked_categories.clear()
         self._checked_items.clear()
         self.tree.set_checked_categories(set())
-        self._sync_category_buttons()
         self._selected = {item.id}
         self._anchor = item.id
         self._page = 0
@@ -1187,7 +1192,7 @@ class ManagePage(Page):
             return
         nodes = self.taxonomy.tree(user_id=self.user_service.current_id())
         dialog = CategoryPickerDialog(
-            [(node.category.id, "　" * node.depth + node.category.name) for node in nodes],
+            nodes,
             parent=self.window(),
             count=len(items),
         )
@@ -1230,6 +1235,7 @@ class ManagePage(Page):
             global_tags=set(self.tag_repo.global_names()),
             info=self._item_info(item),
             parent=self.window(),
+            nodes=nodes,
         )
         if not dialog.exec():
             return
@@ -1538,56 +1544,65 @@ class ManagePage(Page):
 
     # ------------------------------------------------------------------ 分类
     def _on_category_checked(self) -> None:
-        """左侧分类树的勾选：勾选集既过滤中间列表，也同步中间的选中项。"""
+        """左侧分类树的复选框：只管中间列表显示哪些数据，与批量操作完全无关（用户 m01932 第 2 条）。"""
         self._checked_categories = self.tree.checked_categories()
         self._checked_items = self.tree.checked_items()
-        self._sync_category_buttons()
         self._page = 0
-        self._load_items(
-            select_checked=bool(self._checked_categories or self._checked_items)
-        )
+        self._load_items()
 
     def _category_name(self, category_id: int) -> str:
         category = self.category_repo.get(category_id)
         return category.name if category is not None else str(category_id)
 
-    def _eligible_category_ids(self) -> list[int]:
-        """可批量移动/删除的勾选分类：根分类与固定分类受保护。"""
+    def _eligible_category_ids(self, category_ids: list[int]) -> list[int]:
+        """可批量移动/删除的分类：根分类与固定分类受保护。"""
         eligible: list[int] = []
-        for category_id in sorted(self._checked_categories):
+        for category_id in category_ids:
             category = self.category_repo.get(category_id)
             if category is None or is_uncategorized(category) or category.parent_id is None:
                 continue
             eligible.append(category_id)
         return eligible
 
-    def _renameable_category_ids(self) -> list[int]:
-        """可批量重命名的勾选分类：只有固定的「未分类」受保护（根分类可以改名）。"""
+    def _renameable_category_ids(self, category_ids: list[int]) -> list[int]:
+        """可批量重命名的分类：只有固定的「未分类」受保护（根分类可以改名）。"""
         eligible: list[int] = []
-        for category_id in sorted(self._checked_categories):
+        for category_id in category_ids:
             category = self.category_repo.get(category_id)
             if category is None or is_uncategorized(category):
                 continue
             eligible.append(category_id)
         return eligible
 
-    def _sync_category_buttons(self) -> None:
-        all_checked = self.tree.is_all_checked()
-        eligible = bool(self._eligible_category_ids()) and not all_checked
-        self.category_move_button.setEnabled(eligible)
-        self.category_delete_button.setEnabled(eligible)
-        self.category_rename_button.setEnabled(
-            bool(self._renameable_category_ids()) and not all_checked
+    def _pick_category_ids(
+        self,
+        *,
+        title: str,
+        tip: str,
+        list_title: str,
+        accept_text: str,
+        allow_nested: bool,
+    ) -> list[int] | None:
+        """弹出分类选择弹窗让用户现挑要处理的分类；取消时返回 None。
+
+        批量删除 / 批量重命名都改成这样挑分类（用户 m01929、m01932 第 1 条），交互与
+        批量移动的第一步完全一致：不再依赖分类栏的复选框，也不再依赖「选中状态」。
+        """
+        dialog = CategorySelectDialog(
+            self.taxonomy.tree(user_id=self.user_service.current_id()),
+            parent=self.window(),
+            title=title,
+            tip=tip,
+            list_title=list_title,
+            accept_text=accept_text,
+            allow_nested=allow_nested,
         )
-        self.category_hint.setText(
-            "已全选「全部数据」：顶层分类不能整体移动或删除，请只勾选要处理的子分类"
-            if all_checked
-            else "勾选分类可批量移动或删除"
-        )
-        self.tree.setToolTip(self.category_hint.text())
+        if not dialog.exec():
+            return None
+        return dialog.category_ids()
 
     def _descendant_category_ids(self, category_ids: set[int]) -> set[int]:
-        """勾选分类的全部子孙分类 id，用于拒绝非法的移动目标。"""
+        """给定分类的全部子孙分类 id，用于拒绝非法的移动目标。"""
         children: dict[int | None, list[int]] = {}
         for node in self.taxonomy.tree(user_id=self.user_service.current_id()):
             children.setdefault(node.category.parent_id, []).append(node.category.id)
@@ -1601,33 +1616,51 @@ class ManagePage(Page):
         return found
 
     def _on_category_batch_move(self) -> None:
-        """把勾选的分类移动到左侧当前选中的分类下（选中「全部数据」= 移到顶层）。"""
-        if self.tree.is_all_checked():
-            self.toast_warning("无法移动", "已全选「全部数据」：顶层分类不能整体移动，请只勾选要移动的子分类")
+        """批量移动分类：先攒一张「分类移动表」，再挑一个目标分类统一移过去。"""
+        nodes = self.taxonomy.tree(user_id=self.user_service.current_id())
+        table = CategoryMoveDialog(nodes, parent=self.window())
+        if not table.exec():
             return
-        ids = self._eligible_category_ids()
-        if not ids:
-            self.toast_warning("无法移动", "根分类与「未分类」不能移动，请先勾选普通分类")
+        eligible: list[int] = []
+        for category_id in table.category_ids():
+            category = self.category_repo.get(category_id)
+            if category is None or is_uncategorized(category) or category.parent_id is None:
+                self.toast_warning(
+                    "已跳过分类", f"「{self._category_name(category_id)}」是根分类或固定分类，不能移动"
+                )
+                continue
+            eligible.append(category_id)
+        if not eligible:
+            self.toast_warning("无法移动", "根分类与「未分类」不能移动")
             return
-        target_id = self.tree.current_category()
-        if target_id in set(ids) | self._descendant_category_ids(set(ids)):
-            self.toast_warning("无法移动", "目标分类是所选分类本身或它的子分类")
+        # 目标里不能出现要移动的分类本身或它的子孙，否则会把分类移动到自己的子树里
+        blocked = set(eligible) | self._descendant_category_ids(set(eligible))
+        candidates = [node for node in nodes if node.category.id not in blocked]
+        picker = CategoryPickerDialog(
+            candidates,
+            parent=self.window(),
+            title="选择目标分类",
+            tip=f"把移动表里的 {len(eligible)} 个分类移动到：",
+            allow_root=True,
+        )
+        if not picker.exec():
             return
+        target_id = picker.category_id()
         target = self.category_repo.get(target_id) if target_id is not None else None
-        target_name = target.name if target is not None else "顶层"
-        if all(self.category_repo.get(category_id).parent_id == target_id for category_id in ids):
-            self.toast_warning("无需移动", f"勾选的分类已经在「{target_name}」下")
+        target_name = self.taxonomy.path_of(target) if target is not None else "顶层"
+        if all(self.category_repo.get(category_id).parent_id == target_id for category_id in eligible):
+            self.toast_warning("无需移动", f"要移动的分类已经在「{target_name}」下")
             return
-        names = "、".join(self._category_name(category_id) for category_id in ids)
+        names = "、".join(self._category_name(category_id) for category_id in eligible)
         if not confirm(
             self,
             "批量移动分类",
-            f"将 {len(ids)} 个分类（{names}）移动到「{target_name}」下吗？",
+            f"将 {len(eligible)} 个分类（{names}）移动到「{target_name}」下吗？",
         ):
             return
         moved = 0
         failed = 0
-        for category_id in ids:
+        for category_id in eligible:
             category = self.category_repo.get(category_id)
             if category is None:
                 continue
@@ -1642,38 +1675,104 @@ class ManagePage(Page):
         else:
             self.toast_success("已移动分类", f"{moved} 个分类已移动到「{target_name}」")
 
-    def _on_category_batch_delete(self) -> None:
-        """批量删除勾选的分类；其中的数据变成未分类，根分类与固定分类受保护。"""
-        if self.tree.is_all_checked():
-            self.toast_warning("无法删除", "已全选「全部数据」：顶层分类不能整体删除，请只勾选要删除的子分类")
+    def _move_single_category(self, category_id: int) -> None:
+        """右键「移动到另一个分类下」：只动点中的这一个分类，与勾选、多选无关。"""
+        category = self.category_repo.get(category_id)
+        if category is None or is_uncategorized(category):
+            self.toast_warning("无法移动", "「未分类」不能移动")
             return
-        ids = self._eligible_category_ids()
+        nodes = self.taxonomy.tree(user_id=self.user_service.current_id())
+        blocked = {category.id} | self._descendant_category_ids({category.id})
+        candidates = [node for node in nodes if node.category.id not in blocked]
+        dialog = CategoryPickerDialog(
+            candidates,
+            parent=self.window(),
+            title="移动到另一个分类下",
+            tip=f"把「{category.name}」移动到：",
+            allow_root=True,
+        )
+        if not dialog.exec():
+            return
+        target_id = dialog.category_id()
+        if target_id == category.parent_id:
+            self.toast_warning("无需移动", f"「{category.name}」已经在该分类下")
+            return
+        target = self.category_repo.get(target_id) if target_id is not None else None
+        target_name = self.taxonomy.path_of(target) if target is not None else "顶层"
+        if not self.taxonomy.move_category(category, target_id):
+            self.toast_warning("移动失败", f"「{category.name}」与「{target_name}」下的分类重名")
+            return
+        self.session.commit()
+        signalBus.categoriesChanged.emit()
+        self.toast_success("已移动分类", f"「{category.name}」 → {target_name}")
+        self.refresh()
+
+    def _on_category_batch_delete(self) -> None:
+        """批量删除分类：先在弹窗里现挑分类，再问下级分类保留还是一起删。
+
+        分类在弹窗里点一个加一个地挑（用户 m01929、m01932 第 1 条），不再看分类栏的
+        复选框。挑完若下面还有分类，用和右键单个删除一样的二选一弹窗问「下级分类是保留
+        还是一起删」（用户 m01604 第 3 条）；没有下级就还是一句确认。两种选择都只删分类，
+        分类里的数据一律变成未分类 —— 也就是「只保留分类里的文件」。
+        """
+        picked = self._pick_category_ids(
+            title="批量删除分类",
+            tip="点左侧分类把它加入右边的待删除列表，确认前可以随时新增或移出；"
+            "确认后再选择下级分类怎么处理。",
+            list_title="待删除分类",
+            accept_text="删除",
+            allow_nested=True,
+        )
+        if not picked:
+            return
+        ids = self._eligible_category_ids(picked)
         if not ids:
-            self.toast_warning("无法删除", "根分类与「未分类」不能删除，请先勾选普通分类")
+            self.toast_warning("无法删除", "根分类与「未分类」不能删除，请重新选择要删除的分类")
             return
         names = "、".join(self._category_name(category_id) for category_id in ids)
-        if not confirm(
+        # 只数「选中项之外」的下级分类：选中项自己不算「被一并删除的下级」
+        closure = self._descendant_category_ids(set(ids))
+        descendants = closure - set(ids)
+        # 递归删除时父级已经连同下级一起删掉了：同时被选中的下级不必再处理一遍
+        covered = set(ids) & closure
+        recursive = False
+        if descendants:
+            subject = (
+                f"选中的 {len(ids)} 个分类（{names}）"
+                if len(ids) <= 3
+                else f"选中的 {len(ids)} 个分类"
+            )
+            dialog = CategoryDeleteDialog(subject, len(descendants), self.window())
+            if not dialog.exec():
+                return
+            recursive = dialog.recursive()
+        elif not confirm(
             self,
             "批量删除分类",
-            f"确定删除勾选的 {len(ids)} 个分类（{names}）吗？其中的数据会变成未分类。",
+            f"确定删除选中的 {len(ids)} 个分类（{names}）吗？其中的数据会变成未分类。",
         ):
             return
         removed = 0
         skipped = 0
         affected = 0
         for category_id in ids:
+            if recursive and category_id in covered:
+                continue
             category = self.category_repo.get(category_id)
             if category is None:
                 continue
-            if self.taxonomy.promotion_conflicts(category):
+            # 下级一起删时不必再挡「下级重名」：那些下级本来就要被删掉
+            if not recursive and self.taxonomy.promotion_conflicts(category):
                 skipped += 1
                 continue
-            affected += self.taxonomy.delete_category(category)
+            affected += self.taxonomy.delete_category(category, recursive=recursive)
             removed += 1
         self.session.commit()
         signalBus.categoriesChanged.emit()
         signalBus.itemsChanged.emit()
         message = f"已删除 {removed} 个分类，{affected} 项数据已变为未分类"
+        if recursive:
+            message += f"，{len(descendants)} 个下级分类已一并删除"
         if skipped:
             message += f"；{skipped} 个分类有重名子分类，请单独删除"
             self.toast_warning("已删除分类", message)
@@ -1684,13 +1783,24 @@ class ManagePage(Page):
         self.refresh()
 
     def _on_category_batch_rename(self) -> None:
-        """批量重命名勾选的分类：与文件重命名同一套「改名前先看清单」的流程。"""
-        if self.tree.is_all_checked():
-            self.toast_warning("无法重命名", "已全选「全部数据」：请只勾选要重命名的分类")
+        """批量重命名分类：先在弹窗里现挑分类，再走「改名前先看清单」的流程。
+
+        挑分类的方式与批量删除 / 批量移动一致（用户 m01929、m01932 第 1 条），只看弹窗里
+        挑中的分类，不看分类栏的复选框，也不再把「下级全选」的上级牵连进来。
+        """
+        picked = self._pick_category_ids(
+            title="批量重命名分类",
+            tip="点左侧分类把它加入右边的待重命名列表，确认前可以随时新增或移出；"
+            "确认后逐项填写新名称。",
+            list_title="待重命名分类",
+            accept_text="下一步",
+            allow_nested=True,
+        )
+        if not picked:
             return
-        ids = self._renameable_category_ids()
+        ids = self._renameable_category_ids(picked)
         if not ids:
-            self.toast_warning("无法重命名", "「未分类」不能重命名，请先勾选要改名的分类")
+            self.toast_warning("无法重命名", "「未分类」不能重命名，请重新选择要改名的分类")
             return
         selected = set(ids)
         entries: list[tuple[int, str]] = []
@@ -1799,18 +1909,12 @@ class ManagePage(Page):
         )
 
     def _on_category_selected(self, category_id) -> None:
+        """分类栏里点中的分类变了：只决定中间列表显示哪个分类的数据，与批量操作无关。"""
         if self._syncing_tree:
             return
         self._category_id = category_id
-        # Ctrl / Shift 多选：选中即勾选，交给勾选集合走批量操作，不要退回单选过滤
-        if len(self.tree.selected_categories()) > 1:
-            self._on_category_checked()
-            return
-        self._checked_categories.clear()
-        self._checked_items.clear()
-        self.tree.set_checked_categories(set())
-        self._sync_category_buttons()
         self._page = 0
+        # 勾选集为空时中间列表跟着选中的分类走；勾了复选框则优先按勾选显示
         self._load_items()
 
     def _on_tree_action(self, action: str, category_id) -> None:
@@ -1820,6 +1924,9 @@ class ManagePage(Page):
                 "固定分类",
                 f"「{UNCATEGORIZED_NAME}」是固定分类，不能重命名、删除或创建子分类",
             )
+            return
+        if action == "move":
+            self._move_single_category(int(category_id))
             return
         if action == "add":
             dialog = TextInputDialog("新建分类", "分类名称", parent=self.window(), hint="留空以取消")
@@ -1860,30 +1967,47 @@ class ManagePage(Page):
             category = self.category_repo.get(category_id)
             if category is None:
                 return
-            if not confirm(self, "删除分类", f"确定删除分类「{category.name}」吗？其中的数据会变成未分类。"):
-                return
-            renames: dict[int, str] = {}
-            conflicts = self.taxonomy.promotion_conflicts(category)
-            if conflicts:
-                repo = self.taxonomy.categories
-                rows = [
-                    (child.name, repo.unique_sibling_name(child.name, category.parent_id, child.user_id))
-                    for child in conflicts
-                ]
-                dialog = CategoryConflictDialog(rows, self.window())
+            descendants = self._descendant_category_ids({category.id})
+            recursive = False
+            if descendants:
+                # 有下级分类时才需要问：下级是保留（自动上移一层）还是跟着一起删
+                dialog = CategoryDeleteDialog(category.name, len(descendants), self.window())
                 if not dialog.exec():
                     return
-                if not dialog.auto():
-                    renames = {
-                        child.id: name
-                        for child, name in zip(conflicts, dialog.renames())
-                        if name
-                    }
-            count = self.taxonomy.delete_category(category, renames=renames)
+                recursive = dialog.recursive()
+            elif not confirm(
+                self, "删除分类", f"确定删除分类「{category.name}」吗？其中的数据会变成未分类。"
+            ):
+                return
+            renames: dict[int, str] = {}
+            if not recursive:
+                # 下级分类要上移：与父级下已有分类重名的先处理掉（一起删除时不需要）
+                conflicts = self.taxonomy.promotion_conflicts(category)
+                if conflicts:
+                    repo = self.taxonomy.categories
+                    rows = [
+                        (child.name, repo.unique_sibling_name(child.name, category.parent_id, child.user_id))
+                        for child in conflicts
+                    ]
+                    dialog = CategoryConflictDialog(rows, self.window())
+                    if not dialog.exec():
+                        return
+                    if not dialog.auto():
+                        renames = {
+                            child.id: name
+                            for child, name in zip(conflicts, dialog.renames())
+                            if name
+                        }
+            count = self.taxonomy.delete_category(
+                category, renames=renames, recursive=recursive
+            )
             self.session.commit()
             signalBus.categoriesChanged.emit()
             signalBus.itemsChanged.emit()
-            self.toast_success("已删除分类", f"{count} 项数据已变为未分类")
+            message = f"{count} 项数据已变为未分类"
+            if recursive:
+                message += f"，{len(descendants)} 个下级分类已一并删除"
+            self.toast_success("已删除分类", message)
 
 
 CARD_MIN_WIDTH = 240

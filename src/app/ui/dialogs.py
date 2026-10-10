@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QTreeWidgetItem
+from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QTreeWidgetItem
 from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -12,7 +12,10 @@ from qfluentwidgets import (
     ComboBox,
     FluentIcon,
     LineEdit,
+    ListWidget,
     MessageBoxBase,
+    PushButton,
+    RadioButton,
     SingleDirectionScrollArea,
     SpinBox,
     StrongBodyLabel,
@@ -26,6 +29,7 @@ from ..core.runtime.naming import NUMBER_STYLES, RENAME_MODES, RenameRule, build
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
 from .framework import IconTextButton, clear_scroll_background, format_size
+from .components.category_tree import KIND_CATEGORY, KIND_ROLE, CategoryTree
 from .components.keyword_input import KeywordInput
 from .components.tag_picker import TagPicker
 from .components.tri_state_list import TriStateList
@@ -111,30 +115,336 @@ class CategoryConflictDialog(MessageBoxBase):
         return [edit.text().strip() for edit in self._edits]
 
 
+class CategoryDeleteDialog(MessageBoxBase):
+    """删除分类时选下级分类怎么处理（用户 m01073 第 2 条）。
+
+    「保留下级分类」= 原来的行为：下级分类上移一层（与同级重名的再单独改名），本分类里的
+    数据变成未分类；「下级分类一起删除」= 逐层删掉下级分类，各级分类里的数据全部变成未分类
+    （也就是只保留文件，不保留分类）。
+    """
+
+    def __init__(self, name: str, child_count: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.viewLayout.addWidget(SubtitleLabel("删除分类", self))
+        self.viewLayout.addWidget(
+            BodyLabel(
+                f"确定删除分类「{name}」吗？它下面还有 {child_count} 个分类，请选择怎么处理：",
+                self,
+            )
+        )
+        # RadioButton 继承 QRadioButton：同一个父控件下自动互斥
+        self.keep_radio = RadioButton("保留下级分类（下级分类上移一层）", self)
+        self.keep_radio.setChecked(True)
+        self.remove_radio = RadioButton("下级分类一起删除（只保留分类里的文件）", self)
+        self.viewLayout.addWidget(self.keep_radio)
+        self.viewLayout.addWidget(self.remove_radio)
+
+        self.yesButton.setText("删除")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(460)
+
+    def recursive(self) -> bool:
+        """True = 连下级分类一起删除。"""
+        return bool(self.remove_radio.isChecked())
+
+
+def _category_paths(nodes) -> dict[int, str]:
+    """分类 id → 从根目录开始的完整路径（`一级 / 二级 / 三级`），用来区分同名分类。"""
+    name_by_id: dict[int, str] = {}
+    parent_by_id: dict[int, int | None] = {}
+    for node in nodes or ():
+        name_by_id[node.category.id] = node.category.name
+        parent_by_id[node.category.id] = node.category.parent_id
+    paths: dict[int, str] = {}
+    for category_id in name_by_id:
+        parts: list[str] = []
+        cursor: int | None = category_id
+        guard = 0
+        while cursor is not None and cursor in name_by_id and guard <= len(name_by_id):
+            parts.append(name_by_id[cursor])
+            cursor = parent_by_id.get(cursor)
+            guard += 1
+        paths[category_id] = " / ".join(reversed(parts))
+    return paths
+
+
 class CategoryPickerDialog(MessageBoxBase):
-    """选择目标分类：把选中的数据（一项或多项）移动到别处。"""
+    """选择目标分类：用弹窗呈现分类栏那样的层级结构，而不是一个扁平的同名列表。
+
+    从根目录开始按一级 / 二级 / 三级……逐层缩进，同名分类靠层级天然区分开（用户 m00117
+    第 4 条）。单选：只有被直接点中的分类算选中，「下级全选」不会连带把上级算进来；
+    分类可以折叠，默认全部展开；内容超出弹窗范围时上下左右都能滚动。
+    """
 
     def __init__(
         self,
-        categories: list[tuple[int, str]],
+        nodes,
         parent: QWidget | None = None,
         count: int = 1,
+        *,
+        title: str = "移动到分类",
+        tip: str | None = None,
+        current: int | None = None,
+        allow_root: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.titleLabel = SubtitleLabel("移动到分类", self)
-        self.viewLayout.addWidget(self.titleLabel)
-        self.viewLayout.addWidget(BodyLabel(f"把选中的 {count} 项数据移动到：", self))
-        self.category_box = ComboBox(self)
-        for category_id, label in categories:
-            self.category_box.addItem(label, userData=category_id)
-        self.category_box.setMinimumWidth(320)
-        self.viewLayout.addWidget(self.category_box)
-        self.yesButton.setText("移动")
+        self._allow_root = bool(allow_root)
+        self._path_by_id = _category_paths(nodes)
+        self._selected: int | None = None
+
+        self.viewLayout.addWidget(SubtitleLabel(title, self))
+        self.viewLayout.addWidget(BodyLabel(tip or f"把选中的 {count} 项数据移动到：", self))
+
+        # 这里不需要复选框：勾选是「中间列表显示哪些数据」的语义，与「选哪个分类」无关
+        self.tree = CategoryTree(self)
+        # 不建「全部数据」根行：弹窗只要分类本身；若先建再隐藏根行，顶级分类会跟着一起消失
+        self.tree.set_nodes(nodes, expand=True, checkable=False, show_root=False)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree.setMinimumSize(380, 300)
+        self.tree.categorySelected.connect(self._on_category_selected)
+        self.viewLayout.addWidget(self.tree)
+
+        self.target_hint = CaptionLabel(self)
+        self.viewLayout.addWidget(self.target_hint)
+
+        self.yesButton.setText("确定")
         self.cancelButton.setText("取消")
-        self.widget.setMinimumWidth(420)
+        self.widget.setMinimumWidth(460)
+
+        if current is not None and current in self._path_by_id:
+            # 预选当前分类：`select_category()` 会走到 `_on_category_selected()`，不用重复设置
+            self.tree.select_category(current)
+        self._show_target(None)
+
+    def _on_category_selected(self, category_id) -> None:
+        self._show_target(None if category_id is None else int(category_id))
+
+    def _show_target(self, category_id: int | None) -> None:
+        """更新提示与「确定」按钮：`allow_root` 时「没选分类」就等于放到顶层。"""
+        if category_id is not None:
+            self._selected = category_id
+            self.target_hint.setText(f"目标：{self._path_by_id.get(category_id, '')}")
+            self.yesButton.setEnabled(True)
+            return
+        self._selected = None
+        if self._allow_root:
+            self.target_hint.setText("目标：顶层（不放入任何分类）")
+            self.yesButton.setEnabled(True)
+        else:
+            self.target_hint.setText("尚未选择分类")
+            self.yesButton.setEnabled(False)
 
     def category_id(self) -> int | None:
-        return self.category_box.currentData()
+        """选中的分类 id；`allow_root=True` 且没有选分类时返回 None（顶层）。"""
+        return self._selected
+
+
+class CategoryPickerComboBox(ComboBox):
+    """分类下拉：不弹默认的扁平同名列表，改为打开层级分类选择弹窗。
+
+    保留 `ComboBox` 的 items 接口（`itemData` / `currentData` / `currentText` / `count` /
+    `setCurrentIndex`），调用方与自检都不用改取值方式；只有「怎么挑」换成了层级弹窗
+    （用户 m00117 第 4 条）。
+    """
+
+    def __init__(self, parent: QWidget | None = None, *, title: str = "选择分类") -> None:
+        super().__init__(parent)
+        self._picker_nodes: list = []
+        self._picker_title = title
+
+    def set_picker_nodes(self, nodes, *, title: str | None = None) -> None:
+        """把分类树节点喂给弹窗（就是 `TaxonomyService.tree()` 的返回值）。"""
+        self._picker_nodes = list(nodes or ())
+        if title:
+            self._picker_title = title
+
+    def _showComboMenu(self) -> None:
+        if not self._picker_nodes or not self.isEnabled():
+            return
+        dialog = CategoryPickerDialog(
+            self._picker_nodes,
+            self.window(),
+            title=self._picker_title,
+            tip="选择一个分类：",
+            current=self.currentData(),
+        )
+        if not dialog.exec():
+            return
+        wanted = dialog.category_id()
+        for index in range(self.count()):
+            if self.itemData(index) == wanted:
+                self.setCurrentIndex(index)
+                return
+
+
+class CategorySelectDialog(MessageBoxBase):
+    """批量分类操作的第一步：点一个加一个，攒成一张待处理清单。
+
+    批量移动 / 批量删除 / 批量重命名都要先挑出「对哪些分类下手」，所以把这段收在这里
+    （用户 m01929、m01932 第 1 条）。清单里的复选框只用于中间列表显示哪些数据，挑分类
+    靠点击，因此这里 `checkable=False`：点左侧分类树里的分类就把它加进右边清单，
+    加入的瞬间校验层级关系，确认前可以随时移出某一项，也可以继续新增。
+
+    `allow_nested=False`（批量移动）时，新分类与清单里已有分类互为上级 / 下级就拒绝加入
+    ——它们一起移动必然冲突；`allow_nested=True`（批量删除 / 重命名）时父子一起操作是
+    合法的（父级连下级一起删 / 父级和子级都改名），照常加入。
+    """
+
+    def __init__(
+        self,
+        nodes,
+        parent: QWidget | None = None,
+        *,
+        title: str,
+        tip: str,
+        list_title: str,
+        accept_text: str = "确定",
+        allow_nested: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        nodes = list(nodes or ())
+        self._parent_by_id: dict[int, int | None] = {
+            node.category.id: node.category.parent_id for node in nodes
+        }
+        self._path_by_id = _category_paths(nodes)
+        self._list_title = list_title
+        self._allow_nested = bool(allow_nested)
+        self._order: list[int] = []
+
+        self.viewLayout.addWidget(SubtitleLabel(title, self))
+        self.viewLayout.addWidget(BodyLabel(tip, self))
+
+        row = QHBoxLayout()
+        row.setSpacing(12)
+
+        self.tree = CategoryTree(self)
+        # 不建「全部数据」根行：弹窗只要分类本身；若先建再隐藏根行，顶级分类会跟着一起消失
+        self.tree.set_nodes(nodes, expand=True, checkable=False, show_root=False)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree.setMinimumSize(320, 300)
+        self.tree.categorySelected.connect(self._on_tree_selected)
+        # 单选模式下重复点同一行不会再有「选中变化」，而移出清单之后想重新点回来正需要它
+        self.tree.itemClicked.connect(self._on_tree_clicked)
+        row.addWidget(self.tree, 1)
+
+        side = QVBoxLayout()
+        side.setSpacing(8)
+        side.addWidget(StrongBodyLabel(list_title, self))
+        self.move_list = ListWidget(self)
+        self.move_list.setMinimumSize(280, 260)
+        side.addWidget(self.move_list, 1)
+        self.remove_button = PushButton("移出选中项", self)
+        self.remove_button.clicked.connect(self._remove_selected)
+        side.addWidget(self.remove_button)
+        row.addLayout(side, 1)
+        self.viewLayout.addLayout(row)
+
+        self.message = CaptionLabel("", self)
+        self.viewLayout.addWidget(self.message)
+
+        self.yesButton.setText(accept_text)
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(760)
+        self._sync_buttons()
+
+    # ------------------------------------------------------------------ 待处理清单
+    def category_ids(self) -> list[int]:
+        """确认要处理的分类 id（按加入顺序）。"""
+        return list(self._order)
+
+    def _on_tree_selected(self, category_id) -> None:
+        if category_id is None:
+            return
+        self._add(int(category_id))
+
+    def _on_tree_clicked(self, item, _column: int) -> None:
+        """单击兜底：分类被移出清单之后，重复点同一行仍要能再加回来。
+
+        `categorySelected` 只在「选中项变化」时发信号，单选模式下点已经选中的那一行不会
+        再发；所以这里补一个点击回调。已经在清单里的直接跳过，提示交给 `_on_tree_selected`。
+        """
+        if item.data(0, KIND_ROLE) != KIND_CATEGORY:
+            return
+        category_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if category_id is None or int(category_id) in self._order:
+            return
+        self._add(int(category_id))
+
+    def _add(self, category_id: int) -> None:
+        if category_id in self._order:
+            self.message.setText(
+                f"「{self._path_by_id.get(category_id, '')}」已经在{self._list_title}里了。"
+            )
+            return
+        if not self._allow_nested:
+            for other in self._order:
+                if not self._related(category_id, other):
+                    continue
+                relation = "上级" if self._is_ancestor(category_id, other) else "下级"
+                self.message.setText(
+                    f"无法加入：「{self._path_by_id.get(category_id, '')}」是{self._list_title}里"
+                    f"「{self._path_by_id.get(other, '')}」的{relation}分类，它们不能一起批量操作。"
+                )
+                return
+        self._order.append(category_id)
+        self.message.setText(f"已加入：「{self._path_by_id.get(category_id, '')}」")
+        self._rebuild_list()
+
+    def _related(self, left: int, right: int) -> bool:
+        return self._is_ancestor(left, right) or self._is_ancestor(right, left)
+
+    def _is_ancestor(self, ancestor: int, node_id: int) -> bool:
+        """`ancestor` 是不是 `node_id` 的上级（含它自己）。"""
+        cursor: int | None = node_id
+        guard = 0
+        while cursor is not None and guard <= len(self._parent_by_id):
+            if cursor == ancestor:
+                return True
+            cursor = self._parent_by_id.get(cursor)
+            guard += 1
+        return False
+
+    def _remove_selected(self) -> None:
+        picked = {
+            item.data(Qt.ItemDataRole.UserRole) for item in self.move_list.selectedItems()
+        }
+        if not picked:
+            self.message.setText("先在移动表里选中要移出的项。")
+            return
+        self._order = [category_id for category_id in self._order if category_id not in picked]
+        self.message.setText(f"已移出 {len(picked)} 项。")
+        self._rebuild_list()
+
+    def _rebuild_list(self) -> None:
+        self.move_list.clear()
+        for category_id in self._order:
+            path = self._path_by_id.get(category_id, "")
+            item = QListWidgetItem(path)
+            item.setData(Qt.ItemDataRole.UserRole, category_id)
+            item.setToolTip(path)
+            self.move_list.addItem(item)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.yesButton.setEnabled(bool(self._order))
+
+
+class CategoryMoveDialog(CategorySelectDialog):
+    """批量移动分类的第一步：攒一张「分类移动表」（保留原名，批量移动流程与自检都依赖它）。"""
+
+    def __init__(
+        self, nodes, parent: QWidget | None = None, *, title: str = "批量移动分类"
+    ) -> None:
+        super().__init__(
+            nodes,
+            parent,
+            title=title,
+            tip="点左侧分类把它加入右边的移动表，加入时会检查层级关系；"
+            "确认后统一移动到同一个目标分类。",
+            list_title="分类移动表",
+            accept_text="下一步",
+            allow_nested=False,
+        )
 
 
 class ItemEditDialog(MessageBoxBase):
@@ -148,6 +458,7 @@ class ItemEditDialog(MessageBoxBase):
         global_tags: set[str] | None = None,
         info: list[tuple[str, str]] | None = None,
         parent: QWidget | None = None,
+        nodes: list | None = None,
     ) -> None:
         super().__init__(parent)
         self._item = item
@@ -178,9 +489,12 @@ class ItemEditDialog(MessageBoxBase):
         self.name_edit = LineEdit(self)
         self.name_edit.setText(item.name)
 
-        self.category_box = ComboBox(self)
+        self.category_box = CategoryPickerComboBox(self)
         for category_id, label in categories:
             self.category_box.addItem(label, userData=category_id)
+        if nodes:
+            # 有层级节点时，点下拉不再弹同名扁平列表，而是弹层级分类选择弹窗
+            self.category_box.set_picker_nodes(nodes)
         if UNCATEGORIZED_NAME not in [label.lstrip("　") for _, label in categories]:
             # 兜底：用户还没有真实的「未分类」分类时，保留一个空占位项。
             self.category_box.addItem(UNCATEGORIZED_NAME)
@@ -602,7 +916,11 @@ class KeywordManagerDialog(TriStateManagerDialog):
 __all__ = [
     "BatchRenameDialog",
     "CategoryConflictDialog",
+    "CategoryDeleteDialog",
+    "CategoryMoveDialog",
+    "CategoryPickerComboBox",
     "CategoryPickerDialog",
+    "CategorySelectDialog",
     "DuplicateDialog",
     "ItemEditDialog",
     "KeywordManagerDialog",

@@ -933,6 +933,70 @@ def category_shared_conflicts(case: Case) -> None:
     assert back[0].category_id != theirs.id, "不应把数据放进他人的分类"
 
 
+@check("category_delete_recursive", "services")
+def category_delete_recursive(case: Case) -> None:
+    """递归删除分类：下级分类一并删掉，但每个分类里的数据都留下来变成「未分类」。
+
+    这是右键删除分类里「下级分类一起删除」那一项的底层行为（用户 m01073 第 2 条）。
+    """
+    from app.repositories import CategoryRepository, ItemFilter, ItemRepository
+    from app.services import ImportService, TaxonomyService, UserService
+
+    session = case.session
+    categories = CategoryRepository(session)
+    taxonomy = TaxonomyService(session)
+    users = UserService(session)
+    owner = users.current()
+    assert owner is not None, "缺少默认用户"
+    root = categories.by_name("学习资料")
+    assert root is not None, "默认分类「学习资料」缺失"
+    service = ImportService(session)
+
+    # 保留式删除（recursive=False）：下级分类上移一层，父级消失、子级还在
+    outer = taxonomy.create_category("保留外层", parent_id=root.id, user_id=owner.id)
+    inner = taxonomy.create_category("保留内层", parent_id=outer.id, user_id=owner.id)
+    assert outer is not None and inner is not None, "创建保留式分类失败"
+    assert service.import_text("外层笔记", "内容", category_id=outer.id) is not None, "导入文本失败"
+    assert service.import_text("内层笔记", "内容", category_id=inner.id) is not None, "导入文本失败"
+    session.commit()
+    assert taxonomy.delete_category(outer) == 1, "保留式删除应搬走外层的 1 条数据"
+    session.commit()
+    siblings = {row.id: row for row in categories.children_of(root.id)}
+    assert outer.id not in siblings, "外层分类没被删掉"
+    assert inner.id in siblings, f"保留式删除应把内层分类上移到根下，实际 {sorted(siblings)}"
+    assert siblings[inner.id].parent_id == root.id, "内层分类应挂到外层原来的父级下"
+
+    # 递归删除：整棵子树消失，数据全部落到「未分类」
+    top = taxonomy.create_category("待删顶层", parent_id=root.id, user_id=owner.id)
+    mid = taxonomy.create_category("待删中层", parent_id=top.id, user_id=owner.id)
+    keep = taxonomy.create_category("旁边不动", parent_id=root.id, user_id=owner.id)
+    assert top is not None and mid is not None and keep is not None, "创建待删分类失败"
+    for name, category in (("顶层笔记", top), ("中层笔记", mid), ("旁边笔记", keep)):
+        assert service.import_text(name, "内容", category_id=category.id) is not None, "导入文本失败"
+    session.commit()
+
+    assert taxonomy.delete_category(top, recursive=True) == 2, "递归删除应搬走 2 条数据"
+    session.commit()
+
+    assert not categories.children_of(top.id), "递归删除后顶层分类的下级应一并消失"
+    assert categories.get(mid.id) is None, "中层分类没被删掉"
+    assert categories.get(top.id) is None, "顶层分类没被删掉"
+    # 这里只按 id 直查，不走 descendants()：被删掉的实例已 expunge，
+    # 再顺着已缓存的 .children 关系往下走会撞 DetachedInstanceError
+    assert categories.get(keep.id) is not None, "不该误删旁边的分类"
+    assert keep.id in {row.id for row in categories.children_of(root.id)}, "旁边的分类应还在根下"
+
+    rows = {row.name: row for row in ItemRepository(session).query(ItemFilter())}
+    fallback = taxonomy.uncategorized_category(owner.id)
+    assert fallback is not None, "缺少固定的「未分类」分类"
+    for name in ("顶层笔记", "中层笔记"):
+        row = rows.get(name)
+        assert row is not None, f"递归删除把数据一起删掉了：{name}"
+        assert row.category_id == fallback.id, f"{name} 应变成未分类，实际 {row.category_id}"
+    beside = rows.get("旁边笔记")
+    assert beside is not None and beside.category_id == keep.id, "旁边的分类不该受影响"
+
+
 @check("import_tree_skips_meta", "services")
 def import_tree_skips_meta(case: Case) -> None:
     """按目录树导入时跳过库元数据目录 `.datamanager`，只收用户文件并保留层级。"""

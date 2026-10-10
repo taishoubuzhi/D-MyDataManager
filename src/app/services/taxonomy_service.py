@@ -220,6 +220,9 @@ class TaxonomyService:
         上移的子分类与父级下已有分类重名时：renames 里给了新名字就用它，否则自动加 -1、-2 后缀，
         保证同一父级下不会出现重名分类。分类的目录一并处理：上移的子分类目录跟着搬，
         本分类目录里的数据搬到目标分类目录（默认「未分类」= 用户名文件夹根目录）后收掉。
+
+        返回搬到目标分类的数据条数；recursive 时把一并删掉的下级分类里的数据也算进去
+        （用户看到的提示是「N 项数据已变为未分类」，漏掉下级会少报）。
         """
         if is_uncategorized(category):
             logger.warning("「{}」是固定分类，不能删除", UNCATEGORIZED_NAME)
@@ -230,9 +233,10 @@ class TaxonomyService:
         old_chain = libraries.category_chain(category.id)
         parent_chain = libraries.category_chain(category.parent_id)
         user_ids = libraries.category_users(category)
+        nested = 0
         for child in self.categories.children_of(category.id):
             if recursive:
-                self.delete_category(child, move_items_to, recursive=True)
+                nested += self.delete_category(child, move_items_to, recursive=True)
                 continue
             child_chain = libraries.category_chain(child.id)
             child.name = self.categories.unique_sibling_name(
@@ -262,7 +266,7 @@ class TaxonomyService:
         self.session.execute(delete(Category).where(Category.id == category.id))
         # 目录里可能还剩没登记的散件：并进父级目录后收掉空壳
         libraries.dissolve_category_dir(library, old_chain, parent_chain, user_ids)
-        return len(items)
+        return nested + len(items)
 
     def path_of(self, category: Category | None) -> str:
         return self.categories.path_of(category)

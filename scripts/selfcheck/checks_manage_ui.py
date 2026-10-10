@@ -28,6 +28,7 @@ from app.services import (
 from app.ui.components.category_tree import (
     FIXED_SUFFIX,
     ITEM_ROLE,
+    KIND_ALL,
     KIND_FILE,
     KIND_ROLE,
     category_label,
@@ -35,6 +36,21 @@ from app.ui.components.category_tree import (
 )
 from app.ui.components.item_card import ItemListRow
 from app.ui.framework import tri_state
+
+
+def _drop_widget(widget) -> None:
+    """立即销毁一个独立控件（整棵控件树排队销毁在本机 PyQt6 上会崩）。"""
+    if widget is None:
+        return
+    from PyQt6 import sip
+    from PyQt6.QtWidgets import QApplication
+
+    widget.close()
+    widget.setParent(None)
+    sip.delete(widget)
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
 
 
 def _tree_item(page, category_id):
@@ -80,7 +96,7 @@ def _widget_texts(root) -> list[str]:
 
 @check("manage_category_filter", "pages")
 def manage_category_filter(case: Case) -> None:
-    """分类树勾选驱动列表、「未分类」固定语义、筛选栏不再有分类分组。"""
+    """分类树：复选框只管中间列表显示哪些数据，批量操作改在弹窗里现挑分类。"""
     fixture, window = build_window(case)
     problems: list[str] = []
     try:
@@ -90,12 +106,19 @@ def manage_category_filter(case: Case) -> None:
         user_id = page.user_service.current_id()
         taxonomy = TaxonomyService(session)
 
-        # 造第二个子分类：父分类的三态聚合才可观察
+        # 造一棵三层分类 root > sub > leaf，另给 root 添一个无关子分类 sibling
         sibling = taxonomy.create_category("Java", parent_id=fixture.category_root)
+        sub = taxonomy.create_category("框架", parent_id=fixture.category_root)
+        leaf = taxonomy.create_category(
+            "前端", parent_id=sub.id if sub is not None else fixture.category_root
+        )
         session.commit()
         page.refresh()
         sibling_id = sibling.id if sibling is not None else None
+        sub_id = sub.id if sub is not None else None
+        leaf_id = leaf.id if leaf is not None else None
         child_id, root_id = fixture.category_child, fixture.category_root
+        assert sub_id is not None and leaf_id is not None, "没能造出三层分类，检查无法继续"
 
         panel = page.filter_panel
         if hasattr(panel, "category_section"):
@@ -104,8 +127,12 @@ def manage_category_filter(case: Case) -> None:
             problems.append(f"筛选栏分组数 {len(panel.sections())} != 3（类型/标签/关键词）")
         if not hasattr(page, "_checked_categories"):
             problems.append("管理页缺少 _checked_categories 状态")
-        if page.category_move_button.isEnabled() or page.category_delete_button.isEnabled():
-            problems.append("未勾选任何分类时批量移动/删除按钮仍可用")
+        if not (
+            page.category_move_button.isEnabled()
+            and page.category_delete_button.isEnabled()
+            and page.category_rename_button.isEnabled()
+        ):
+            problems.append("批量重命名 / 移动 / 删除按钮应当始终可用（挑分类改在弹窗里）")
         root_item = _tree_item(page, None)
         if root_item is None:
             problems.append("分类树缺少「全部数据」根节点")
@@ -123,6 +150,23 @@ def manage_category_filter(case: Case) -> None:
             for item in page.tree._iter_items():
                 item.setCheckState(0, Qt.CheckState.Unchecked)
             app.processEvents()
+
+        def select(category_ids) -> None:
+            """模拟点分类名 / Ctrl 多选：设置的是「选中状态」，与复选框无关。"""
+            page.tree.clearSelection()
+            items = []
+            for category_id in category_ids:
+                item = _tree_item(page, category_id)
+                assert item is not None, f"分类树缺少节点 {category_id}"
+                items.append(item)
+            for item in items:
+                page.tree.setCurrentItem(item)
+                item.setSelected(True)
+            app.processEvents()
+
+        def reset_selection() -> None:
+            """把选中状态清空（只留「全部数据」根节点为 current）。"""
+            select([None])
 
         def expected_total(checked: set[int]) -> int:
             """与 _load_items 同口径：勾选集为空时退回当前选中分类，并含全部子孙分类。"""
@@ -142,25 +186,7 @@ def manage_category_filter(case: Case) -> None:
         def visible_ok(checked: set[int]) -> list[int]:
             return [item.category_id for item in page._items if item.category_id not in checked]
 
-        def stub_batch(confirm: bool) -> list[tuple[str, int]]:
-            """桩掉二次确认与分类增删，记录批量操作真正作用到的分类。"""
-            calls: list[tuple[str, int]] = []
-            saved_confirm = manage_module.confirm
-            saved_delete = page.taxonomy.delete_category
-            saved_move = page.taxonomy.move_category
-            manage_module.confirm = lambda *args, **kwargs: confirm
-            page.taxonomy.delete_category = lambda category, *a, **k: calls.append(("delete", category.id)) or True
-            page.taxonomy.move_category = lambda category, parent, *a, **k: calls.append(("move", category.id)) or True
-            try:
-                page._on_category_batch_delete()
-                page._on_category_batch_move()
-            finally:
-                manage_module.confirm = saved_confirm
-                page.taxonomy.delete_category = saved_delete
-                page.taxonomy.move_category = saved_move
-            return calls
-
-        # 勾选一个子分类：计数与列表跟随勾选集合，父分类半选
+        # 复选框只影响中间列表显示哪些数据：不改选中状态，也与批量操作互不相干
         set_checked(child_id)
         checked = set(page._checked_categories)
         if checked != {child_id}:
@@ -174,24 +200,19 @@ def manage_category_filter(case: Case) -> None:
             problems.append(
                 f"只勾选部分子分类时父分类状态为 {_tree_item(page, root_id).checkState(0).name}"
             )
-        if not (page.category_move_button.isEnabled() and page.category_delete_button.isEnabled()):
-            problems.append("勾选可操作的子分类后批量按钮未启用")
+        if page._selected:
+            problems.append(f"勾选复选框后中间列表被改动了选中项：{sorted(page._selected)}")
 
-        # 再勾另一个子分类：子分类全选后父分类也变为勾选，三者都在勾选集合里
-        if sibling_id is not None:
-            set_checked(sibling_id)
-            checked = set(page._checked_categories)
-            if checked != {root_id, child_id, sibling_id}:
-                problems.append(f"勾选两个子分类后 _checked_categories={sorted(checked)}")
-            if _tree_item(page, root_id).checkState(0) != Qt.CheckState.Checked:
-                problems.append(
-                    f"子分类全选后父分类状态为 {_tree_item(page, root_id).checkState(0).name}"
-                )
-
-        # 二次确认被拒绝：不得改动任何分类
-        refused = stub_batch(confirm=False)
-        if refused:
-            problems.append(f"二次确认被拒绝后仍执行了批量操作：{refused}")
+        # 继续勾选：root 的子分类全部勾上后父分类变为全选
+        set_checked(sibling_id)
+        set_checked(sub_id)  # 勾父会级联勾中 leaf
+        checked = set(page._checked_categories)
+        if not {root_id, child_id, sibling_id, sub_id, leaf_id} <= checked:
+            problems.append(f"勾选 root 下全部子分类后 _checked_categories={sorted(checked)}")
+        if _tree_item(page, root_id).checkState(0) != Qt.CheckState.Checked:
+            problems.append(
+                f"子分类全选后父分类状态为 {_tree_item(page, root_id).checkState(0).name}"
+            )
 
         # 取消勾选：计数回到全量，根节点恢复未勾选
         clear_checks()
@@ -203,52 +224,115 @@ def manage_category_filter(case: Case) -> None:
         tree_root = _tree_item(page, None)
         if tree_root.checkState(0) != Qt.CheckState.Unchecked:
             problems.append(f"取消勾选后根节点状态为 {tree_root.checkState(0).name}")
-        if page.category_move_button.isEnabled() or page.category_delete_button.isEnabled():
-            problems.append("取消勾选后批量按钮仍可用")
 
-        # 只勾选无子分类的根分类：不可批量操作
-        nodes = taxonomy.tree(user_id=user_id)
-        child_parents = {node.category.parent_id for node in nodes if node.depth > 0}
+        # 批量操作不看选中状态、也不看复选框：挑分类一律在弹窗里现挑（用户 m01929、m01932）
+        if hasattr(page, "strict_select_box"):
+            problems.append("「严格选择」开关应当已经移除")
+        if hasattr(page, "_sync_category_buttons") or hasattr(page, "_selected_category_ids"):
+            problems.append("页面上仍留着「按选中状态更新批量按钮」的旧方法")
+
+        # 传给谁就只处理谁：点中下级不会再把「全选状态」的上级牵连进来
+        reset_selection()
+        select([leaf_id])
+        if page._eligible_category_ids([leaf_id]) != [leaf_id]:
+            problems.append(
+                f"只挑下级时可移动 / 删除的分类={page._eligible_category_ids([leaf_id])}，应只有 leaf"
+            )
+        if page._renameable_category_ids([leaf_id]) != [leaf_id]:
+            problems.append("只挑下级时可重命名的分类被牵连了上级")
+        if page._eligible_category_ids([sub_id, leaf_id]) != [sub_id, leaf_id]:
+            problems.append("父子一起挑时两个都该保留（批量删除 / 重命名允许父子同选）")
+        if page._eligible_category_ids([root_id]):
+            problems.append("根分类不该算作可移动 / 删除对象")
+        if page._renameable_category_ids([root_id]) != [root_id]:
+            problems.append("根分类应当可以改名")
+
+        # 「未分类」是固定分类：连重命名也不允许
         uncategorized = taxonomy.uncategorized_category(user_id=user_id)
-        plain_roots = [
-            node.category.id
-            for node in nodes
-            if node.depth == 0
-            and node.category.id not in child_parents
-            and node.category.id != root_id
-            and not is_uncategorized(node.category)
-        ]
-        if not plain_roots:
-            problems.append("没有可用于验证的「无子分类根分类」")
-        else:
-            set_checked(plain_roots[0])
-            if page.category_move_button.isEnabled() or page.category_delete_button.isEnabled():
-                problems.append("只勾选无子分类的根分类时批量按钮仍可用")
-            clear_checks()
+        if uncategorized is None or not is_uncategorized(uncategorized):
+            problems.append("默认用户没有固定的「未分类」分类")
+            raise AssertionError("；".join(problems))
+        if page._eligible_category_ids([uncategorized.id]):
+            problems.append("「未分类」不能移动 / 删除")
+        if page._renameable_category_ids([uncategorized.id]):
+            problems.append("「未分类」不能重命名")
+        reset_selection()
 
-        # 勾选父分类：后代全部勾选，批量删除只动勾选范围内的子分类
-        set_checked(root_id)
-        checked = set(page._checked_categories)
-        descendants = {child_id} | ({sibling_id} if sibling_id is not None else set())
-        if not descendants <= checked:
-            problems.append(f"勾选父分类后后代未全部进入勾选集合：{sorted(checked)}")
-        if any(
-            item.checkState(0) != Qt.CheckState.Checked
-            for item in page.tree._iter_items()
-            if item.data(0, Qt.ItemDataRole.UserRole) in descendants
-        ):
-            problems.append("勾选父分类后后代节点没有全部勾选")
-        deleted = [category_id for action, category_id in stub_batch(confirm=True) if action == "delete"]
-        top_ids = {node.category.id for node in nodes if node.category.parent_id is None}
-        if not deleted:
-            problems.append("勾选父分类后批量删除没有作用到任何分类")
-        if set(deleted) & top_ids:
-            problems.append(f"批量删除动了顶层分类：{sorted(set(deleted) & top_ids)}")
-        if not set(deleted) <= checked:
-            problems.append(f"批量删除越出勾选范围：{sorted(set(deleted) - checked)}")
-        clear_checks()
+        # 批量删除 / 重命名：分类从弹窗里现挑，只有挑中的那些被处理
+        def stub_batch(confirm_result: bool, picked: list[int]) -> list[tuple[str, int]]:
+            """桩掉挑分类的弹窗、二次确认、重命名弹窗与分类增删改，记录批量操作作用到的分类。"""
+            calls: list[tuple[str, int]] = []
+            saved_confirm = manage_module.confirm
+            saved_select_dialog = manage_module.CategorySelectDialog
+            saved_rename_dialog = manage_module.BatchRenameDialog
+            saved_delete = page.taxonomy.delete_category
+            saved_rename = page.taxonomy.rename_category
+            manage_module.confirm = lambda *args, **kwargs: confirm_result
 
-        # 勾选「全部数据」：全选但不可批量操作，且 hint 提示改为子分类
+            class _FakeSelectDialog:
+                """假的选择弹窗：直接给出「用户挑中的分类」。"""
+
+                def __init__(self, nodes, parent=None, **kwargs):
+                    self._picked = list(picked)
+
+                def exec(self):
+                    return True
+
+                def category_ids(self):
+                    return list(self._picked)
+
+            class _FakeRenameDialog:
+                def __init__(self, entries, parent=None, reserved=None):
+                    self._entries = list(entries)
+
+                def exec(self):
+                    # 重命名的「确认」就是弹窗自身的确定键，跟着同一个开关走
+                    return confirm_result
+
+                def renames(self):
+                    return [(category_id, f"{name}-改名") for category_id, name in self._entries]
+
+            manage_module.CategorySelectDialog = _FakeSelectDialog
+            manage_module.BatchRenameDialog = _FakeRenameDialog
+            page.taxonomy.delete_category = (
+                lambda category, *a, **k: calls.append(("delete", category.id)) or True
+            )
+            page.taxonomy.rename_category = (
+                lambda category, name, *a, **k: calls.append(("rename", category.id)) or True
+            )
+            try:
+                page._on_category_batch_delete()
+                page._on_category_batch_rename()
+            finally:
+                manage_module.confirm = saved_confirm
+                manage_module.CategorySelectDialog = saved_select_dialog
+                manage_module.BatchRenameDialog = saved_rename_dialog
+                page.taxonomy.delete_category = saved_delete
+                page.taxonomy.rename_category = saved_rename
+            return calls
+
+        refused = stub_batch(confirm_result=False, picked=[leaf_id])
+        if refused:
+            problems.append(f"二次确认被拒绝后仍执行了批量操作：{refused}")
+
+        calls = stub_batch(confirm_result=True, picked=[leaf_id])
+        deleted = {category_id for action, category_id in calls if action == "delete"}
+        renamed = {category_id for action, category_id in calls if action == "rename"}
+        if deleted != {leaf_id}:
+            problems.append(f"只挑了下级时批量删除作用到的分类={sorted(deleted)}，应只有 leaf")
+        if renamed != {leaf_id}:
+            problems.append(f"只挑了下级时批量重命名作用到的分类={sorted(renamed)}，应只有 leaf")
+
+        calls = stub_batch(confirm_result=True, picked=[sub_id, leaf_id])
+        deleted = {category_id for action, category_id in calls if action == "delete"}
+        if deleted != {sub_id, leaf_id}:
+            problems.append(f"父子一起挑时批量删除作用到的分类={sorted(deleted)}")
+        calls = stub_batch(confirm_result=True, picked=[])
+        if calls:
+            problems.append(f"弹窗里什么都没挑时批量操作仍然动手：{calls}")
+        reset_selection()
+
+        # 勾选「全部数据」：中间列表显示全量数据即可；复选框与批量操作互不相干（用户 m01932）
         all_item = _tree_item(page, None)
         all_item.setCheckState(0, Qt.CheckState.Checked)
         app.processEvents()
@@ -268,11 +352,7 @@ def manage_category_filter(case: Case) -> None:
         )
         if page._total != per_category:
             problems.append(f"全选后计数 {page._total} != 各分类之和 {per_category}")
-        if page.category_move_button.isEnabled() or page.category_delete_button.isEnabled():
-            problems.append("全选「全部数据」后批量按钮仍可用")
-        if page.category_hint.text() == "勾选分类可批量移动或删除":
-            problems.append("全选「全部数据」后提示语没有改成只处理子分类")
-        blocked = stub_batch(confirm=True)
+        blocked = stub_batch(confirm_result=True, picked=[])
         if blocked:
             problems.append(f"全选「全部数据」时批量操作仍然动手：{blocked}")
         if set(page._checked_categories) != checked:
@@ -284,13 +364,14 @@ def manage_category_filter(case: Case) -> None:
             problems.append(f"取消「全部数据」后 _checked_categories={sorted(page._checked_categories)}")
 
         # 「未分类」是固定分类：无菜单、树里带固定后缀、不可批量处理
-        if uncategorized is None or not is_uncategorized(uncategorized):
-            problems.append("默认用户没有固定的「未分类」分类")
-        else:
-            if menu_entries(fixed=True):
-                problems.append(f"固定分类仍有右键菜单：{menu_entries(fixed=True)}")
-            if not menu_entries(fixed=False):
-                problems.append("普通分类没有右键菜单")
+        if menu_entries(fixed=True):
+            problems.append(f"固定分类仍有右键菜单：{menu_entries(fixed=True)}")
+        if not menu_entries(fixed=False):
+            problems.append("普通分类没有右键菜单")
+        if ("move", "移动到另一个分类下") not in menu_entries(fixed=False):
+            problems.append(f"普通分类菜单缺少「移动到另一个分类下」：{menu_entries(fixed=False)}")
+        if True:
+            nodes = taxonomy.tree(user_id=user_id)
             roots = [node for node in nodes if node.depth == 0]
             if not roots or roots[-1].category.id != uncategorized.id:
                 problems.append("「未分类」不是分类树里最后一个根分类")
@@ -311,9 +392,261 @@ def manage_category_filter(case: Case) -> None:
         dispose_window(window)
 
 
+@check("manage_category_move", "pages")
+def manage_category_move(case: Case) -> None:
+    """分类移动：右键单个移动的两步流程、批量移动表在加入时就拒绝上下级关系。"""
+    from app.ui.dialogs import CategoryMoveDialog
+
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    dialog = None
+    try:
+        app = ensure_app()
+        page = window.manage_page
+        session = case.session
+        user_id = page.user_service.current_id()
+        taxonomy = TaxonomyService(session)
+
+        sub = taxonomy.create_category("框架", parent_id=fixture.category_root, user_id=user_id)
+        leaf = taxonomy.create_category(
+            "前端",
+            parent_id=sub.id if sub is not None else fixture.category_root,
+            user_id=user_id,
+        )
+        # 顶层分类必须带归属，否则 tree(user_id=...) 不会把它列出来
+        other = taxonomy.create_category("数据库", user_id=user_id)
+        session.commit()
+        page.refresh()
+        sub_id = sub.id if sub is not None else None
+        leaf_id = leaf.id if leaf is not None else None
+        other_id = other.id if other is not None else None
+        root_id = fixture.category_root
+        assert sub_id is not None and leaf_id is not None and other_id is not None
+
+        nodes = taxonomy.tree(user_id=user_id)
+        dialog = CategoryMoveDialog(nodes, parent=window)
+
+        # 弹窗里的分类树必须真的显示分类：早先是先建好「全部数据」根行再 setHidden(True)，
+        # 而 Qt 隐藏父项会连整棵子树一起藏掉，弹窗因此整片空白（用户 m01073 第 1 条）
+        visible_ids = {
+            item.data(0, Qt.ItemDataRole.UserRole)
+            for item in dialog.tree._iter_items()
+            if not item.isHidden()
+        }
+        if not {root_id, sub_id, leaf_id, other_id} <= visible_ids:
+            problems.append(
+                "移动弹窗的分类树没显示全部分类：可见="
+                f"{sorted(value for value in visible_ids if isinstance(value, int))}"
+            )
+        if dialog.tree.topLevelItem(0).data(0, KIND_ROLE) == KIND_ALL:
+            problems.append("移动弹窗的分类树不该再有「全部数据」根行")
+        if dialog.tree.currentItem() is not None:
+            problems.append("移动弹窗刚打开时不该预选任何分类")
+
+        # 加入表：与表内分类互为祖先 / 后代都要拒绝，无关分类才能共存
+        dialog._add(sub_id)
+        if dialog.category_ids() != [sub_id]:
+            problems.append(f"加入分类后移动表={dialog.category_ids()}")
+        dialog._add(leaf_id)
+        if dialog.category_ids() != [sub_id]:
+            problems.append(f"加入表内分类的子级后移动表={dialog.category_ids()}（应当拒绝）")
+        dialog._add(root_id)
+        if dialog.category_ids() != [sub_id]:
+            problems.append(f"加入表内分类的父级后移动表={dialog.category_ids()}（应当拒绝）")
+        dialog._add(other_id)
+        if set(dialog.category_ids()) != {sub_id, other_id}:
+            problems.append(f"加入无关分类后移动表={dialog.category_ids()}")
+        dialog._add(sub_id)
+        if set(dialog.category_ids()) != {sub_id, other_id}:
+            problems.append("重复加入同一个分类没有被忽略")
+
+        # 移出：点在列表上再移出
+        dialog.move_list.setCurrentRow(0)
+        dialog._remove_selected()
+        if len(dialog.category_ids()) != 1:
+            problems.append(f"移出选中项后移动表={dialog.category_ids()}")
+
+        # 页面级两步流程：移动表 → 目标弹窗 → 确认 → 真正移动
+        picked = [leaf_id]
+        target = other_id
+        seen_candidates: list[list[int]] = []
+        recorded: list[tuple[int, int | None]] = []
+        saved_move_dialog = manage_module.CategoryMoveDialog
+        saved_picker_dialog = manage_module.CategoryPickerDialog
+        saved_confirm = manage_module.confirm
+        saved_move = page.taxonomy.move_category
+
+        class _FakeMoveDialog:
+            def __init__(self, nodes, parent=None, **kwargs):
+                self._nodes = nodes
+
+            def exec(self):
+                return True
+
+            def category_ids(self):
+                return list(picked)
+
+        class _FakePickerDialog:
+            def __init__(self, candidates, parent=None, **kwargs):
+                seen_candidates.append([node.category.id for node in candidates])
+
+            def exec(self):
+                return True
+
+            def category_id(self):
+                return target
+
+        manage_module.CategoryMoveDialog = _FakeMoveDialog
+        manage_module.CategoryPickerDialog = _FakePickerDialog
+        manage_module.confirm = lambda *args, **kwargs: True
+        page.taxonomy.move_category = (
+            lambda category, parent_id, *a, **k: recorded.append((category.id, parent_id)) or True
+        )
+        try:
+            # 先把 sub 选中，验证「被移动分类自己与它的子孙」会从目标候选里剔掉
+            picked = [sub_id]
+            page.tree.clearSelection()
+            item = _tree_item(page, sub_id)
+            page.tree.setCurrentItem(item)
+            item.setSelected(True)
+            app.processEvents()
+            page._on_category_batch_move()
+            if not seen_candidates:
+                problems.append("批量移动没有打开目标选择弹窗")
+            else:
+                forbidden = {sub_id, leaf_id}
+                if forbidden & set(seen_candidates[-1]):
+                    problems.append(
+                        f"目标候选中出现了被移动的分类或其子孙：{sorted(forbidden & set(seen_candidates[-1]))}"
+                    )
+                if other_id not in seen_candidates[-1]:
+                    problems.append(
+                        f"目标候选中缺少可用的无关分类：候选={sorted(seen_candidates[-1])}"
+                    )
+            if recorded != [(sub_id, other_id)]:
+                problems.append(f"批量移动实际移动={recorded}，应为 [({sub_id}, {other_id})]")
+
+            # 右键单个移动：只动点中的那一个分类
+            recorded.clear()
+            picked = [other_id]
+            target = root_id
+            page._move_single_category(other_id)
+            if recorded != [(other_id, root_id)]:
+                problems.append(f"右键移动实际移动={recorded}，应为 [({other_id}, {root_id})]")
+        finally:
+            manage_module.CategoryMoveDialog = saved_move_dialog
+            manage_module.CategoryPickerDialog = saved_picker_dialog
+            manage_module.confirm = saved_confirm
+            page.taxonomy.move_category = saved_move
+
+        assert not problems, "分类移动：" + "；".join(problems[:12])
+    finally:
+        if dialog is not None:
+            _drop_widget(dialog)
+        dispose_window(window)
+
+
+@check("manage_category_delete", "pages")
+def manage_category_delete(case: Case) -> None:
+    """右键删除分类：有下级分类时先问「保留 / 一起删除」，选一起删除就走递归删除。"""
+    from app.ui.dialogs import CategoryDeleteDialog
+
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        ensure_app()
+        page = window.manage_page
+        session = case.session
+        user_id = page.user_service.current_id()
+        taxonomy = TaxonomyService(session)
+
+        sub = taxonomy.create_category("待删分类", parent_id=fixture.category_root, user_id=user_id)
+        assert sub is not None
+        leaf = taxonomy.create_category("待删子级", parent_id=sub.id, user_id=user_id)
+        assert leaf is not None
+        solo = taxonomy.create_category("没有下级的分类", user_id=user_id)
+        assert solo is not None
+        session.commit()
+        page.refresh()
+
+        # 弹窗本身：默认「保留下级分类」，只有勾右边才是递归删除
+        real = CategoryDeleteDialog("演示分类", 2, parent=window)
+        try:
+            if real.recursive():
+                problems.append("删除分类弹窗默认应是「保留下级分类」（非递归）")
+            real.remove_radio.setChecked(True)
+            if not real.recursive():
+                problems.append("勾上「下级分类一起删除」后 recursive() 应变 True")
+        finally:
+            _drop_widget(real)
+
+        asked: list[tuple[str, int]] = []
+        confirmed: list[tuple] = []
+        deleted: list[tuple[int, bool, dict]] = []
+        mode = {"recursive": False}
+
+        class _FakeDeleteDialog:
+            def __init__(self, name, child_count, parent=None):
+                asked.append((name, child_count))
+
+            def exec(self):
+                return True
+
+            def recursive(self):
+                return mode["recursive"]
+
+        saved_dialog = manage_module.CategoryDeleteDialog
+        saved_confirm = manage_module.confirm
+        saved_delete = page.taxonomy.delete_category
+        manage_module.CategoryDeleteDialog = _FakeDeleteDialog
+        manage_module.confirm = lambda *args, **kwargs: confirmed.append(args) or True
+        page.taxonomy.delete_category = (
+            lambda category, *a, **k: deleted.append(
+                (category.id, bool(k.get("recursive")), dict(k))
+            )
+            or 3
+        )
+        try:
+            deleted.clear()
+            asked.clear()
+            page._on_tree_action("delete", sub.id)
+            if asked != [("待删分类", 1)]:
+                problems.append(f"有 1 个下级分类时应弹二选一弹窗并带上数量，实际 {asked}")
+            if [row[0] for row in deleted] != [sub.id] or deleted[0][1]:
+                problems.append(f"选「保留下级分类」时应非递归删除，实际 {deleted}")
+
+            deleted.clear()
+            mode["recursive"] = True
+            page._on_tree_action("delete", sub.id)
+            if len(deleted) != 1 or not deleted[0][1]:
+                problems.append(f"选「一起删除」时应递归删除，实际 {deleted}")
+            if not deleted[0][2].get("recursive"):
+                problems.append(f"递归删除应以关键字 recursive=True 传给服务，实际 {deleted[0][2]}")
+
+            # 没有下级分类时不弹二选一，走原来的简易确认
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            page._on_tree_action("delete", solo.id)
+            if asked:
+                problems.append(f"没有下级分类时不该弹二选一弹窗，实际 {asked}")
+            if len(confirmed) != 1:
+                problems.append(f"没有下级分类时应走一次简易确认，实际确认 {len(confirmed)} 次")
+            if [row[0] for row in deleted] != [solo.id]:
+                problems.append(f"没有下级分类时也应删除该分类，实际 {deleted}")
+        finally:
+            manage_module.CategoryDeleteDialog = saved_dialog
+            manage_module.confirm = saved_confirm
+            page.taxonomy.delete_category = saved_delete
+
+        assert not problems, "删除分类：" + "；".join(problems[:12])
+    finally:
+        dispose_window(window)
+
+
 @check("manage_category_files", "pages")
 def manage_category_files(case: Case) -> None:
-    """「仅显示分类」：关掉后分类栏列出文件、未分类的文件挂到「全部数据」下、勾选联动中间列表。"""
+    """「仅显示分类」：关掉后分类栏列出文件、未分类的文件挂到「全部数据」下、勾选驱动显示范围。"""
     from app.core.config import config
 
     fixture, window = build_window(case)
@@ -374,14 +707,14 @@ def manage_category_files(case: Case) -> None:
             if not row.flags() & Qt.ItemFlag.ItemIsUserCheckable:
                 problems.append(f"文件行 {row.text(0)} 没有复选框")
 
-        # 勾选一个文件：中间列表显示并选中它
+        # 勾选一个文件：中间列表显示它，但不改动中间列表的选中项
         if own_rows:
             own_rows[0].setCheckState(0, Qt.CheckState.Checked)
             app.processEvents()
             if page._checked_items != {fixture.text_item}:
                 problems.append(f"勾选文件后 _checked_items={sorted(page._checked_items)}")
-            if fixture.text_item not in page._selected:
-                problems.append("勾选文件后中间列表没有选中它")
+            if page._selected:
+                problems.append(f"勾选文件后中间列表被改动了选中项：{sorted(page._selected)}")
             if not any(item.id == fixture.text_item for item in page._items):
                 problems.append("勾选文件后中间列表没有显示它")
 
@@ -397,7 +730,7 @@ def manage_category_files(case: Case) -> None:
                     )
         clear_checks()
 
-        # 勾选分类：它下面的文件一起被勾上，中间列表显示并选中这些数据
+        # 勾选分类：它下面的文件一起被勾上，中间列表跟着显示这些数据
         if child_item is not None:
             child_item.setCheckState(0, Qt.CheckState.Checked)
             app.processEvents()
@@ -408,11 +741,9 @@ def manage_category_files(case: Case) -> None:
                 for row in file_rows(fixture.text_item)
             ):
                 problems.append("勾选分类后它下面的文件没有一起勾上")
-            if fixture.text_item not in page._selected:
-                problems.append("勾选分类后中间列表没有选中它下面的数据")
             clear_checks()
 
-        # 勾选父分类：子孙分类里的数据一起显示并选中
+        # 勾选父分类：子孙分类里的数据一起显示
         parent_item = _tree_item(page, fixture.category_root)
         if parent_item is not None:
             parent_item.setCheckState(0, Qt.CheckState.Checked)
@@ -425,8 +756,6 @@ def manage_category_files(case: Case) -> None:
             )
             if page._total != expect:
                 problems.append(f"勾选父分类后计数 {page._total} != 含子分类的 {expect}")
-            if fixture.text_item not in page._selected:
-                problems.append("勾选父分类后中间列表没有选中子分类里的数据")
             clear_checks()
 
         # 点分类栏里的文件行：中间列表跳到并选中它
@@ -1475,6 +1804,31 @@ def category_sort(case: Case) -> None:
         if labels() != ["Beta (5)", "alpha (20)", "Gamma (1)"]:
             problems.append(f"按最新导入逆序不对：{labels()}")
 
+        # 选择类弹窗用 show_root=False：不建「全部数据」根行，顶级分类直接当 QTreeWidget
+        # 顶层项。早先是先建根行再 setHidden(True)，而 Qt 隐藏父项会连整棵子树一起藏掉，
+        # 弹窗就整片空白了（用户 m01073 第 1 条）。
+        bare = CategoryTree()
+        bare.set_nodes([node(1, "Beta", 5, None), node(2, "alpha", 20, None)], show_root=False)
+        bare.apply_sort()
+        top_labels = [bare.topLevelItem(i).text(0) for i in range(bare.topLevelItemCount())]
+        if sorted(top_labels) != ["Beta (5)", "alpha (20)"]:
+            problems.append(f"show_root=False 时顶级分类应直接成为顶层项，实际 {top_labels}")
+        if any(
+            bare.topLevelItem(i).data(0, KIND_ROLE) == KIND_ALL
+            for i in range(bare.topLevelItemCount())
+        ):
+            problems.append("show_root=False 时不该再建「全部数据」根行")
+        bare.set_sort("name", False)
+        bare.apply_sort()
+        bare_order = [bare.topLevelItem(i).text(0) for i in range(bare.topLevelItemCount())]
+        if bare_order != ["alpha (20)", "Beta (5)"]:
+            problems.append(f"没有根行时排序应重排 QTreeWidget 顶层项，实际 {bare_order}")
+        # 找不到分类时不能顺手选中第一项：上层会把「当前项」当成用户的真实选择
+        bare.select_category(999)
+        if bare.currentItem() is not None:
+            problems.append(f"没有根行且找不到分类时应清空当前项，实际 {bare.currentItem().text(0)}")
+        sip.delete(bare)
+
         if not tree.wordWrap() or tree.textElideMode() != Qt.TextElideMode.ElideNone:
             problems.append("分类名太长时应在分类栏里换行显示，而不是被省略号截断")
 
@@ -1512,3 +1866,312 @@ def category_sort(case: Case) -> None:
         app.processEvents()
 
     assert not problems, "分类栏排序：" + "；".join(problems[:8])
+
+
+@check("manage_category_branch_click", "pages")
+def manage_category_branch_click(case: Case) -> None:
+    """点展开箭头只切换展开、不选中分类；点分类名才选中（用户 m01549 第 1 条）。"""
+    import types
+    from unittest import mock
+
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtTest import QTest
+
+    from app.ui.components.category_tree import CategoryTree
+
+    app = ensure_app()
+    problems: list[str] = []
+
+    def node(category_id: int, name: str, parent_id: int | None = None, depth: int = 0):
+        category = types.SimpleNamespace(id=category_id, name=name, parent_id=parent_id)
+        return types.SimpleNamespace(
+            category=category, depth=depth, item_count=0, total_count=0, latest_at=None
+        )
+
+    def item_of(tree, category_id: int):
+        return next(
+            item
+            for item in tree._iter_items()
+            if item.data(0, Qt.ItemDataRole.UserRole) == category_id
+        )
+
+    with mock.patch("app.ui.components.category_tree.is_uncategorized", return_value=False):
+        tree = CategoryTree()
+        tree.resize(420, 240)
+        # 父级下面挂两个子级，箭头才有得展开
+        tree.set_nodes(
+            [
+                node(1, "父级"),
+                node(2, "子级甲", parent_id=1, depth=1),
+                node(3, "子级乙", parent_id=1, depth=1),
+            ],
+            total=0,
+        )
+        tree.show()
+        app.processEvents()
+        try:
+            parent_item = item_of(tree, 1)
+            if parent_item.childCount() != 2:
+                problems.append(f"前置条件：父级应有 2 个子级，实际 {parent_item.childCount()}")
+            # 根行默认是收起的（config.expandCategories 默认 False），不展开它下面的分类
+            # 就没有布局，visualItemRect 会是空矩形，点击位置算不出来
+            tree.topLevelItem(0).setExpanded(True)
+            tree.collapseItem(parent_item)
+            app.processEvents()
+            row = tree.visualItemRect(parent_item)
+            if row.isEmpty():
+                problems.append("前置条件：分类行没有布局出矩形，无法模拟点击")
+            # 展开箭头的判定区与 qfluentwidgets 的公式一致：x 在
+            # (level * indentation + 20, +10) 之间，`CategoryTree` 的 indentation 是 14
+            level = 0
+            cursor = parent_item
+            while cursor.parent() is not None:
+                cursor = cursor.parent()
+                level += 1
+            arrow_x = level * tree.indentation() + 24
+
+            QTest.mouseClick(
+                tree.viewport(),
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(arrow_x, row.center().y()),
+            )
+            app.processEvents()
+            if not parent_item.isExpanded():
+                problems.append("点展开箭头应把分类展开")
+            if parent_item.isSelected() or tree.selected_categories():
+                problems.append(
+                    f"点展开箭头不该选中分类，实际选中 {tree.selected_categories()}"
+                )
+            if tree.currentItem() is parent_item:
+                problems.append("点展开箭头不该把分类设成当前项（上层会当成用户选中了它）")
+
+            # 对照：点分类名（箭头右侧）才选中它
+            QTest.mouseClick(
+                tree.viewport(),
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+                QPoint(arrow_x + 80, row.center().y()),
+            )
+            app.processEvents()
+            if not parent_item.isSelected():
+                problems.append("点分类名应选中该分类")
+            if tree.selected_categories() != [1]:
+                problems.append(
+                    f"点分类名后选中的分类应为 [1]，实际 {tree.selected_categories()}"
+                )
+        finally:
+            tree.hide()
+            _drop_widget(tree)
+    assert not problems, "分类栏点展开箭头：" + "；".join(problems[:8])
+
+
+@check("manage_category_expand_keep", "pages")
+def manage_category_expand_keep(case: Case) -> None:
+    """刷新时重排分类不该把用户展开的分类收起来（用户 m01604）。"""
+    import types
+    from unittest import mock
+
+    from app.ui.components.category_tree import CategoryTree
+
+    app = ensure_app()
+    problems: list[str] = []
+
+    def node(category_id: int, name: str, parent_id: int | None = None, depth: int = 0):
+        category = types.SimpleNamespace(id=category_id, name=name, parent_id=parent_id)
+        return types.SimpleNamespace(
+            category=category, depth=depth, item_count=0, total_count=0, latest_at=None
+        )
+
+    def item_of(tree, category_id: int):
+        return next(
+            item
+            for item in tree._iter_items()
+            if item.data(0, Qt.ItemDataRole.UserRole) == category_id
+        )
+
+    nodes = [
+        node(1, "父级"),
+        node(2, "子级甲", parent_id=1, depth=1),
+        node(3, "子级乙", parent_id=1, depth=1),
+        node(4, "孙级甲", parent_id=2, depth=2),
+        node(5, "孙级乙", parent_id=2, depth=2),
+    ]
+
+    with mock.patch("app.ui.components.category_tree.is_uncategorized", return_value=False):
+        tree = CategoryTree()
+        tree.set_nodes(nodes, total=0)
+        tree.apply_sort()
+        # 用户手动展开父级与中间那一层
+        item_of(tree, 1).setExpanded(True)
+        item_of(tree, 2).setExpanded(True)
+        app.processEvents()
+        if not item_of(tree, 1).isExpanded() or not item_of(tree, 2).isExpanded():
+            problems.append("前置条件：程序展开后应处于展开状态")
+
+        # 刷新时排队跑的那一次重排：摘行再插回，展开状态必须还在
+        tree._sort_dirty = True
+        tree.apply_sort()
+        if not item_of(tree, 1).isExpanded():
+            problems.append("重排后用户展开的分类被收起了（刷新看起来就像「自动折叠」）")
+        if not item_of(tree, 2).isExpanded():
+            problems.append("重排后中间那一层的展开状态也丢了")
+
+        # 完整刷新：整棵树重建 + 再重排一次
+        tree.set_nodes(nodes, total=0)
+        tree.apply_sort()
+        if not item_of(tree, 1).isExpanded() or not item_of(tree, 2).isExpanded():
+            problems.append("刷新（重建 + 重排）后应保留用户展开过的分类")
+
+        # 用户收起过的分类不该被强行展开
+        item_of(tree, 1).setExpanded(False)
+        app.processEvents()
+        tree._sort_dirty = True
+        tree.apply_sort()
+        if item_of(tree, 1).isExpanded():
+            problems.append("用户收起过的分类不该在重排后被展开")
+        _drop_widget(tree)
+    assert not problems, "分类栏刷新保留展开状态：" + "；".join(problems[:8])
+
+
+@check("manage_category_batch_delete", "pages")
+def manage_category_batch_delete(case: Case) -> None:
+    """批量删除分类：有下级分类时先问「保留 / 一起删除」，没有下级才走简易确认。"""
+    fixture, window = build_window(case)
+    problems: list[str] = []
+    try:
+        ensure_app()
+        page = window.manage_page
+        taxonomy = TaxonomyService(case.session)
+        user_id = page.user_service.current_id()
+
+        parent = taxonomy.create_category(
+            "批量父级", parent_id=fixture.category_root, user_id=user_id
+        )
+        child = taxonomy.create_category("批量子级", parent_id=parent.id, user_id=user_id)
+        # 注意：只有非根分类才可删，所以「没有下级的分类」也要挂在根分类下面
+        solo = taxonomy.create_category(
+            "批量无下级", parent_id=fixture.category_root, user_id=user_id
+        )
+        assert parent is not None and child is not None and solo is not None
+        case.session.commit()
+        page.refresh()
+
+        asked: list[tuple[str, int]] = []
+        confirmed: list[tuple] = []
+        deleted: list[tuple[int, bool]] = []
+        toasts: list[tuple[str, str]] = []
+        state = {"ids": [parent.id], "recursive": False, "accept": True}
+
+        class _FakeDeleteDialog:
+            def __init__(self, name, child_count, parent=None):
+                asked.append((name, child_count))
+
+            def exec(self):
+                return state["accept"]
+
+            def recursive(self):
+                return state["recursive"]
+
+        saved = (
+            manage_module.CategoryDeleteDialog,
+            manage_module.confirm,
+            page.taxonomy.delete_category,
+            page._pick_category_ids,
+            page.toast_success,
+            page.toast_warning,
+        )
+        manage_module.CategoryDeleteDialog = _FakeDeleteDialog
+        manage_module.confirm = lambda *args, **kwargs: confirmed.append(args) or True
+        page.taxonomy.delete_category = (
+            lambda category, *a, **k: deleted.append(
+                (category.id, bool(k.get("recursive")))
+            )
+            or 2
+        )
+        # 桩掉「挑分类」的弹窗：直接把它当成用户挑中了 state["ids"] 里的分类
+        page._pick_category_ids = lambda **kwargs: list(state["ids"])
+        page.toast_success = lambda title, message: toasts.append((title, message))
+        page.toast_warning = lambda title, message: toasts.append((title, message))
+        try:
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            toasts.clear()
+            page._on_category_batch_delete()
+            if len(asked) != 1 or asked[0][1] != 1:
+                problems.append(f"有下级分类时应弹二选一并报出下级数量，实际 {asked}")
+            if confirmed:
+                problems.append(f"有下级分类时不该再走简易确认，实际 {confirmed}")
+            if deleted != [(parent.id, False)]:
+                problems.append(f"选「保留下级分类」时应非递归删除，实际 {deleted}")
+
+            deleted.clear()
+            asked.clear()
+            toasts.clear()
+            state["recursive"] = True
+            page._on_category_batch_delete()
+            if deleted != [(parent.id, True)]:
+                problems.append(f"选「下级一起删除」时应递归删除，实际 {deleted}")
+            if toasts and "下级分类已一并删除" not in toasts[-1][1]:
+                problems.append(f"递归删除后的提示应说明下级一并删除，实际 {toasts[-1][1]!r}")
+
+            # 弹窗被取消：什么都不做
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            state["recursive"] = False
+            state["accept"] = False
+            page._on_category_batch_delete()
+            if deleted or confirmed:
+                problems.append("二选一弹窗被取消后不该删除任何分类")
+
+            # 没有下级分类：不弹二选一，走简易确认
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            state["accept"] = True
+            state["ids"] = [solo.id]
+            page._on_category_batch_delete()
+            if asked:
+                problems.append(f"没有下级分类时不该弹二选一，实际 {asked}")
+            if len(confirmed) != 1:
+                problems.append(f"没有下级分类时应走一次简易确认，实际 {len(confirmed)} 次")
+            if deleted != [(solo.id, False)]:
+                problems.append(f"没有下级分类时应非递归删除，实际 {deleted}")
+
+            # 弹出「挑分类」的弹窗后直接取消：什么都不做
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            toasts.clear()
+            state["ids"] = []
+            page._on_category_batch_delete()
+            if deleted or asked or confirmed or toasts:
+                problems.append("取消「挑分类」弹窗后不该做任何事")
+
+            # 只挑中「未分类」：过滤后没有可删的分类，只给提示
+            uncategorized = taxonomy.uncategorized_category(user_id=user_id)
+            assert uncategorized is not None
+            deleted.clear()
+            asked.clear()
+            confirmed.clear()
+            toasts.clear()
+            state["ids"] = [uncategorized.id]
+            page._on_category_batch_delete()
+            if deleted or asked or confirmed:
+                problems.append("挑中的分类都不可删时不该删除任何分类")
+            if not toasts:
+                problems.append("挑中的分类都不可删时应给出提示")
+        finally:
+            (
+                manage_module.CategoryDeleteDialog,
+                manage_module.confirm,
+                page.taxonomy.delete_category,
+                page._pick_category_ids,
+                page.toast_success,
+                page.toast_warning,
+            ) = saved
+        assert not problems, "批量删除分类：" + "；".join(problems[:12])
+    finally:
+        dispose_window(window)

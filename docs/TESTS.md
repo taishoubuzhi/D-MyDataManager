@@ -13,7 +13,7 @@
 | `dataset.py` | 多样化语料生成（`Corpus` / `build_corpus`），导入类用例与 `scripts/seed_demo.py` 共用 |
 | `core/` `services/` `sdk/` `plugins/` | 按**被测对象**分目录的单元测试包（一个主题一个模块） |
 | `verify.py` | 门禁聚合入口：编译 → 插件桩 `--check` → `unittest discover` → 自检四层 → `pytest` → 可选依赖验收 → 打包冒烟 |
-| `smoke_checkout.py` | 打包冒烟：用 git 载荷造干净检出，在里面编译、走真实启动路径、跑门禁子集（载荷清单按 `git ls-files --cached --others --exclude-standard` 算，`AGENT.md` 与 `docs/index/` 属于 `.gitignore` 排除的本地资料，**不在**校验范围内） |
+| `smoke_checkout.py` | 打包冒烟：用 git 载荷造干净检出，在里面编译、走真实启动路径、跑门禁子集（载荷清单按 `git ls-files --cached --others --exclude-standard` 算，`AGENTS.md` 与 `docs/index/` 属于 `.gitignore` 排除的本地资料，**不在**校验范围内） |
 | `verify_optional_absence.py` | 把可降级依赖全藏起来后，程序仍能导入 / 入库 / 读回 / 回退监听 |
 | `.tmp/` | `tests/` 下所有测试共用的临时目录根（`tests/.tmp/`），运行结束自动清除（见第 5 节），已在 `.gitignore` 中 |
 
