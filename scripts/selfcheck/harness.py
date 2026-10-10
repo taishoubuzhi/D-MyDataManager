@@ -51,6 +51,7 @@ MODULES: dict[str, tuple[str, ...]] = {
         "checks_download_ui",
         "checks_download_api",
         "checks_export_api",
+        "checks_editor_ui",
         "checks_model",
         "checks_autolabel",
     ),

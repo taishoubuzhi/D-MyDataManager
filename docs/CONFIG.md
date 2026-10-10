@@ -29,8 +29,10 @@
 | 显示分类面板 | `Show-Category-Panel` | `true` | 布尔 | |
 | 显示筛选面板 | `Show-Filter-Panel` | `true` | 布尔 | |
 | 展开分类 | `Expand-Categories` | `false` | 布尔 | |
+| 分类栏只显示分类 | `Only-Show-Categories` | `true` | 布尔 | 关掉后每个分类下面直接列出该分类文件夹里的文件 |
 | 展开的筛选项 | `Expanded-Filters` | `[]` | 字符串列表 | 页面打开时恢复上次展开的项 |
 | 简化显示 | `Simple-Display` | `default` | `none`/`default`/`full` | 三挡位：不简化 / 只简化不会混淆的图标 / 完全简化。旧版布尔值（`true`/`false`）在启动时一次性换算为 `full`/`none` |
+| 显示大小 | `View-Size` | `small` | `small`/`medium`/`large` | 数据管理页列表与卡片**共用**的显示档位（封面边长 / 卡片最小宽度决定每行放几张 / 列表行高）；默认 `small` 与改动前的观感一致，「大」档封面移到标题下方居中。立即生效 |
 | 提示延迟 | `Tooltip-Delay` | `2000` | 0 – 10 000 毫秒 | `0` 表示立刻弹出 |
 | 双击动作 | `Double-Click-Action` | `viewer` | `viewer`/`editor` | 数据管理页双击条目时打开查看器还是编辑器插件 |
 | 分类排序方式 | `Category-Sort-Mode` | `default` | `default`/`name`/`count`/`latest` | 左侧分类栏排序：默认顺序（分类自己的 `sort_order`）/ 按名称 / 按数据量 / 按最新导入数据时间；「未分类」始终排最后 |
@@ -82,7 +84,21 @@
 | 重名策略 | `Duplicate-Policy` | `rename` | `skip`/`rename`/`overwrite` | |
 | 导入后存档 | `Archive-On-Import` | `true` | 布尔 | |
 
-## 8. Archive（存档与清理）
+## 8. Download（下载）
+
+| 中文名 | 键 | 默认 | 取值 | 说明 |
+| --- | --- | --- | --- | --- |
+| 下载目录 | `Path` | 空 | 路径 | 空表示用默认下载目录 |
+| 并行数 | `Concurrent` | `2` | 1 – 16 | 同时下载的任务数 |
+| 顺序下载 | `Sequential` | `false` | 布尔 | 同一时刻只跑一个任务（相当于把并行数锁成 1，但并行数本身保留） |
+| 超时 | `Timeout` | `15` | 5 – 600 秒 | 单个地址的超时时间 |
+| 重试次数 | `Retries` | `2` | 0 – 5 | 每个地址的重试次数（地址之间还会按镜像规则依次回退） |
+| 代理 | `Proxy` | 空 | URL | 如 `http://127.0.0.1:7890`；留空表示直连、走系统默认 |
+
+镜像规则不在这里：它是一份结构化列表，放在清单 `core.download_mirrors` 里（见 `app.core.download.mirror_store`），
+所以可以「变更 / 对照 / 备份 / 重置」，也可以被插件替换——这也是**配置项与清单机制的边界**（见 §10）。
+
+## 9. Archive（存档与清理）
 
 | 中文名 | 键 | 默认 | 取值 | 说明 |
 | --- | --- | --- | --- | --- |
@@ -93,7 +109,7 @@
 | 回档前确认 | `Restore-Preview` | `true` | 布尔 | 关闭后确认点只剩执行本身 |
 | 自动清理 | `Auto-Cleanup` | `true` | 布尔 | 启动后延迟一次、建档后、删档后清理无引用内容与残留文件 |
 
-## 9. 与清单机制的边界
+## 10. 与清单机制的边界
 
 * 上表全部是**配置项**，由用户在设置页改，存进 `.configs/config.json`，**不**出现在清单登记表里。
 * 清单机制（`app.sdk.manifest`）管的是 `src/app/core/runtime/runtime.json`、`src/app/core/plugins/plugins.json` 以及待迁移的 `plugins/*/data/*.json`：它们可以有「变更 / 对照 / 备份 / 重置」，也可以被插件替换，但不对应用户偏好。

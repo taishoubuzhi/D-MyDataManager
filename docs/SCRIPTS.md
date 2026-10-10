@@ -9,8 +9,8 @@
 
 | 文件 | 类型 | 作用 |
 | --- | --- | --- |
-| `selfcheck.py` | 入口 | 自检套件入口：四层共 176 项检查，末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
-| `selfcheck/` | 包 | 自检套件实现：`harness.py`（注册表 / 隔离环境 / 结果收集）、`cli.py`（命令行）、`fixtures.py`（代表数据）+ 15 个 `checks_*.py` |
+| `selfcheck.py` | 入口 | 自检套件入口：四层共 187 项检查（data 6 / services 81 / pages 96 / flows 4），末行输出 `RESULT failures=N`；`src/main.py --self-check` 也加载它 |
+| `selfcheck/` | 包 | 自检套件实现：`harness.py`（注册表 / 隔离环境 / 结果收集）、`cli.py`（命令行）、`fixtures.py`（代表数据）+ 20 个 `checks_*.py` |
 | `tmpenv.py` | 共用工具（非入口） | `tests_tmp()` / `scripts_tmp()` / `TempDir` / `redirect_paths()` / `reset_config()` / `reset_runtime_dirs()`：统一临时目录（`scripts/.tmp/`、`tests/.tmp/`）与隔离运行环境，`tests/` 也复用它 |
 | `plugin_stubs.py` | 入口 | 按插件清单生成 `stubs/dm_plugin/**.pyi`，供 IDE 解析运行期合成包 `dm_plugin.<id>`；`--check` 只校验一致性 |
 | `seed_demo.py` | 入口 | 清空运行期数据后注入一份多样化示例数据（**会操作真实数据**） |
@@ -24,8 +24,8 @@
 | 分层 | 项数 | 覆盖 | 检查模块 |
 | --- | --- | --- | --- |
 | `data` | 6 | 库结构与内容仓库（业务表、FTS5、触发器、blob 布局、配置落盘） | `checks_data.py`、`checks_model.py`、`checks_autolabel.py` |
-| `services` | 76 | 服务层行为（导入 / 导出 / 存档 / 用户 / 插件载入 / 统计） | `checks_services.py`、`checks_plugins.py`、`checks_plugin_layout.py`、`checks_editor_ui.py`、`checks_model.py`、`checks_logging.py` |
-| `pages` | 90 | 页面结构（offscreen 建页面，断言结构、权限装配与界面回归） | `checks_pages.py`、`checks_manage_ui.py`、`checks_tags_ui.py`、`checks_archive_ui.py`、`checks_contributions.py`、`checks_navigation.py`、`checks_model.py`、`checks_autolabel.py` |
+| `services` | 81 | 服务层行为（导入 / 导出 / 存档 / 用户 / 插件载入 / 编辑器 / 统计） | `checks_services.py`、`checks_plugins.py`、`checks_plugin_layout.py`、`checks_editor_ui.py`、`checks_model.py`、`checks_download_api.py`、`checks_export_api.py`、`checks_archive_bundle.py`、`checks_database_bundle.py`、`checks_logging.py` |
+| `pages` | 96 | 页面结构（offscreen 建页面，断言结构、权限装配与界面回归） | `checks_pages.py`、`checks_manage_ui.py`、`checks_tags_ui.py`、`checks_archive_ui.py`、`checks_archive_bundle.py`、`checks_database_bundle.py`、`checks_contributions.py`、`checks_navigation.py`、`checks_download_ui.py`、`checks_download_api.py`、`checks_export_api.py`、`checks_editor_ui.py`、`checks_model.py`、`checks_autolabel.py` |
 | `flows` | 4 | 端到端流程（导入 → 筛选 → 移动 → 存档 → 还原） | `checks_flows.py`、`checks_tags_ui.py` |
 
 ```powershell
@@ -42,7 +42,7 @@
   完整规范（含界面检查的窗口回收、`MODULES` 登记、项数同步）见 [`index/testing/selfcheck.md`](index/testing/selfcheck.md)。
 - 模块与分层在 `selfcheck/harness.py` 的 `MODULES` 里登记；同名的 `checks_model.py` / `checks_autolabel.py` /
   `checks_tags_ui.py` 被多层复用，只是注册的检查分层不同。
-- 门禁侧（`tests/verify.py`）不直接跑四层合一：`pages` 的 90 项 Qt offscreen 检查在同一长驻进程里偶发原生崩溃
+- 门禁侧（`tests/verify.py`）不直接跑四层合一：`pages` 的 96 项 Qt offscreen 检查在同一长驻进程里偶发原生崩溃
   （退出码 `3221225477` = `0xC0000005`），所以按 12 项一组拆进独立进程；分块后仍偶发时自动重跑一次
   （崩溃点会漂移、同一块重跑必过，属环境问题而非检查失败）。
 
