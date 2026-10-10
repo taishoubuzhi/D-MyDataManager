@@ -18,8 +18,6 @@
 /docs/index/
 
 # —— 不随发布分发的本地插件
-/plugins/example.model_usage/
-/plugins/example.ui_extension/
 /plugins/auto_keyword/
 /plugins/auto_keyword.rule/
 /plugins/auto_tag/
