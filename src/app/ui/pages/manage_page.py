@@ -1071,6 +1071,19 @@ class ManagePage(Page):
         path = self.item_service.file_path_of(item)
         return path.suffix if path is not None else ""
 
+    def _browse_sources(self) -> tuple[Path, ...]:
+        """当前这一页看着的数据项对应的盘上路径，顺序与界面一致。
+
+        查看器的上一张 / 下一张按它走：库里的文件按分类平铺、导入时又保留来源子目录，
+        同一目录常常只有一张图，「只看同目录」等于切不动（用户 m00828 报的就是这个）。
+        """
+        paths: list[Path] = []
+        for item in self._items:
+            path = self.item_service.file_path_of(item)
+            if path is not None:
+                paths.append(path)
+        return tuple(paths)
+
     def _on_open(self, item) -> None:
         """左键双击：按「设置 → 外观 → 左键双击」打开查看器（默认）或交给编辑器插件。"""
         if config.doubleClickAction.value == DOUBLE_CLICK_EDITOR:
@@ -1079,7 +1092,7 @@ class ManagePage(Page):
         path = self._path_of(item)
         if path is None:
             return
-        ok, message = open_path(path, self.window())
+        ok, message = open_path(path, self.window(), sources=self._browse_sources())
         if not ok:
             self.toast_error("无法打开", message)
 
@@ -1115,7 +1128,9 @@ class ManagePage(Page):
         path = self._path_of(item)
         if path is None:
             return
-        ok, message = open_viewer_with(path, viewer, self.window())
+        ok, message = open_viewer_with(
+            path, viewer, self.window(), sources=self._browse_sources()
+        )
         if not ok:
             self.toast_error("无法打开", message)
 

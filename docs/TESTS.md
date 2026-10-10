@@ -54,6 +54,7 @@
 | `services/test_tag_shadows.py` | 标签重名：个人标签不得与全局标签同名，重名时并入全局标签（含启动修复）。 |
 | `services/test_user_delete.py` | 用户删除：不能删除当前用户；被删用户的数据、标签、存档条目与创建者一并转移。 |
 | `services/test_viewer_fallback.py` | 系统默认程序打不开时的退路：改用能打开该格式的内置查看器；没有查看器就如实报失败（用户 m08240）。 |
+| `services/test_viewer_open_sources.py` | 查看器调度的浏览列表：`sources` 原样透传、为空时不带这个关键字、老插件不认时退回老签名、失败仍是中文提示（用户 m00828）。 |
 
 ### sdk/ —— 对应 `src/app/sdk`：插件 SDK 门面
 
@@ -70,12 +71,13 @@
 | `plugins/test_auto_tag_rule.py` | 任务 2（`auto_tag.rule`）：规则挂标签的执行逻辑、格式默认标签与插件接线。 |
 | `plugins/test_autolabel_align.py` | 自动标注共享库：数据类型 ↔ 模型对齐表（离线用例，不联网）。 |
 | `plugins/test_autolabel_pipeline.py` | 自动标注共享库：批处理管线（离线用例，`run_batch` 用假的替换）。 |
-| `plugins/test_autolabel_rules.py` | 自动标注共享库：规则模型、匹配引擎与用户规则文件（离线用例，不联网）。 |
+| `plugins/test_autolabel_rules.py` | 自动标注共享库：规则模型、匹配引擎与用户规则文件，外加规则弹窗的联动（保存按钮随输入启用、候选词能在弹窗里挑；Qt offscreen，不联网）。 |
 | `plugins/test_model_batch.py` | 模型批量调度与预定义方案：离线用例，不联网、不装包。 |
 | `plugins/test_model_download.py` | 模型下载器的用例：本地 http.server 验续传、sha256、镜像回退、暂停与磁盘预检。 |
 | `plugins/test_model_registry.py` | 模型登记表、记录、调度器与设置：离线用例，不联网、不装包。 |
 | `plugins/test_model_runtime.py` | 模型插件的运行环境与 worker 子进程后端测试。 |
 | `plugins/test_plugin_loading.py` | 插件载入：冲突只影响启用、不影响载入，且启用/禁用变更与不可用原因都要进控制台。 |
+| `plugins/test_viewer_image.py` | 内置图片查看器：浏览列表取用顺序与退回同目录、切换发出的 `pathChanged`/`captionChanged`、只剩一张时按钮禁用、外壳标题与副标题跟着换（用户 m00828；Qt offscreen，不联网）。 |
 
 ## 3. 运行方式（先判断要不要测，再判断测哪些）
 

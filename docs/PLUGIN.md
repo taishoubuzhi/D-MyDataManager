@@ -4,7 +4,7 @@
 
 - 清单字段、版本范围、依赖规则、载入阶段、状态文件等**规范**见 [`PLUGIN_PROTOCOL.md`](PLUGIN_PROTOCOL.md)。
 - 程序开放了哪些**扩展点**、会广播哪些**事件**见 [`SDK.md`](SDK.md)。
-- 现成的例子：`plugins/example.ui_extension/`（界面扩展点 + 事件）、`plugins/example.model_usage/`（消费 `model.open` 扩展接口）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/lib.model/`（模型库插件：下载 / 懒加载 / 运行环境）、`plugins/builtin.viewer.image/`（功能插件样板）。
+- 现成的例子：`plugins/auto_tag/` 与 `plugins/auto_keyword/`（真实功能插件：界面扩展点 + 事件，默认不启用）、`plugins/lib.autolabel/`（规则共享库插件）、`plugins/builtin.lib.viewer/`（查看器库插件）、`plugins/builtin.lib.editor/`（编辑器库插件）、`plugins/lib.model/`（模型库插件：下载 / 懒加载 / 运行环境）、`plugins/builtin.viewer.image/`（功能插件样板）。
 
 ## 1. 插件是什么
 
@@ -93,7 +93,7 @@ class HelloPlugin(Plugin):
 ### 2.3 写说明
 
 `plugins/demo.hello/PLUGIN.md`：一句话说清这个插件有什么用，再列出它用到的扩展点与事件。
-可以照抄 `plugins/example.ui_extension/PLUGIN.md` 的结构。
+可以照抄 `plugins/builtin.viewer.image/PLUGIN.md` 的结构。
 
 ### 2.4 跑起来
 
@@ -325,10 +325,10 @@ plugins/<id>/
 
 ## 8. 完整示例
 
-想一次看全「界面扩展点 + 事件 + 数据文件 + 选项」的写法，读这两个现成插件：
+想一次看全「界面扩展点 + 事件 + 数据文件 + 选项」的写法，读这几个现成插件（界面扩展点的完整取值契约见 [`SDK.md`](SDK.md) §5.2）：
 
-- `plugins/example.ui_extension/`：往概览卡片、工具栏、右键菜单、详情、导入筛选、设置页各贡献一样东西，并订阅 5 个事件；它的 `PLUGIN.md` 是各插件说明文档的模板。
-- `plugins/example.model_usage/`：**消费别的插件提供的扩展接口**的样板——按能力向 `dm_plugin.lib.model.api` 取模型租约（`acquire` → `invoke` → `close`），没有模型可用时优雅降级；库插件一侧的契约见 [`../plugins/lib.model/PLUGIN.md`](../plugins/lib.model/PLUGIN.md)。
+- `plugins/auto_tag/`、`plugins/auto_keyword/`：往数据管理工具栏与右键菜单贡献入口、订阅条目 / 用户 / 库变化事件（默认不启用）；四个 `auto_*` 插件还共用 `plugins/lib.autolabel/` 里的规则库。
+- `plugins/lib.autolabel/PLUGIN.md`：库插件（被上面四个插件依赖）的说明文档样板。
 - `plugins/builtin.viewer.image/`：功能插件的样板——`plugin.py` 只留一个 `create_view()`，扩展名 / 能力 / 宿主都在 `.data/viewer.json`，用户可配置项在清单的 `options` 里。
 
 ## 9. 速查

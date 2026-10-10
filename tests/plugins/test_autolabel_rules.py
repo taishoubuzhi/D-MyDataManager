@@ -18,10 +18,12 @@ PLUGIN_DIR = Path(__file__).resolve().parents[2] / "plugins" / "lib.autolabel"
 
 
 def _register_plugin_namespace() -> None:
-    """把插件目录挂成 `dm_plugin.lib.autolabel` 包（目录名带点，只能手工注册）。"""
+    """把插件目录挂成 `dm_plugin.*` 包（目录名带点，只能手工注册）。"""
     for name, folder in (
         ("dm_plugin", None),
         ("dm_plugin.builtin", None),
+        ("dm_plugin.builtin.lib", None),
+        ("dm_plugin.builtin.lib.ui", PLUGIN_DIR.parent / "builtin.lib.ui"),
         ("dm_plugin.lib", None),
         ("dm_plugin.lib.autolabel", PLUGIN_DIR),
     ):
@@ -66,6 +68,7 @@ from dm_plugin.lib.autolabel.rules import (  # noqa: E402
     RuleSet,
     dump_rules,
     parse_rules,
+    restore_plan,
 )
 
 
@@ -212,12 +215,58 @@ class RuleSetCase(unittest.TestCase):
         rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="mine", tags=("自定义",)))
         self.assertEqual([rule.key for rule in rule_set.rules], ["a", "b", "c", "mine"])
 
+    def test_renaming_rule_replaces_old_key(self) -> None:
+        """改「规则标识」等于换一条规则，旧标识那条不能还留在表里。"""
+        rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="mine", tags=("自定义",)))
+        rule_set = rule_set.with_rule(Rule(key="mine2", tags=("自定义",)), replacing="mine")
+        self.assertEqual([rule.key for rule in rule_set.rules], ["a", "b", "c", "mine2"])
+
+    def test_renaming_factory_rule_hides_factory(self) -> None:
+        """改出厂规则的标识：旧标识按「删掉了」进隐藏名单，恢复出厂能找回原样。"""
+        rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="b", tags=("乙改",)))
+        rule_set = rule_set.with_rule(Rule(key="b2", tags=("乙改",)), replacing="b")
+        self.assertEqual([rule.key for rule in rule_set.rules], ["a", "c", "b2"])
+        self.assertEqual(rule_set.user_payload["hidden"], ["b"])
+        restored = rule_set.restore_key("b")
+        self.assertEqual([rule.key for rule in restored.rules], ["a", "b", "c", "b2"])
+
+    def test_renaming_to_same_key_keeps_single_rule(self) -> None:
+        rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="mine", tags=("自定义",)))
+        rule_set = rule_set.with_rule(Rule(key="mine", tags=("自定义改",)), replacing="mine")
+        self.assertEqual([rule.key for rule in rule_set.rules], ["a", "b", "c", "mine"])
+        self.assertEqual(rule_set.by_key("mine").tags, ("自定义改",))
+
     def test_deleting_factory_rule_hides_it(self) -> None:
         rule_set = RuleSet(factory=self.factory).without_key("b")
         self.assertEqual([rule.key for rule in rule_set.rules], ["a", "c"])
         self.assertEqual(rule_set.user_payload["hidden"], ["b"])
         self.assertTrue(rule_set.factory_changed("b"))
         self.assertEqual([rule.key for rule in rule_set.restore_key("b").rules], ["a", "b", "c"])
+
+    def test_restore_all_deleted_factory_rules(self) -> None:
+        """删掉出厂规则后点「恢复出厂」：被删的规则要从隐藏名单里找回来。
+
+        出厂规则删掉后就从规则表里消失了，选不中，只能整批恢复；这条用例盯住
+        `restore_hidden` 与 `restore_plan` 这条路，别再退化成「只能恢复选中的一条」。
+        """
+        rule_set = RuleSet(factory=self.factory).without_key("a").without_key("c")
+        self.assertEqual([rule.key for rule in rule_set.rules], ["b"])
+        self.assertEqual(restore_plan(rule_set, ""), ("hidden", ("a", "c")))
+        self.assertEqual(restore_plan(rule_set, "b"), ("hidden", ("a", "c")))
+
+        restored = rule_set.restore_hidden()
+        self.assertEqual([rule.key for rule in restored.rules], ["a", "b", "c"])
+        self.assertEqual(restored.hidden, ())
+        self.assertEqual(restored.user_payload["hidden"], [])
+
+    def test_restore_plan_prefers_selected_changed_rule(self) -> None:
+        rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="b", tags=("乙改",)))
+        self.assertEqual(restore_plan(rule_set, "b"), ("key", ("b",)))
+
+    def test_restore_plan_empty_when_nothing_to_restore(self) -> None:
+        rule_set = RuleSet(factory=self.factory)
+        self.assertEqual(restore_plan(rule_set, ""), ("", ()))
+        self.assertEqual(restore_plan(rule_set, "a"), ("", ()))
 
     def test_deleting_user_rule_removes_it(self) -> None:
         rule_set = RuleSet(factory=self.factory).with_rule(Rule(key="mine", tags=("自定义",)))
@@ -371,6 +420,149 @@ class AutolabelFileCase(IsolatedCase):
             self.assertEqual(plugin_module.template_choices(), ((), ()))
         with mock.patch.object(plugin_module, "_model_api", return_value=_stub_api(list_models=RuntimeError("没有模型插件"))):
             self.assertEqual(plugin_module.model_choices(), ((), ()))
+
+
+class RuleDialogCase(IsolatedCase):
+    """规则编辑弹窗：保存按钮要跟着输入实时变，否则新建规则永远存不下去。
+
+    以前只有「类型」下拉连了校验，新建时规则标识为空 → 保存按钮一开始就是灰的，
+    之后填什么都不再重新校验，用户把每个字段都填好也点不动保存。这里盯住按钮
+    随输入启用 / 禁用的联动。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        from PyQt6.QtWidgets import QApplication
+
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _dialog(self, **kwargs):
+        from PyQt6.QtWidgets import QWidget
+
+        from dm_plugin.lib.autolabel.ui.controls import RuleDialog
+
+        # MessageBoxBase 要一个宿主控件量尺寸，不能传 None
+        host = QWidget()
+        dialog = RuleDialog(host, **kwargs)
+        dialog._host = host
+        return dialog
+
+    def _drop(self, dialog) -> None:
+        host = getattr(dialog, "_host", None)
+        self.drop_widget(dialog)
+        self.drop_widget(host)
+
+    def test_new_rule_save_button_follows_typed_fields(self) -> None:
+        dialog = self._dialog(title="新建规则", taken=("suffix.pdf",), kinds=(KIND_MATCH,))
+        try:
+            self.assertFalse(dialog.yesButton.isEnabled())
+            dialog._key.setText("suffix.new")
+            self.assertFalse(dialog.yesButton.isEnabled())
+            self.assertIn("没有要挂的标签", dialog._hint.text())
+            dialog._tags.setText("文档")
+            # 标签有了，但规则还是「匹配」类型且没填匹配内容，仍不能存
+            self.assertFalse(dialog.yesButton.isEnabled())
+            self.assertIn("没有填匹配内容", dialog._hint.text())
+            dialog._pattern.setText("txt")
+            self.assertTrue(dialog.yesButton.isEnabled())
+            dialog._key.setText("suffix.pdf")
+            self.assertFalse(dialog.yesButton.isEnabled())
+            self.assertIn("规则标识已存在", dialog._hint.text())
+            dialog._key.setText("")
+            self.assertFalse(dialog.yesButton.isEnabled())
+            self.assertIn("规则标识不能为空", dialog._hint.text())
+        finally:
+            self._drop(dialog)
+
+    def test_edit_rule_keeps_save_button_enabled(self) -> None:
+        rule = Rule(key="mine", op=OP_IN, pattern="pdf", tags=("文档",))
+        dialog = self._dialog(title="编辑规则", rule=rule, taken=("other",), kinds=(KIND_MATCH,))
+        try:
+            self.assertTrue(dialog.yesButton.isEnabled())
+            self.assertEqual(dialog.rule().key, "mine")
+            self.assertEqual(dialog.rule().tags, ("文档",))
+        finally:
+            self._drop(dialog)
+
+    def test_prompt_field_is_editable_and_switches_kind(self) -> None:
+        """提示词框一直能写字；写完自动变成「交模型判断」规则。
+
+        以前它跟着「类型」联动置灰，而新规则默认「按字段匹配」，用户看到的就是一个
+        点不进去、写不了字的提示词框（用户报的「提示词填写无法进行填写」）。
+        """
+        dialog = self._dialog(title="新建规则")  # kinds=None：两种类型都能选
+        try:
+            self.assertIsNotNone(dialog._prompt)
+            self.assertTrue(dialog._prompt.isEnabled())
+            self.assertFalse(dialog._prompt.isReadOnly())
+            self.assertEqual(dialog._kind.currentData(), KIND_MATCH)
+            dialog._key.setText("shot")
+            dialog._tags.setText("截图")
+            self.assertFalse(dialog.yesButton.isEnabled())  # 匹配类型还缺匹配内容
+            dialog._prompt.setPlainText("这张图是不是截图？")  # 直接往提示词里打字
+            self.assertEqual(dialog._kind.currentData(), KIND_PROMPT)
+            self.assertFalse(dialog._pattern.isEnabled())  # 匹配行跟着让位
+            self.assertTrue(dialog.yesButton.isEnabled())
+            self.assertEqual(dialog.rule().kind, KIND_PROMPT)
+            self.assertEqual(dialog.rule().prompt, "这张图是不是截图？")
+        finally:
+            self._drop(dialog)
+
+    def test_prompt_rule_without_text_cannot_be_saved(self) -> None:
+        """「交模型判断」规则没有提示词等于不跑，保存按钮要拦住。"""
+        dialog = self._dialog(title="新建规则")
+        try:
+            dialog._kind.setCurrentIndex(dialog._kind.findData(KIND_PROMPT))
+            dialog._key.setText("shot")
+            dialog._tags.setText("截图")
+            self.assertFalse(dialog.yesButton.isEnabled())
+            self.assertIn("没有填提示词", dialog._hint.text())
+            dialog._prompt.setPlainText("看看是不是截图")
+            self.assertTrue(dialog.yesButton.isEnabled())
+        finally:
+            self._drop(dialog)
+
+    def test_opening_a_match_rule_does_not_switch_its_kind(self) -> None:
+        """打开一条本来带着提示词文本的匹配规则，不能一进来就被悄悄改成模型规则。"""
+        rule = Rule(key="mine", op=OP_IN, pattern="pdf", tags=("文档",), prompt="旧提示词")
+        dialog = self._dialog(title="编辑规则", rule=rule, taken=())
+        try:
+            self.assertEqual(dialog._kind.currentData(), KIND_MATCH)
+            self.assertIn("提示词用不上", dialog._hint.text())
+            self.assertFalse(dialog.yesButton.isEnabled())
+            dialog._prompt.clear()
+            self.assertTrue(dialog.yesButton.isEnabled())
+        finally:
+            self._drop(dialog)
+
+    def test_pick_row_lists_library_and_appends(self) -> None:
+        """给了候选词就要出现「从列表挑一个…」那一行，挑中直接填进标签框。
+
+        自动标签页以前没传 `library`，这一行根本不出现，用户只能手打标签名。
+        """
+        dialog = self._dialog(
+            title="新建规则", taken=(), kinds=(KIND_MATCH,), library=("PDF", "文档")
+        )
+        try:
+            self.assertIsNotNone(dialog._pick)
+            self.assertEqual(dialog._pick.count(), 3)  # 占位项 + 两个候选
+            dialog._on_pick("文档")
+            self.assertEqual(dialog._tags.text(), "文档")
+            dialog._on_pick("PDF")
+            self.assertEqual(dialog._tags.text(), "文档、PDF")
+            dialog._on_pick("文档")  # 重复挑同一个词不再追加
+            self.assertEqual(dialog._tags.text(), "文档、PDF")
+            self.assertEqual(dialog._pick.currentIndex(), 0)  # 挑完回到占位项，方便连着挑
+        finally:
+            self._drop(dialog)
+
+    def test_pick_row_absent_without_library(self) -> None:
+        dialog = self._dialog(title="新建规则", taken=(), kinds=(KIND_MATCH,))
+        try:
+            self.assertIsNone(dialog._pick)
+        finally:
+            self._drop(dialog)
 
 
 if __name__ == "__main__":

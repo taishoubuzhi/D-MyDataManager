@@ -68,7 +68,7 @@
 插件 `.data/` 下的数据文件已全部迁成统一格式：
 
 * 批 H5：`lib.autolabel.rules`、`lib.autolabel.align`；
-* 批 I：`lib.model.{model_list,api_templates,runtime_profiles}`、7 份 `<builtin.viewer.*>.viewer`、2 份 `<builtin.editor.*>.editor`、`example.ui_extension.info`。
+* 批 I：`lib.model.{model_list,api_templates,runtime_profiles}`、7 份 `<builtin.viewer.*>.viewer`、2 份 `<builtin.editor.*>.editor`。
 * 从历史格式统一到现在的形状是一次性迁移（搬运脚本已随清理删除）；`legacy` 只留给不改格式的 `core.plugin_state`。
 
 `legacy` 条目可 `raw()` 整份读、可整份 `diff`；`query()` / `update()` / `write()` 明确报错。
@@ -77,7 +77,7 @@
 
 * `ManifestEntry(id, path, kind, owner, format, schema, description)`，`format ∈ {"manifest", "legacy"}`，`managed` 即 `format == "manifest"`。
 * `ManifestRegistry.register(entry, source="")`：重复 id 抛 `ValueError`；`entry(id)` 未登记抛 `ManifestNotFoundError`。
-* `builtin_entries()` 当前 18 条：
+* `builtin_entries()` 当前 17 条：
 
 | id | 路径 | 归属 | 格式 |
 | --- | --- | --- | --- |
@@ -88,9 +88,8 @@
 | `lib.model.model_list` / `.runtime_profiles` / `.api_templates` | `plugins/lib.model/.data/*.json` | lib.model | manifest |
 | `builtin.viewer.{archive,audio,image,markdown,spreadsheet,text,video}.viewer` | `plugins/builtin.*/.data/viewer.json` | 对应插件 | manifest |
 | `builtin.editor.{text,office}.editor` | `plugins/builtin.*/.data/editor.json` | 对应插件 | manifest |
-| `example.ui_extension.info` | `plugins/example.ui_extension/.data/info.json` | example | manifest |
 
-共 18 条，其中 **17 条受管（`format == "manifest"`）+ 1 条历史格式**。
+共 17 条，其中 **16 条受管（`format == "manifest"`）+ 1 条历史格式**。
 
 插件数据文件的形状（批 I 定案）：
 
@@ -180,7 +179,7 @@ manifest.register("my.plugin.data", "plugins/my.plugin/.data/x.json", kind="cata
 
 ## 9. 测试与验收
 
-* `tests/core/test_manifest.py`：内置登记表（18 条、17 份受管、登记表形状）、读写 / 查询 / 对照 / 变更 / 重置 / 备份裁剪、坏数据路径、legacy 路径、SDK 面无实现与有实现两种退化。
-* `tests/core/test_core_module_data.py`：`core.runtime`、`core.plugins` 两份真实清单与模块导出常量一致，并逐份读取 / 校验 17 份受管清单（结构 + schema）。
+* `tests/core/test_manifest.py`：内置登记表（17 条、16 份受管、登记表形状）、读写 / 查询 / 对照 / 变更 / 重置 / 备份裁剪、坏数据路径、legacy 路径、SDK 面无实现与有实现两种退化。
+* `tests/core/test_core_module_data.py`：`core.runtime`、`core.plugins` 两份真实清单与模块导出常量一致，并逐份读取 / 校验 16 份受管清单（结构 + schema）。
 * `tests/core/test_journal.py`：临时清单（`kind = "journal"`）的创建、进程重启后的重新登记、写入节流、终态清理、`active` 退回 `pending`、删除与注销登记。
 * 批次门禁（批 I 收口时的实测）：`compileall` rc 0、`python -m unittest discover -s tests -t .` = **564 OK**、`pytest -q` = **564 passed**、`python scripts/selfcheck.py --layer data,services,pages,flows` = **149/149**、`python scripts/plugin_stubs.py --check` = 与清单一致。

@@ -266,7 +266,7 @@ raw = ctx.data_path("viewer.json")   # 也可以写全名
 {
   "version": 1,
   "plugins": {
-    "example.ui_extension": {"enabled": false},
+    "auto_tag": {"enabled": false},
     "builtin.viewer.image": {
       "enabled": true,
       "settings": {"fit_on_open": true, "zoom_step": "1.25", "smooth_scaling": true}

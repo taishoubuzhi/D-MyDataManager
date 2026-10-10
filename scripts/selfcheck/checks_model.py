@@ -68,7 +68,13 @@ def _dispose(widget) -> None:
 
 @check("model_manifest_and_templates", "data")
 def model_manifest_and_templates(case: Case) -> None:
-    """清单声明 model.open 与三个只读模板，模板 JSON 的字段够页面直接用。"""
+    """清单声明 model.open 与三个只读模板，模板 JSON 的字段够页面直接用。
+
+    `lib.model` 是 `.gitignore` 排除的本地插件，**干净检出里没有它**（打包冒烟
+    `tests/smoke_checkout.py` 就在那种检出里跑 data 层）：目录不在就跳过，不当作失败。
+    """
+    if not (_PLUGIN_DIR / "plugin.json").is_file():
+        return
     manifest = json.loads((_PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
     assert manifest.get("id") == "lib.model", f"插件 id 不对：{manifest.get('id')}"
     assert "model.open" in (manifest.get("provides") or []), "清单没有提供 model.open"

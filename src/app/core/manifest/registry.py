@@ -154,15 +154,6 @@ def builtin_entries() -> tuple[ManifestEntry, ...]:
                 description="编辑器类型注册表：扩展名、类型、宿主与能力",
             )
         )
-    entries.append(
-        ManifestEntry(
-            id="example.ui_extension.info",
-            path=_plugin_data("example.ui_extension", "info.json"),
-            kind="module-data",
-            owner="example.ui_extension",
-            description="示例插件的展示数据（说明、贡献的扩展点与订阅的事件）",
-        )
-    )
     return tuple(entries)
 
 

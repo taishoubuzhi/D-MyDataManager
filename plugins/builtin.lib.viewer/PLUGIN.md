@@ -14,7 +14,7 @@
 | provider.py | 扩展接口实现 ViewerOpenApi：open_path / open_viewer / open_external、注册表段与规则的读 / 写 / 重置门面 |
 | window.py | 打开调度：build_window / open_page_via_host（经界面工具库弹独立窗口）/ open_viewer |
 | config_page.py | 「查看器」配置页 ViewerConfigPage（**插件页面**，用 builtin.lib.ui 的 SplitPage 与控件工厂搭出来） |
-| viewer_window.py | 查看器内容页 ViewerWindow：内容区 + 通过 attach_popup(popup) 把「用系统程序打开」「定位文件」挂到弹窗外壳的标题栏（页面不再自画标题栏） |
+| viewer_window.py | 查看器内容页 ViewerWindow：内容区 + 通过 attach_popup(popup) 把「用系统程序打开」「定位文件」挂到弹窗外壳的标题栏（页面不再自画标题栏）；另把 sources 转给内容页的 set_sources()，并跟着 pathChanged / captionChanged 刷新标题与副标题 |
 
 **具体怎么画一个文件**（文本页、图片页、播放器等）不属于本库：每个查看器插件在自己的目录里实现，
 音频 / 视频的播放控件来自界面工具库 `builtin.lib.ui`（`PlayerPanel` + `format_time`），
@@ -36,7 +36,8 @@ ViewerPlugin 提供：
   再 ctx.add_viewer(...) 登记查看器，并把 opener 一起登记 —— 打开文件时走的是「本库建窗口 → 界面工具库弹出」，
   主程序只负责调度，不认识任何具体格式。
 - create_view(path, parent=None)：子类必须实现（未实现时抛 NotImplementedError），返回自己的视图控件。
-- open_view(path, parent=None)：在**自己的插件目录**里造好视图，再交给 builtin.lib.ui 弹出；返回 (是否成功, 提示文字)。
+- open_view(path, parent=None, sources=())：在**自己的插件目录**里造好视图，再交给 builtin.lib.ui 弹出；返回 (是否成功, 提示文字)。
+  `sources` 就是宿主给的浏览列表，必须原样透传给 `open_page_via_host`（忘了传，内容页就永远收不到，切图功能等于没做）。
 - option(key, default=None)：读清单 options 声明的插件选项。
 - 缺省值（子类可覆盖）：default_kind = "text"、default_host = "dialog"（模块常量 DEFAULT_HOST）、default_order = 100。
 
@@ -52,9 +53,10 @@ ViewerPlugin 提供：
 - `Viewer` / `ViewerRegistry` / `viewer_registry` / `reset_registry`：注册表（见 `registry.py`）。
 - ViewerOpenApi(ctx, rules=None, registry=None)：扩展接口实现（见下）；ViewerRules(config_file=None, registry=None) / ViewerRule / ViewerDecision：规则模型与决策。
 - ViewerConfigPage(ctx, api)：配置页；build_window / open_page_via_host / open_viewer / host_name：调度辅助。
-- ViewerWindow(path, build, name, parent=None)：查看器**内容页**（只有内容区）；build(container) 返回内容控件，异常会退化成一行提示。
+- ViewerWindow(path, build, name, parent=None, *, sources=())：查看器**内容页**（只有内容区）；build(container) 返回内容控件，异常会退化成一行提示。
   弹窗外壳建好后由外壳回调 `attach_popup(popup)`，页面这时才把「用系统程序打开」「定位文件」两个按钮与「查看器名 · 文件信息」副标题
   交给外壳标题栏——文件名 / 查看器名 / 关闭按钮都归外壳一份，避免外层套一圈。
+  `sources` 是宿主给的浏览列表，建好内容页后转交给它的 `set_sources()`；内容页发 `pathChanged` / `captionChanged` 时外壳跟着换标题与副标题。
 
 ## 扩展接口 viewer.open
 
@@ -63,12 +65,19 @@ ViewerPlugin 提供：
 
 | 分组 | 成员 |
 | --- | --- |
-| 打开 | `open_path(path, parent=None)`、`open_viewer(path, viewer, parent=None)`、`open_external(path, *, ask=False)` |
+| 打开 | `open_path(path, parent=None, *, sources=())`、`open_viewer(path, viewer, parent=None, *, sources=())`、`open_external(path, *, ask=False)` |
 | 注册表 | `add_viewer(plugin_id, *, viewer_id, name, extensions, kind, factory, opener, host, description, capabilities)`、`viewers()`、`viewer_by_id(id)`、`extensions()`、`plugin_ids()`、`viewer_for(path)`、`clear()`、`unregister_plugin(plugin_id)` |
 | 规则 | `rules()`、`rule_for(suffix)`、`set_rule(...)`、`remove_rule(...)`、`resolve(path)`、`viewers_for(suffix)`、`rule_viewer_for(suffix)`、`has_builtin()`、`available_modes(suffix)`、`config_file` |
 | 兼容门面 | `suffix_of()`、`viewer_ids_for(plugin_id)`、`suffixes_of(viewer_id)`、`suffixes_of_plugin(plugin_id)`、`current_viewer_id(suffix)`、`set_viewer(suffix, viewer_id)`、`use_viewer_for_all(viewer_id, suffixes=None)`、`reset_viewer(viewer_id, suffixes=None)` |
 
 程序本体登记查看器仍走 `ctx.add_viewer(...)`（`PluginContext`），由插件服务转交给 `viewer.open` 的 `add_viewer()`。
+
+`sources` 是**调用方当前看到的文件顺序**（数据管理页就是它这一页的条目，按界面排序）：库里文件按分类平铺、
+导入时还保留来源子目录，同一目录往往只有一张图片，只认同目录等于「上一张 / 下一张」切不动（用户 m00828）。
+`window.py` 把它一路带到 `ViewerWindow(..., sources=...)`，由 `ViewerWindow._apply_sources()` **鸭子类型**调内容页的
+可选钩子 `set_sources(paths)`；内容页还可以提供可选信号 `pathChanged(str)`（外壳据此更新标题与「用系统程序打开」「定位文件」的目标）
+与 `captionChanged(str)`（外壳刷新副标题）。三者都不实现也能正常工作——只是切换与标题同步不发生。
+`sources` 为空时不带这个关键字，老插件不认它时按老签名重试。
 
 规则按扩展名（不含点）存在 `.configs/viewers.json`，形如 `{"version": 1, "rules": {"<后缀>": {mode, program, args, viewer_id}}}`，
 `mode` 取 `builtin` / `inherit` / `custom`；旧版 `.configs/open_with.json` 在首次读取时自动迁移过来。

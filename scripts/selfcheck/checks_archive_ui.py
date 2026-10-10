@@ -1073,6 +1073,47 @@ def image_viewer(case: Case) -> None:
         finally:
             _drop_widget(tiny)
 
+        # 上一张 / 下一张：宿主（数据管理页）给的那一页顺序优先，同目录兜底
+        # （回归：库里图片按分类平铺、导入还保留来源子目录，同目录常常只有一张图）
+        step_dir = case.root / "selfcheck_step"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        steps = []
+        for name in ("a.png", "b.png", "c.png"):
+            target = step_dir / name
+            pixmap = QPixmap(40, 20)
+            pixmap.fill()
+            assert pixmap.save(str(target)), "自检切图图片写入失败"
+            steps.append(target)
+        first, second, third = steps
+        stepper = ImageViewer(second, parent=window, extensions=("png",), sources=(third, second, first))
+        try:
+            order = [item.name for item in stepper._siblings]
+            _expect(problems, order == ["c.png", "b.png", "a.png"], f"宿主给的顺序应原样使用，实际 {order}")
+            paths: list[str] = []
+            stepper.pathChanged.connect(paths.append)
+            stepper._next_button.click()
+            _expect(problems, stepper._path == first, f"下一张应走到 a.png，实际 {stepper._path.name}")
+            _expect(problems, paths == [str(first)], f"切图应发出 pathChanged，实际 {paths}")
+            stepper._prev_button.click()
+            _expect(problems, stepper._path == second, f"再点上一张应回到 b.png，实际 {stepper._path.name}")
+
+            solo_dir = case.root / "selfcheck_step_solo"
+            solo_dir.mkdir(parents=True, exist_ok=True)
+            solo_path = solo_dir / "solo.png"
+            solo_pixmap = QPixmap(40, 20)
+            solo_pixmap.fill()
+            assert solo_pixmap.save(str(solo_path)), "自检单图写入失败"
+            solo = ImageViewer(solo_path, parent=window)
+            try:
+                enabled = solo._prev_button.isEnabled() or solo._next_button.isEnabled()
+                _expect(problems, not enabled, "只有一张图时上一张 / 下一张应禁用")
+                solo._step_image(1)
+                _expect(problems, solo._path.name == "solo.png", "只有一张图时切换不应改变当前文件")
+            finally:
+                _drop_widget(solo)
+        finally:
+            _drop_widget(stepper)
+
         # 打开即自适应：视口由外层弹窗布局逐步撑大，打开后应重新适配到铺满
         # （回归：旧实现只在自身 resizeEvent 里重算，视口变大后再也不会适配）
         from app.core.plugins.extensions import extension_registry
@@ -1098,6 +1139,38 @@ def image_viewer(case: Case) -> None:
                     f"弹窗打开后应重新适配（视口 {view_width}×{view_height}，实际 {host_viewer._scale:.3f}，应为 {expected:.3f}）",
                 )
             finally:
+                _drop_widget(popup)
+
+        # 真实链路：open_path(sources=…) → viewer.open → 插件 opener → 宿主弹窗 → 内容页。
+        # 回归点：`ViewerPlugin.open_view()` 或少一层透传就丢 sources，上面单独建容器的断言照样过，
+        # 但用户双击打开时顺序就丢了（上一张 / 下一张又变回「点了没反应」）。
+        if dialog is not None and callable(getattr(registry, "open_path", None)):
+            before = set(dialog.windows())
+            ok, message = registry.open_path(second, None, sources=(third, second, first))
+            _expect(problems, bool(ok), f"经 viewer.open 打开图片应成功，实际 {message}")
+            opened = [window for window in dialog.windows() if window not in before]
+            _expect(problems, len(opened) == 1, f"应弹出 1 个查看器窗口，实际 {len(opened)}")
+            for popup in opened:
+                content = getattr(getattr(popup, "content_widget", None), "content_widget", None)
+                _expect(problems, isinstance(content, ImageViewer), "弹窗内容应是图片查看器")
+                if isinstance(content, ImageViewer):
+                    order = [item.name for item in content._siblings]
+                    _expect(
+                        problems,
+                        order == ["c.png", "b.png", "a.png"],
+                        f"列表顺序应一路传到内容页，实际 {order}",
+                    )
+                    content._next_button.click()
+                    _expect(
+                        problems,
+                        popup.title_label.text() == "a.png",
+                        f"切图后弹窗标题应跟上，实际 {popup.title_label.text()!r}",
+                    )
+                    _expect(
+                        problems,
+                        "a.png" in popup.meta_label.text(),
+                        f"切图后副标题应跟上，实际 {popup.meta_label.text()!r}",
+                    )
                 _drop_widget(popup)
 
         if registered is not None and callable(registered.factory):

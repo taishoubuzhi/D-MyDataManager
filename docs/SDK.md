@@ -130,9 +130,9 @@ ctx.on(Events.ITEM_IMPORTED, self._on_imported)     # 处理函数签名要收 *
 ```python
 ctx.contribute(
     ExtensionPoint.HOME_KPI,
-    {"title": "示例计数", "value": self._kpi_text, "sub": self._kpi_sub, "icon": "HEART", "hint": "示例插件贡献的概览卡片"},
-    key="example.kpi",
-    description="示例插件贡献的概览卡片",
+    {"title": "我自己算的计数", "value": self._kpi_text, "sub": self._kpi_sub, "icon": "HEART", "hint": "鼠标停在这里的说明"},
+    key="demo.kpi",
+    description="这个插件贡献的概览卡片",
 )
 ```
 
@@ -151,8 +151,8 @@ ctx.contribute(
 ```python
 ctx.contribute(
     ExtensionPoint.MANAGE_TOOLBAR,
-    {"text": "示例动作", "callback": self._on_toolbar, "icon": "HEART", "tip": "示例插件贡献的工具栏按钮"},
-    key="example.toolbar",
+    {"text": "我自己加的动作", "callback": self._on_toolbar, "icon": "HEART", "tip": "鼠标停在这里的说明"},
+    key="demo.toolbar",
 )
 ```
 
@@ -264,6 +264,7 @@ ctx.add_page("hello", "演示页", self._build_page, icon="HOME", bottom=False, 
 - **推荐做法**（也是内置 7 个查看器与 2 个编辑器的做法）：登记 `opener` 让插件自己建窗口、自己弹，界面代码完全住在插件里；内置工具箱是 `builtin.lib.viewer` 的 `plugin.py`（`ViewerPlugin` 基类 + `ViewerWindow` + 注册表）与 `builtin.lib.editor` 的 `plugin.py`（`EditorPlugin` 基类 + `EditorWindow` + 注册表）——继承基类只实现 `create_view(path, parent=None)` / `create_editor(path, parent=None)`，登记与弹窗都由基类完成。只给 `factory` 的老式写法仍可用（程序用宿主把控件包一层）。
 - `kind="internal"` 的编辑器控件若提供 `save()`（`True` 或 `(bool, str)`）与 `is_dirty()`，编辑器内容页会据此启用外壳标题栏的「保存」、显示「已修改」并在关闭前询问未保存改动；`kind="external"` 表示不提供程序内控件，交给系统默认程序编辑（登记 `opener` 即可）。
 - 程序侧调度在 `app.services.viewer_service` / `app.services.editor_service`（插件看不到）；插件侧写 `ctx.require("viewer.open")` / `ctx.require("editor.open")` 或直接继承工具库基类。
+- **浏览列表（用户 m00828）**：打开一个文件时，调用方会把它当前看到的**文件顺序**一起传下来（`app.services.viewer_service.open_path(path, parent, sources=(...))`，插件侧 `viewer.open` 的 `open_path` / `open_viewer` 同名关键字），最终由 `builtin.lib.viewer` 的 `ViewerWindow` 用**鸭子类型**转交给内容页的可选钩子 `set_sources(paths)`——和 `attach_popup(popup)` / `settings_items()` 一样是可选的，不实现就照旧。想让「上一张 / 下一张」跨目录也能切（库里文件按分类平铺，同目录常常只有一张），内容页就该用它；另外可以发 `pathChanged(str)` 让外壳同步标题与打开目标、发 `captionChanged(str)` 让外壳刷新副标题。老插件不认识 `sources` 关键字时调度层会退回老签名重试，不会变成「打开失败」。
 - 页面注册成 `plugin.<key>` 路由，程序把它挂进主窗口堆叠页并按需加左侧导航项；左侧导航内置页面顺序固定（设置恒在最下面），插件页面按载入顺序追加、最多显示 7 个，超出的只出现在「页面管理」页里。
 
 ### 5.4 扩展接口（程序本体实现、插件消费）

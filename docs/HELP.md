@@ -776,6 +776,9 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
 程序侧只剩调度：`app.services.viewer_service` 的 `open_path()` / `open_viewer_with()` / `open_system()` 通过 `viewer.open` 扩展接口把活儿交给插件
 （`plugins/builtin.lib.viewer/.plugin/window.py` 的 `open_viewer()` 先调插件给的 `opener`，没有 opener 时才用宿主把 `factory` 控件包一层兜底）。
 数据管理页的条目在双击或右键「打开」时（`ManagePage._on_open()`）取出 `ItemService.file_path_of()` 的路径，交给 `open_path()` 打开（`Layout/Double-Click-Action` 选成「打开编辑器」时改走 `app.services.editor_service` 的 `edit_path()`，`ManagePage._open_in_editor()`；没装编辑器插件时编辑器门面自己退回系统默认程序）；
+同时还会把它**当前这一页的文件顺序**（`ManagePage._browse_sources()`）一起传下去（`open_path(..., sources=...)`），查看器里「上一张 / 下一张」就按这个顺序翻，
+宿主没给或只给了一张时才退回「同一个文件夹里的同类文件」——库里文件按分类平铺、导入时又保留来源子目录，同一文件夹常常只有一张图，只认同目录等于切不动（用户 m00828）；
+真只剩一张可切时两个按钮直接置灰、悬停写明原因，不会「点了没反应」。图片查看器还会把当前文件名同步给标题栏（切图后标题、副标题与「用系统程序打开」「定位文件」都跟着指向这一张）；
 右键「查看器」里的点名查看器与「系统默认程序 / 交给系统选择…」分别走 `open_viewer_with()` 与 `open_system()`。
 「系统默认程序」最终落到 `app.core.runtime.shell.open_default()`：本进程的 `os.startfile()` 在本机对**任何**路径都返回
 `[WinError 5] 拒绝访问`（Store 版记事本这类 AppX 关联无法从本进程激活），被拒后自动回退 `explorer.exe <路径>`，并按它的退出码确认到底有没有接手
@@ -882,6 +885,14 @@ qfluentwidgets 的 `setTheme()` 只换 QSS，**不会**调用 `app.setPalette`�
   各数据类型的模型对齐写 `.configs/autolabel.align.json` 的 `label`（标签）与 `keyword`（关键词）两段，各存各的。
   `auto_tag.rule` 与 `auto_tag` 在清单里互指 `conflicts`：两者都能载入，但**不能同时启用**（用户 m42668）；`auto_tag` 自己也能按规则挂标签——页面上的「规则」卡共用同一份规则文件，`merge_rule_tags`（默认开）打开时规则标签与模型标签合并去重后一起挂，两边的新标签都会自动进标签库（用户 m42753）。
   关键词那一对同理：`auto_keyword.rule` 与 `auto_keyword` 互指 `conflicts`（用户 m43110），都能载入、不能同时启用；两组方案之间（关键词 ↔ 标签）互不冲突，可以同时启用。
+- **规则怎么管**：`auto_tag.rule` / `auto_keyword.rule` / `auto_tag` 三页的规则卡都能新建 / 编辑 / 删除，
+  保存按钮跟着输入实时启用（标识、要挂的标签 / 关键词、匹配内容填齐才点得动，缺什么就写在弹窗的提示行里）。
+  删除出厂规则只是把它从表里拿掉、记进用户文件的 `hidden`；点「恢复出厂」会把**所有**被删掉的出厂规则一次找回来
+  （被删的规则已经不在表里、选不中，所以只能整批恢复，确认框里会写明有几条）。编辑时改了「标识」等于换一条新规则，旧的不会留下来。
+  弹窗下半部分还有个「从列表挑一个…」的下拉，候选来自**库里已有的标签**与现有规则用到的标签（关键词页给的是自己的关键词库），
+  挑一下就填进「要挂的标签」框里，不用照着记忆手打（打错一个错字就多出一个新标签）。
+  类型选了「交模型判断」时弹窗里会出现**提示词**框，它一直能写字：直接往里打字会自动把类型切过去，不用先去改类型；
+  反过来，「交模型判断」却没填提示词、或写了提示词却没切到「交模型判断」，保存按钮都会拦住并写明原因。
 - 页面：四个插件各有一个页面（`auto_tag_rule` / `auto_keyword_rule` / `auto_tag` / `auto_keyword`），一律用界面工具库 `builtin.lib.ui` 的构件
   （自检 `autolabel_ui_via_tool_library` 拦 `qfluentwidgets` / `PyQt6` 直连，只放行 `FluentIcon`）。`auto_tag` 页面只有模型方案（规则方案在 `auto_tag.rule` 页）；
    它与 `auto_keyword` 页都有一张「数据类型对齐」表（5 列：数据类型 / 方案 / 主模型 / 对齐模型 / 状态）+

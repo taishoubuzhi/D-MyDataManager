@@ -90,22 +90,25 @@ class ViewerOpenApi:
         return self._registry.unregister_plugin(plugin_id)
 
     # ---------------------------------------------------------------- 打开
-    def open_path(self, path, parent=None) -> tuple[bool, str]:
-        """按当前规则打开文件：内置查看器 / 自定义程序 / 系统默认程序。"""
+    def open_path(self, path, parent=None, *, sources=()) -> tuple[bool, str]:
+        """按当前规则打开文件：内置查看器 / 自定义程序 / 系统默认程序。
+
+        `sources` 是宿主「当前列表里的文件顺序」，交给内容页做上一张 / 下一张。
+        """
         target = Path(path)
         if not target.exists():
             return False, f"文件不存在：{target.name}"
         decision = self._rules.resolve(target)
         if decision.is_builtin and decision.viewer is not None:
-            return open_viewer(self._ctx, decision.viewer, target, parent)
+            return open_viewer(self._ctx, decision.viewer, target, parent, sources=sources)
         return self._rules.open_external(decision, target)
 
-    def open_viewer(self, path, viewer, parent=None) -> tuple[bool, str]:
-        """点名用某个查看器打开（右键菜单的「用…查看」走这里）。"""
+    def open_viewer(self, path, viewer, parent=None, *, sources=()) -> tuple[bool, str]:
+        """点名用某个查看器打开（右键菜单的「用…查看」走这里，`sources` 同上）。"""
         target = Path(path)
         if not target.exists():
             return False, f"文件不存在：{target.name}"
-        return open_viewer(self._ctx, viewer, target, parent)
+        return open_viewer(self._ctx, viewer, target, parent, sources=sources)
 
     def open_external(self, path, *, ask: bool = False) -> tuple[bool, str]:
         """跳过内置查看器：`ask=True` 弹出系统选择框，否则用系统默认程序。"""

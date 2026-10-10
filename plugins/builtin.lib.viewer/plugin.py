@@ -141,8 +141,12 @@ class ViewerPlugin(Plugin):
         """造出自己的视图控件：子类必须实现。"""
         raise NotImplementedError(f"插件 {self.id} 没有实现 create_view()")
 
-    def open_view(self, path, parent=None) -> tuple[bool, str]:
-        """在自己的文件夹里造好视图，再让宿主扩展接口把它弹出来。"""
+    def open_view(self, path, parent=None, sources=()) -> tuple[bool, str]:
+        """在自己的文件夹里造好视图，再让宿主扩展接口把它弹出来。
+
+        `sources` 是调用方当前看到的文件顺序（数据管理页那一页），透传给内容页做
+        「上一张 / 下一张」；不传时内容页自己决定（一般是同目录）。
+        """
         ctx = getattr(self, "_ctx", None)
         if ctx is None:
             return False, "插件还没有载入完成"
@@ -151,7 +155,9 @@ class ViewerPlugin(Plugin):
             return False, f"文件不存在：{target.name}"
         name = self.view_name or self.name
         host = getattr(self, "_host", self.default_host)
-        return open_page_via_host(ctx, target, self.create_view, name, host, parent)
+        return open_page_via_host(
+            ctx, target, self.create_view, name, host, parent, sources=sources
+        )
 
     @staticmethod
     def _extensions(value: Iterable) -> tuple[str, ...]:

@@ -149,10 +149,10 @@ class ConsoleSdkCase(unittest.TestCase):
         assert isinstance(PluginContext.console, property), "插件上下文应提供 console 属性"
         self._install()
 
-        console_api.console_for("example.model_usage").info("阶段一")
+        console_api.console_for("selfcheck.probe").info("阶段一")
         console_api.console_for().stage("没有来源的阶段")
 
-        assert self.recorder.calls[0]["source"] == "example.model_usage", self.recorder.calls
+        assert self.recorder.calls[0]["source"] == "selfcheck.probe", self.recorder.calls
         assert self.recorder.calls[1] == {
             "level": "info",
             "message": "没有来源的阶段",

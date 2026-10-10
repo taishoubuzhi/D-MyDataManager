@@ -50,14 +50,14 @@ def _payload(**over) -> dict:
 
 
 class RegistryCase(unittest.TestCase):
-    """内置登记表：18 份清单，只剩插件状态那一份还是历史格式。"""
+    """内置登记表：17 份清单，只剩插件状态那一份还是历史格式。"""
 
     def test_builtin_entries(self):
         entries = manifest_kit.entries()
-        self.assertEqual(len(entries), 18)
-        self.assertEqual(len({entry.id for entry in entries}), 18)
+        self.assertEqual(len(entries), 17)
+        self.assertEqual(len({entry.id for entry in entries}), 17)
         managed = [entry.id for entry in entries if entry.managed]
-        self.assertEqual(len(managed), 17)
+        self.assertEqual(len(managed), 16)
         self.assertNotIn(STATE_MANIFEST_ID, managed)
         self.assertIn("lib.model.model_list", managed)
         self.assertIn("builtin.viewer.image.viewer", managed)
@@ -86,7 +86,7 @@ class RegistryCase(unittest.TestCase):
 
     def test_describe_all_and_one(self):
         rows = manifest_kit.describe()
-        self.assertEqual(len(rows), 18)
+        self.assertEqual(len(rows), 17)
         info = manifest_kit.describe("core.plugins")
         self.assertEqual(info["owner"], "core")
         self.assertTrue(info["exists"])

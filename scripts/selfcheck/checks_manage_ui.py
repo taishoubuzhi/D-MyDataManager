@@ -1707,11 +1707,16 @@ def manage_double_click_action(case: Case) -> None:
             problems.append(f"默认动作应是打开查看器，实际 {config.doubleClickAction.value!r}")
 
         viewer_calls: list[str] = []
+        viewer_sources: list[tuple[str, ...]] = []
         editor_calls: list[str] = []
-        manage_module.open_path = lambda path, parent=None: (
-            viewer_calls.append(str(path)),
-            (True, "自检"),
-        )[1]
+
+        def fake_open_path(path, parent=None, *, sources=()):
+            """替身要跟真接口一样收 `sources`：切图列表就是这么传进查看器的（用户 m00828）。"""
+            viewer_calls.append(str(path))
+            viewer_sources.append(tuple(str(item) for item in sources))
+            return True, "自检"
+
+        manage_module.open_path = fake_open_path
         fake_edit_path = lambda path, parent=None: (
             editor_calls.append(str(path)),
             (True, "自检"),
@@ -1722,6 +1727,9 @@ def manage_double_click_action(case: Case) -> None:
         row.opened.emit(row.item)  # 双击
         if len(viewer_calls) != 1 or editor_calls:
             problems.append(f"默认双击应交给查看器：viewer={viewer_calls} editor={editor_calls}")
+        expected_sources = LibraryService(session).abs_path(item)
+        if expected_sources is None or not viewer_sources or str(expected_sources) not in viewer_sources[-1]:
+            problems.append(f"双击应把当前列表顺序交给查看器，实际 {viewer_sources}")
 
         config.set(config.doubleClickAction, DOUBLE_CLICK_EDITOR)
         row.opened.emit(row.item)

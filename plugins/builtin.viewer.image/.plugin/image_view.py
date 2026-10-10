@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QTransform
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon
@@ -30,12 +30,17 @@ ZOOM_MAX = 12.0
 FIT_ZOOM_MAX = 32.0
 
 
+def wanted_suffixes(extensions: Iterable[str]) -> set[str]:
+    """本查看器认的扩展名（小写、去掉前导点）。"""
+    return {str(item).strip().lower().lstrip(".") for item in extensions if str(item).strip()}
+
+
 def sibling_images(path: Path, extensions: Iterable[str]) -> list[Path]:
     """同一目录下的其它图片（按名称排序），供上一张 / 下一张使用。
 
     `extensions` 由插件自己在 .data/viewer.json 里声明，程序里不再写死图片扩展名。
     """
-    wanted = {str(item).strip().lower().lstrip(".") for item in extensions}
+    wanted = wanted_suffixes(extensions)
     try:
         files = [
             child
@@ -49,12 +54,39 @@ def sibling_images(path: Path, extensions: Iterable[str]) -> list[Path]:
     return files
 
 
+def browse_images(path: Path, sources: Iterable[Path], extensions: Iterable[str]) -> list[Path]:
+    """上一张 / 下一张要走的图片顺序：优先用调用方给的列表，否则退回同目录。
+
+    `sources` 是宿主（数据管理页）正在显示的那一页文件，顺序就是用户看到的顺序。
+    库里的图片按分类平铺、导入时还保留来源子目录，同一目录往往只有一张图，
+    只看同目录等于切不动（用户 m00828 报的就是这个），所以才要宿主把列表交给查看器。
+    """
+    wanted = wanted_suffixes(extensions)
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for item in sources:
+        candidate = Path(item)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.suffix.lower().lstrip(".") in wanted and candidate.is_file():
+            files.append(candidate)
+    if len(files) > 1 and path in files:
+        return files
+    return sibling_images(path, extensions)
+
+
 class ImageViewer(QWidget):
     """图片查看控件。
 
     `fit_on_open` / `zoom_step` / `smooth` 由插件选项决定（见 plugins/builtin.viewer.image/plugin.py），
     窗口标题栏的「设置」入口里也能就地改：改完立即生效，并通过 `on_option` 回写插件选项。
     """
+
+    #: 换到另一张图时发出（「文件名 · 体积 · 尺寸」），外壳据此刷新副标题
+    captionChanged = pyqtSignal(str)
+    #: 换到另一张图时发出（新的绝对路径），外壳据此换标题、换「定位文件 / 用系统程序打开」的目标
+    pathChanged = pyqtSignal(str)
 
     def __init__(
         self,
@@ -66,6 +98,7 @@ class ImageViewer(QWidget):
         smooth: bool = True,
         extensions: Iterable[str] = (),
         on_option: Callable[[str, object], None] | None = None,
+        sources: Iterable[Path] = (),
     ) -> None:
         super().__init__(parent)
         self._path = Path(path)
@@ -75,11 +108,14 @@ class ImageViewer(QWidget):
         self._step_factor = max(1.01, float(zoom_step))
         self._smooth = bool(smooth)
         self._on_option = on_option
-        self._siblings = sibling_images(self._path, extensions)
+        self._extensions = tuple(str(item) for item in extensions)
+        self._siblings = browse_images(self._path, sources, self._extensions)
         self._index = self._siblings.index(self._path) if self._path in self._siblings else 0
         self._pixmap = QPixmap(str(self._path))
         self.caption = self._path.name
+        self._last_caption = ""
         self._build_ui()
+        self._sync_step_buttons()
         self._apply()
         if self._fit:
             self._scale = self._fit_scale()
@@ -97,8 +133,14 @@ class ImageViewer(QWidget):
         row.addWidget(tool_button(bar, FluentIcon.FIT_PAGE, "适应窗口", self._fit_window))
         row.addWidget(tool_button(bar, FluentIcon.ZOOM, "原始大小", self._actual_size))
         row.addWidget(tool_button(bar, FluentIcon.ROTATE, "向右旋转", lambda: self._rotate(90)))
-        row.addWidget(tool_button(bar, FluentIcon.LEFT_ARROW, "上一张", lambda: self._step_image(-1)))
-        row.addWidget(tool_button(bar, FluentIcon.RIGHT_ARROW, "下一张", lambda: self._step_image(1)))
+        self._prev_button = tool_button(
+            bar, FluentIcon.LEFT_ARROW, "上一张", lambda: self._step_image(-1)
+        )
+        row.addWidget(self._prev_button)
+        self._next_button = tool_button(
+            bar, FluentIcon.RIGHT_ARROW, "下一张", lambda: self._step_image(1)
+        )
+        row.addWidget(self._next_button)
         row.addStretch(1)
         self._zoom_label = caption(bar, "100%")
         row.addWidget(self._zoom_label)
@@ -157,7 +199,17 @@ class ImageViewer(QWidget):
     def _update_status(self) -> None:
         self.caption = self._describe()
         self._zoom_label.setText(f"{self._scale * 100:.0f}%")
-        self.status_label.setText(self.caption)
+        self.status_label.setText(self._position_text())
+        if self.caption != self._last_caption:  # 只在说明真的变了时通知外壳，避免来回刷副标题
+            self._last_caption = self.caption
+            self.captionChanged.emit(self.caption)
+
+    def _position_text(self) -> str:
+        """状态栏文字：只有一张图时不显示「第 x / y 张」。"""
+        total = len(self._siblings)
+        if total < 2:
+            return self.caption
+        return f"{self.caption}（第 {self._index + 1}/{total} 张）"
 
     def _zoom(self, factor: float) -> None:
         self._fit = False
@@ -189,7 +241,36 @@ class ImageViewer(QWidget):
         self._rotation = 0
         if self._fit:
             self._scale = self._fit_scale()
+        self.pathChanged.emit(str(self._path))
         self._apply()
+
+    def set_sources(self, sources: Iterable[Path]) -> None:
+        """宿主把「当前列表里的图片顺序」交进来时调用：上一张 / 下一张按它走。
+
+        这是查看器内容页的可选契约（外壳用 `getattr` 探测），没实现也不影响显示。
+        """
+        files = browse_images(self._path, sources, self._extensions)
+        if files == self._siblings:
+            return
+        self._siblings = files
+        self._index = files.index(self._path) if self._path in files else 0
+        self._sync_step_buttons()
+        self._update_status()
+
+    def _sync_step_buttons(self) -> None:
+        """只有一张图时禁用上一张 / 下一张，并把原因写进提示。
+
+        「点了没反应」比按钮灰着更难懂：库里的图片按分类平铺、导入时还保留来源子目录，
+        同一目录常常只有一张图（见 `browse_images`）。
+        """
+        many = len(self._siblings) > 1
+        for button, text in ((self._prev_button, "上一张"), (self._next_button, "下一张")):
+            button.setEnabled(many)
+            button.setToolTip(
+                f"{text}（当前列表共 {len(self._siblings)} 张图片）"
+                if many
+                else f"{text}：当前列表里没有别的图片可切换"
+            )
 
     # ------------------------------------------------------------------ 设置面板
     def settings_items(self) -> list[dict]:

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -22,7 +23,9 @@ VIEWER_EXTENSION = "viewer.open"
 #: 创建视图控件：`(path, parent) -> QWidget`，由插件自己延迟 import Qt
 ViewerFactory = Callable[[Path, object], object]
 
-#: 插件自带的打开函数：`(path, parent) -> (是否成功, 说明)`
+#: 插件自带的打开函数：`(path, parent, *, sources=()) -> (是否成功, 说明)`
+#: `sources` 是调用方「当前看到的文件顺序」，查看器用它实现上一张 / 下一张；
+#: 老实现不认这个关键字，所以只在非空时传（见 `_call_opener`）。
 ViewerOpener = Callable[..., "tuple[bool, str]"]
 
 
@@ -77,28 +80,52 @@ def viewers_for(suffix: str | Path) -> tuple[ViewerInfo, ...]:
         return ()
 
 
-def open_path(path: Path | str, parent=None) -> tuple[bool, str]:
-    """打开文件，返回 (是否成功, 说明)：由查看器插件决定内置查看还是系统程序。"""
+def open_path(
+    path: Path | str, parent=None, *, sources: Iterable[Path | str] = ()
+) -> tuple[bool, str]:
+    """打开文件，返回 (是否成功, 说明)：由查看器插件决定内置查看还是系统程序。
+
+    `sources` 是调用方「当前列表里的文件顺序」（数据管理页正在显示的那一页），
+    查看器的上一张 / 下一张按它走；不传时查看器自己决定（一般是同目录）。
+    """
     api = open_api()
     if api is None:
         return _fallback(path)
     try:
-        return api.open_path(path, parent)
+        return _call_opener(api.open_path, path, parent, sources=sources)
     except Exception as exc:
         logger.exception("查看器插件打开文件失败：{}", path)
         return False, f"打开失败：{exc}"
 
 
-def open_viewer_with(path: Path | str, viewer, parent=None) -> tuple[bool, str]:
-    """点名用某个内置查看器打开。"""
+def open_viewer_with(
+    path: Path | str, viewer, parent=None, *, sources: Iterable[Path | str] = ()
+) -> tuple[bool, str]:
+    """点名用某个内置查看器打开（`sources` 同上）。"""
     api = open_api()
     if api is None:
         return _fallback(path)
     try:
-        return api.open_viewer(path, viewer, parent)
+        return _call_opener(api.open_viewer, path, viewer, parent, sources=sources)
     except Exception as exc:
         logger.exception("查看器插件打开文件失败：{}", path)
         return False, f"打开失败：{exc}"
+
+
+def _call_opener(call, *args, sources: Iterable[Path | str] = ()) -> tuple[bool, str]:
+    """调用查看器插件的打开接口，顺带把「当前列表顺序」交过去。
+
+    `sources` 为空时不传：老版本查看器插件没有这个关键字，传了反而报错。
+    插件内部若因此抛 `TypeError`，这里退回老的两参数调用（再抛就交给上层兜底）。
+    """
+    items = tuple(sources)
+    if not items:
+        return call(*args)
+    try:
+        return call(*args, sources=items)
+    except TypeError:
+        logger.debug("查看器接口不认 sources 参数，按老签名重试")
+        return call(*args)
 
 
 def open_system(path: Path | str, ask: bool = False) -> tuple[bool, str]:

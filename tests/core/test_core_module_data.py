@@ -104,9 +104,9 @@ class RealModuleDataCase(unittest.TestCase):
         所以插件清单一律按「仓库根 / plugins /<owner>/.data/<文件名>」重新定位；
         `core.*` 的路径在 `src/app/core/` 下，不受重定向影响。
 
-        `plugins/example.*` 是本地协议样板，被 `.gitignore` 排除、不进发布载荷，所以
-        允许**仅** `example.ui_extension.info` 缺席（打包冒烟 `tests/smoke_checkout.py`
-        就是在干净检出里跑这条用例的）。
+        插件清单缺席只可能是「那份插件不在这个检出里」（本地插件被 `.gitignore` 排除、
+        不进发布载荷，打包冒烟 `tests/smoke_checkout.py` 就是在干净检出里跑这条用例的）——
+        所以缺席要连带核对插件目录本身也不在，否则就是登记表路径写错了。
         """
         repo = Path(__file__).resolve().parents[2]
         entries = []
@@ -117,20 +117,26 @@ class RealModuleDataCase(unittest.TestCase):
                 entries.append(replace(entry, path=repo / "plugins" / entry.owner / ".data" / entry.path.name))
         kit = ManifestKit(ManifestRegistry(entries))
         seen = 0
-        skipped: list[str] = []
+        skipped: list[tuple[str, str]] = []
         for entry in kit.entries():
             if not entry.managed:
                 continue
             if not entry.path.is_file():
-                skipped.append(entry.id)
+                skipped.append((entry.id, entry.owner))
                 continue
             data = kit.load(entry.id)  # 结构 + JSON Schema 校验
             self.assertTrue(data.items, f"{entry.id} 没有 items")
             self.assertTrue(data.version, f"{entry.id} 没有 version")
             self.assertEqual(data.meta.get("id"), entry.id, f"{entry.id} 的清单 id 与登记不符")
             seen += 1
-        self.assertGreaterEqual(seen, 16, "受管的清单至少应有 16 份可读")
-        self.assertLessEqual(set(skipped), {"example.ui_extension.info"}, f"只允许示例插件的清单缺席：{skipped}")
+        # 3 份 core 里 2 份受管（core.plugin_state 是历史格式、不受管）+ 9 份内置插件（7 个查看器 + 2 个编辑器）；
+        # 本地插件（lib.model / lib.autolabel / auto_*）不在干净检出里，所以不能按 16 份卡。
+        self.assertGreaterEqual(seen, 11, "受管的清单至少应有 11 份可读（2 份 core + 9 份内置插件）")
+        for entry_id, owner in skipped:
+            self.assertFalse(
+                (repo / "plugins" / owner).is_dir(),
+                f"{entry_id} 的插件目录在，清单却缺席（登记表路径写错了？）",
+            )
 
 
 class LoaderCase(unittest.TestCase):

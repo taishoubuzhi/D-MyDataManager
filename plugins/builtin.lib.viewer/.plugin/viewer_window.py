@@ -24,7 +24,15 @@ DEFAULT_HOST = "dialog"
 class ViewerWindow(QWidget):
     """查看器内容页：内容区 + 交给外壳的动作按钮；窗口装饰由弹窗插件负责。"""
 
-    def __init__(self, path, build, name: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        path,
+        build,
+        name: str,
+        parent: QWidget | None = None,
+        *,
+        sources: tuple[Path, ...] = (),
+    ) -> None:
         super().__init__(parent)
         self.path = Path(path)
         self.build = build
@@ -33,6 +41,8 @@ class ViewerWindow(QWidget):
         self.popup = None
         self._caption = ""
         self._meta_text = self.viewer_name
+        # 调用方「当前列表里的文件顺序」，交给内容页做上一张 / 下一张
+        self._sources = tuple(Path(item) for item in sources)
         self.setObjectName("viewerWindow")
 
         root = QVBoxLayout(self)
@@ -98,6 +108,8 @@ class ViewerWindow(QWidget):
         self.content_layout.addWidget(widget, 1)
         self._caption = str(getattr(widget, "caption", "") or "")
         self._watch_caption(widget)
+        self._watch_path(widget)
+        self._apply_sources(widget)
         self._sync_meta()
 
     def _watch_caption(self, widget) -> None:
@@ -107,9 +119,43 @@ class ViewerWindow(QWidget):
         if callable(connect):
             connect(self._on_caption_changed)
 
+    def _watch_path(self, widget) -> None:
+        """内容页若提供 `pathChanged` 信号，就跟着换目标文件。
+
+        上一张 / 下一张切完图，外壳标题栏的标题、以及「用系统程序打开」「定位文件」
+        两个动作都必须跟着指向当前这张，否则它们还停在一开始打开的那个文件上。
+        """
+        signal = getattr(widget, "pathChanged", None)
+        connect = getattr(signal, "connect", None)
+        if callable(connect):
+            connect(self._on_path_changed)
+
+    def _apply_sources(self, widget) -> None:
+        """把「调用方当前列表里的文件顺序」交给内容页（可选钩子 `set_sources`）。
+
+        内容页没有这个钩子就什么都不做：上一张 / 下一张仍由内容页自己决定。
+        """
+        if not self._sources:
+            return
+        hook = getattr(widget, "set_sources", None)
+        if not callable(hook):
+            return
+        try:
+            hook(self._sources)
+        except Exception:  # 内容页用不了浏览列表时保持它自己的顺序
+            _console.exception("查看器设置浏览列表失败")
+
     def _on_caption_changed(self, text) -> None:
         self._caption = str(text or "")
         self._sync_meta()
+
+    def _on_path_changed(self, text) -> None:
+        target = Path(str(text or ""))
+        if not str(target):
+            return
+        self.path = target
+        if self.popup is not None:
+            self.popup.set_title(target.name)
 
     def _show_hint(self, text: str) -> None:
         """查看器缺界面或构建失败时，退化成一行提示（不留空白区）。"""

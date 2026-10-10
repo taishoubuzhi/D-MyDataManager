@@ -29,8 +29,23 @@ FORBIDDEN_IMPORTS = (
     "app.ui.framework",
 )
 
-#: 事件广播用例驱动的示例插件 id（仓库自带）。
-SAMPLE_ID = "example.ui_extension"
+#: 事件广播用例用的探针插件 id：仓库里不再自带示例插件，检查自己写一个可开关的夹具。
+EVENT_PROBE_ID = "selfcheck.event_probe"
+
+#: 事件广播用例的探针源码：只要能装、能卸，不贡献任何界面元素。
+EVENT_PROBE_SOURCE = '''"""自检探针插件：事件广播检查的被测对象，只需要能被启用 / 禁用。"""
+
+from __future__ import annotations
+
+from app.sdk import Plugin, PluginContext
+
+
+class EventProbePlugin(Plugin):
+    """什么都不做，只证明插件开关会广播事件。"""
+
+    def setup(self, ctx: PluginContext) -> None:
+        self._ctx = ctx
+'''
 
 
 def _manifest_dirs() -> list[Path]:
@@ -486,6 +501,7 @@ def plugin_viewer_extensions(case: Case) -> None:
 @check("plugin_event_broadcast", "services")
 def plugin_event_broadcast(case: Case) -> None:
     """事件广播：导入、删除、切换用户、迁移库目录与插件开关都能通知订阅者。"""
+    from app.core.runtime import paths
     from app.sdk import Events
     from app.services.import_service import ImportService
     from app.services.item_service import ItemService
@@ -493,6 +509,21 @@ def plugin_event_broadcast(case: Case) -> None:
     from app.services.plugin_service import plugin_service
     from app.services.user_service import UserService
 
+    _write_plugin(
+        Path(paths.PLUGIN_DIR),
+        EVENT_PROBE_ID,
+        {
+            "id": EVENT_PROBE_ID,
+            "name": "事件探针",
+            "version": "1.0.0",
+            "api_version": ">=1.0 <2.0",
+            "description": "自检用的事件广播探针插件",
+            "author": "D-MyDataManager",
+            "enabled": False,
+            "entry": "plugin.py",
+        },
+        {"plugin.py": EVENT_PROBE_SOURCE},
+    )
     install_builtin_plugins()
     events = (
         Events.ITEM_IMPORTED,
@@ -521,8 +552,8 @@ def plugin_event_broadcast(case: Case) -> None:
     UserService(case.session).set_current(user)
     target = case.root / "library-moved"
     LibraryService(case.session).set_path(target)
-    assert plugin_service.set_enabled(SAMPLE_ID, False), "禁用示例插件应成功"
-    assert plugin_service.set_enabled(SAMPLE_ID, True), "重新启用示例插件应成功"
+    assert plugin_service.set_enabled(EVENT_PROBE_ID, False), "禁用探针插件应成功"
+    assert plugin_service.set_enabled(EVENT_PROBE_ID, True), "重新启用探针插件应成功"
 
     for event, payloads in seen.items():
         assert payloads, f"没有收到事件：{event}"
@@ -532,8 +563,8 @@ def plugin_event_broadcast(case: Case) -> None:
     assert seen[Events.USER_CHANGED][-1].get("name") == user.name, "用户切换事件应带用户名"
     assert seen[Events.USER_CHANGED][-1].get("user_id") == user.id, "用户切换事件应带用户 id"
     assert Path(seen[Events.LIBRARY_CHANGED][-1].get("path", "")) == target.resolve(), "库目录事件应带新路径"
-    assert seen[Events.PLUGIN_ENABLED][-1].get("plugin_id") == SAMPLE_ID, "启用事件应带插件 id"
-    assert seen[Events.PLUGIN_DISABLED][-1].get("plugin_id") == SAMPLE_ID, "禁用事件应带插件 id"
+    assert seen[Events.PLUGIN_ENABLED][-1].get("plugin_id") == EVENT_PROBE_ID, "启用事件应带插件 id"
+    assert seen[Events.PLUGIN_DISABLED][-1].get("plugin_id") == EVENT_PROBE_ID, "禁用事件应带插件 id"
 
 
 @check("plugin_load_summary", "services")

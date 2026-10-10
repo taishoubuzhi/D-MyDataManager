@@ -61,7 +61,9 @@ REQUIRED = (
     "pyappify.yml",
     "requirements.txt",
     "src/main.py",
-    "plugins/lib.model/plugin.json",
+    # 插件目录必须随包分发；点名一份**被版本库跟踪**的插件（`plugins/lib.*` 与 `plugins/auto_*`
+    # 都是 .gitignore 排除的本地插件，在干净检出里不存在，不能拿来当载荷样本）。
+    "plugins/builtin.lib.ui/plugin.json",
     "scripts/selfcheck.py",
     "scripts/tmpenv.py",
     "tests/harness.py",
