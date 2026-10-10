@@ -2124,9 +2124,28 @@ class ManagePage(Page):
 CARD_MIN_WIDTH = 240
 
 
+class _WheelScrollArea(QScrollArea):
+    """管理页内容滚动区：滚轮上下滑，按住 Shift 时滚轮左右滑（用户要求）。
+
+    列表内容比可视区宽时只有底部那条横向滚动条，用鼠标去拖很别扭；
+    Qt 默认也不把 Shift+滚轮 当横向滚动，所以这里自己接管。
+    """
+
+    def wheelEvent(self, event) -> None:
+        bar = self.horizontalScrollBar()
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier and bar.maximum() > bar.minimum():
+            # 竖滚轮取 y、能左右倾的滚轮取 x；触控板优先用像素增量。
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            pixel = event.pixelDelta().y() or event.pixelDelta().x()
+            bar.setValue(bar.value() - (pixel or delta))
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
 def _make_scroll(parent: QWidget, adaptive: bool = False, card_min_width: int = CARD_MIN_WIDTH):
     """列表用纵向布局（带尾哨兵），卡片用自适应流式布局（多列铺满）。"""
-    scroll = QScrollArea(parent)
+    scroll = _WheelScrollArea(parent)
     scroll.setWidgetResizable(True)
     scroll.setFrameShape(QFrame.Shape.NoFrame)
     host = QWidget()

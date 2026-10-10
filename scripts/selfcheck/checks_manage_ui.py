@@ -1466,6 +1466,57 @@ def manage_view_size(case: Case) -> None:
                     f"横向滚动应当同步表头，偏移 {page.list_header._offset} != {value}"
                 )
 
+        # ---- 滚轮：默认上下滑，按住 Shift 左右滑（用户要求）
+        # 只有两条数据，竖向本来滚不动；先把滚动区压矮逼出竖向范围，才验证得了「默认是上下滑」。
+        saved_max_height = page.list_view.maximumHeight()
+        page.list_view.setFixedHeight(24)
+        app.processEvents()
+        vbar = page.list_view.verticalScrollBar()
+        vbar.setValue(vbar.minimum())
+        scroll.setValue(scroll.minimum())
+        app.processEvents()
+        from PyQt6.QtCore import QPoint, QPointF
+        from PyQt6.QtGui import QWheelEvent
+        from PyQt6.QtWidgets import QApplication
+
+        def wheel(angle_x: int, angle_y: int, modifiers) -> None:
+            """向滚动区投一次滚轮事件：鼠标滚一格是 angleDelta 120。"""
+            QApplication.sendEvent(
+                page.list_view.viewport(),
+                QWheelEvent(
+                    QPointF(20.0, 20.0),
+                    QPointF(20.0, 20.0),
+                    QPoint(0, 0),
+                    QPoint(angle_x, angle_y),
+                    Qt.MouseButton.NoButton,
+                    modifiers,
+                    Qt.ScrollPhase.NoScrollPhase,
+                    False,
+                ),
+            )
+            app.processEvents()
+
+        if vbar.maximum() <= vbar.minimum():
+            problems.append("列表内容超出可视区时应当出现竖向滚动条")
+        else:
+            wheel(0, -120, Qt.KeyboardModifier.NoModifier)
+            if vbar.value() <= vbar.minimum():
+                problems.append("不按 Shift 的滚轮应当上下滑动列表")
+        if scroll.maximum() > scroll.minimum():
+            wheel(0, -120, Qt.KeyboardModifier.ShiftModifier)
+            expected = min(scroll.minimum() + 120, scroll.maximum())
+            if scroll.value() != expected:
+                problems.append(f"Shift+滚轮 应当左右滑动：{scroll.value()} != {expected}")
+            shifted = scroll.value()
+            wheel(0, -120, Qt.KeyboardModifier.NoModifier)
+            if scroll.value() != shifted:
+                problems.append("不按 Shift 的滚轮不该改变横向位置")
+            if vbar.maximum() > vbar.minimum() and vbar.value() <= vbar.minimum():
+                problems.append("不按 Shift 的滚轮应当上下滑动列表")
+        page.list_view.setMinimumHeight(0)
+        page.list_view.setMaximumHeight(saved_max_height)
+        app.processEvents()
+
         # ---- 卡片模式：表头隐藏、标签写全、卡片高度够、同屏卡片不重叠
         page._set_mode("card")
         app.processEvents()
