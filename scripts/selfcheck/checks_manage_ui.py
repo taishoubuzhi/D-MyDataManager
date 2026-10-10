@@ -14,7 +14,7 @@ from qfluentwidgets import StrongBodyLabel
 import app.ui.dialogs as dialogs_module
 import app.ui.pages.manage_page as manage_module
 from app.core.runtime import paths
-from app.core.config import resources_root
+from app.core.config import config, resources_root
 from app.core.runtime.naming import RENAME_MODE_KEYS, RenameRule, build_plan
 from app.repositories import CategoryRepository, ItemFilter, TagRepository
 from app.services import (
@@ -34,7 +34,13 @@ from app.ui.components.category_tree import (
     category_label,
     menu_entries,
 )
-from app.ui.components.item_card import ItemListRow
+from app.ui.components.item_card import (
+    LIST_COLUMNS,
+    VIEW_SIZE_KEYS,
+    ItemListRow,
+    view_size_key,
+    view_size_preset,
+)
 from app.ui.framework import tri_state
 
 
@@ -1379,6 +1385,152 @@ def manage_edit_dialog(case: Case) -> None:
             sip.delete(dialog)
         if app is not None:
             app.processEvents()
+        dispose_window(window)
+
+
+@check("manage_view_size", "pages")
+def manage_view_size(case: Case) -> None:
+    """显示大小档位、列表表头与横向滑动、卡片按内容长高（用户 m04164）。"""
+    fixture, window = build_window(case, show=True)
+    original = config.viewSize.value
+    problems: list[str] = []
+    try:
+        app = ensure_app()
+        session = case.session
+        page = window.manage_page
+        # 必须真的切到这一页：布局没跑过时量到的几何尺寸全是控件的默认值（用户看不到的重叠也会被误判）。
+        window.resize(1280, 900)
+        window.switchTo(page)
+        app.processEvents()
+
+        # 超长名称 + 满屏标签/关键词：列表要靠横向滑动看全，卡片里标签行必须换行。
+        long_name = "超长名称的数据条目" * 6
+        tags = [f"标签{index}号" for index in range(8)]
+        keywords = [f"关键词{index}" for index in range(8)]
+        ImportService(session).import_text(
+            long_name,
+            "正文",
+            category_id=fixture.category_child,
+            tags=tags,
+            keywords=keywords,
+        )
+        ImportService(session).import_text(
+            "短条目", "正文", category_id=fixture.category_child, tags=["单个标签"]
+        )
+        session.commit()
+        page.refresh()
+        app.processEvents()
+
+        start = view_size_key(original)
+        if page.size_box.count() != len(VIEW_SIZE_KEYS):
+            problems.append(f"显示大小应有 {len(VIEW_SIZE_KEYS)} 档，实际 {page.size_box.count()}")
+        if page.size_box.currentData() != start:
+            problems.append(
+                f"显示大小下拉的初值应与配置一致：{page.size_box.currentData()!r} != {start!r}"
+            )
+
+        # ---- 列表模式：表头 + 列宽一致 + 内容不省略 + 能左右滑动
+        if page.list_header.isHidden():
+            problems.append("列表视图里应当显示表头")
+        rows = _list_rows(page)
+        if len(rows) != len(page._items):
+            problems.append(f"列表行数应与本页数据一致：{len(rows)} != {len(page._items)}")
+        header_widths = {key: label.width() for key, label in page.list_header._labels.items()}
+        header_texts = [label.text() for label in page.list_header._labels.values()]
+        if header_texts != [title for _key, title, _minimum in LIST_COLUMNS]:
+            problems.append(f"表头文字不对：{header_texts}")
+        for row in rows:
+            widths = {key: label.width() for key, label in row._labels.items()}
+            if widths != header_widths:
+                problems.append(f"列表行的列宽应与表头一致：{widths} != {header_widths}")
+                break
+        long_row = next((row for row in rows if row.item is not None and row.item.name == long_name), None)
+        if long_row is None:
+            problems.append("列表里找不到超长名称的那条数据")
+        else:
+            if long_row._labels["name"].text() != long_name:
+                problems.append("列表把名称省略了，用户看不到完整内容")
+            if long_row._labels["tags"].text().count("#") != len(tags):
+                problems.append("列表没有把标签写全")
+            if long_row._labels["keywords"].text().count("、") != len(keywords) - 1:
+                problems.append("列表没有把关键词写全")
+        scroll = page.list_view.horizontalScrollBar()
+        if scroll.maximum() <= 0:
+            problems.append("超长内容没有把列表撑宽，用户无法左右滑动查看")
+        else:
+            value = min(30, scroll.maximum())
+            scroll.setValue(value)
+            app.processEvents()
+            if page.list_header._offset != value:
+                problems.append(
+                    f"横向滚动应当同步表头，偏移 {page.list_header._offset} != {value}"
+                )
+
+        # ---- 卡片模式：表头隐藏、标签写全、卡片高度够、同屏卡片不重叠
+        page._set_mode("card")
+        app.processEvents()
+        page._fit_cards()
+        app.processEvents()
+        if not page.list_header.isHidden():
+            problems.append("卡片视图里不该显示列表表头")
+        cards = [widget for widget in page._rows["card"] if getattr(widget, "item", None) is not None]
+        if len(cards) != len(page._items):
+            problems.append(f"卡片数应与本页数据一致：{len(cards)} != {len(page._items)}")
+        long_card = next((card for card in cards if card.item.name == long_name), None)
+        if long_card is None:
+            problems.append("卡片视图里找不到超长名称的那条数据")
+        else:
+            chips = [chip for chip in long_card._tags._chips if not chip.isHidden()]
+            if len(chips) != len(tags):
+                problems.append(f"卡片只显示了 {len(chips)} 个标签，应当显示全部 {len(tags)} 个")
+            if long_card._tags.height() <= chips[0].height():
+                problems.append("卡片里的标签没有换行显示，超出部分会被裁掉")
+            needed = long_card.layout().minimumSize().height()
+            if long_card.height() < needed:
+                problems.append(
+                    f"卡片高度 {long_card.height()} 装不下内容 {needed}，标签/关键词显示不全"
+                )
+        for index, card in enumerate(cards):
+            for other in cards[index + 1 :]:
+                if card.geometry().intersects(other.geometry()):
+                    problems.append("卡片互相重叠，说明高度没有随内容自适应")
+                    break
+            else:
+                continue
+            break
+
+        # ---- 换档：整批重建控件，封面大小跟着变
+        other = next(key for key in VIEW_SIZE_KEYS if key != start)
+        page.size_box.setCurrentIndex(VIEW_SIZE_KEYS.index(other))
+        app.processEvents()
+        preset = view_size_preset(other)
+        if config.viewSize.value != other:
+            problems.append(f"换档没有写进配置：{config.viewSize.value!r} != {other!r}")
+        if page.card_layout.widgetMinimumWidth() != preset.card_min_width:
+            problems.append("换档后卡片的最小宽度没有跟着变")
+        card = next(
+            (widget for widget in page._rows["card"] if getattr(widget, "item", None) is not None),
+            None,
+        )
+        if card is None:
+            problems.append("换档后卡片控件没有重建")
+        elif card._cover._size != preset.card_cover:
+            problems.append(f"换档后卡片封面大小没变：{card._cover._size} != {preset.card_cover}")
+        if page.list_header._cover_cell.width() != preset.list_cover:
+            problems.append("换档后表头的封面格没有跟着变")
+        page._set_mode("list")
+        app.processEvents()
+        row = next(iter(_list_rows(page)), None)
+        if row is None:
+            problems.append("换档后列表行控件没有重建")
+        elif row._cover._size != preset.list_cover:
+            problems.append(f"换档后列表封面大小没变：{row._cover._size} != {preset.list_cover}")
+
+        assert not problems, "显示大小与列表表头：" + "；".join(problems[:12])
+    finally:
+        config.set(config.viewSize, original)
+        if ensure_app() is not None:
+            ensure_app().processEvents()
         dispose_window(window)
 
 

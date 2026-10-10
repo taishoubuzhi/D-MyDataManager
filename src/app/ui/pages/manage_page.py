@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -96,7 +96,16 @@ from ..components.category_tree import SORT_MODES as CATEGORY_SORT_MODES
 from ..components.category_tree import CategoryTree
 from ..components.cover_loader import cover_loader
 from ..components.filter_panel import FilterPanel
-from ..components.item_card import ItemCard, ItemListRow
+from ..components.item_card import (
+    LIST_COLUMNS,
+    VIEW_SIZE_KEYS,
+    VIEW_SIZE_LABELS,
+    ItemCard,
+    ItemListRow,
+    ListHeader,
+    view_size_key,
+    view_size_preset,
+)
 from ..components.pager import Pager, normalize_page_size, selection_summary
 from ..framework import IconTextButton
 
@@ -241,8 +250,14 @@ class ManagePage(Page):
         self._syncing = False
         self._category_id: int | None = None
         self._mode = "list"
+        #: 显示大小档位（用户 m04164 第 1 条）：控件构造时尺寸就定死了，换档要整批重建
+        self._view_size = view_size_key(config.viewSize.value)
         #: 两种视图各自的控件池：刷新时按位复用，避免整页销毁重建。
         self._rows: dict[str, list[QWidget]] = {"list": [], "card": []}
+        #: 卡片高度要等布局跑完才量得准，延后一轮再量（见 `_fit_cards`）
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit_cards)
         self._unlocked = False
         self._page = 0
         self._page_size = normalize_page_size(config.pageSize.value)
@@ -373,6 +388,16 @@ class ManagePage(Page):
         self.view_switch.setCurrentItem("list")
         header.addWidget(self.view_switch)
         header.addSpacing(12)
+        header.addWidget(icon_label(FluentIcon.FIT_PAGE, "显示大小", host))
+        self.size_box = ComboBox(host)
+        self.size_box.setMinimumWidth(90)
+        self.size_box.setToolTip("封面与条目的显示大小（列表与卡片都跟着变）")
+        for key in VIEW_SIZE_KEYS:
+            self.size_box.addItem(VIEW_SIZE_LABELS[key], userData=key)
+        self.size_box.setCurrentIndex(max(0, VIEW_SIZE_KEYS.index(self._view_size)))
+        self.size_box.currentIndexChanged.connect(self._on_view_size_changed)
+        header.addWidget(self.size_box)
+        header.addSpacing(12)
         self.tree_toggle_button = IconTextButton(FluentIcon.MENU, "分类栏", host)
         self.tree_toggle_button.setCheckable(True)
         self.tree_toggle_button.setToolTip("显示/隐藏左侧分类栏")
@@ -404,10 +429,16 @@ class ManagePage(Page):
 
         self.stack = QStackedWidget(host)
         self.list_view, self.list_layout = _make_scroll(host)
-        self.card_view, self.card_layout = _make_scroll(host, adaptive=True)
+        self.card_view, self.card_layout = _make_scroll(
+            host, adaptive=True, card_min_width=view_size_preset(self._view_size).card_min_width
+        )
         self.stack.addWidget(self.list_view)
         self.stack.addWidget(self.card_view)
+        # 表头放在滚动区之外（纵向滚动不会把它带走），横向滚动靠 set_offset 同步
+        self.list_header = ListHeader(host, self._view_size)
+        layout.addWidget(self.list_header)
         layout.addWidget(self.stack, 1)
+        self.list_view.horizontalScrollBar().valueChanged.connect(self.list_header.set_offset)
 
         self.pager = Pager(host, self._page_size)
         self.pager.pageChanged.connect(self._on_page_changed)
@@ -782,7 +813,11 @@ class ManagePage(Page):
                 widget = pool[index]
                 widget.set_item(item)
             else:
-                widget = ItemListRow(item) if self._mode == "list" else ItemCard(item)
+                widget = (
+                    ItemListRow(item, view_size=self._view_size)
+                    if self._mode == "list"
+                    else ItemCard(item, view_size=self._view_size)
+                )
                 widget.activated.connect(lambda target, page=self: page._on_item_activated(target))
                 widget.opened.connect(lambda target, page=self: page._on_open(target))
                 widget.menuRequested.connect(lambda target, pos, page=self: page._show_menu(target, pos))
@@ -795,7 +830,71 @@ class ManagePage(Page):
                 else:
                     layout.insertWidget(layout.count() - 1, widget)
             widget.set_selected(item.id in self._selected)
+        if self._mode == "list":
+            self._measure_list_columns()
+        else:
+            self._fit_cards()
+            self._schedule_card_fit()
         self._sync_select_all()
+
+    def _measure_list_columns(self) -> None:
+        """按本页内容量出各列宽度（用户 m04164 第 2 条）。
+
+        列宽取「所有行内容的最大值」，一次量完同时写给表头与每一行：两边的列结构完全一样，
+        因此表头文字正好落在对应列上。内容很长的列会把滚动区的画布撑宽，看不全就左右滑动。
+        """
+        widths = {key: minimum for key, _title, minimum in LIST_COLUMNS}
+        for widget in self._rows["list"]:
+            for key, width in widget.column_widths().items():
+                widths[key] = max(widths[key], width)
+        self.list_header.apply_widths(widths)
+        for widget in self._rows["list"]:
+            widget.apply_column_widths(widths)
+
+    def _schedule_card_fit(self) -> None:
+        """延后一轮再量卡片高度：此刻宽度与标签换行都还没算稳。"""
+        self._fit_timer.start(0)
+
+    def _fit_cards(self) -> None:
+        """让卡片按内容给出准确高度（用户 m04164 第 3 条）。
+
+        卡片里的标签行是流式容器，换行后的高度取决于卡片宽度；而卡片视图的自适应流式布局
+        又是按控件 `sizeHint()` 摆行的。所以先把每张卡片的内部高度锁定、再让流式布局重排一遍，
+        多跑两轮是因为「卡片宽度 → 标签换行 → 卡片高度」这一圈要收敛。
+        """
+        if self._mode != "card":
+            return
+        cards = [widget for widget in self._rows["card"] if getattr(widget, "item", None) is not None]
+        for _ in range(3):
+            self.card_layout.invalidate()
+            self.card_layout.activate()  # 先把宽度分给卡片，卡片才知道标签该在哪换行
+            for widget in cards:
+                widget.sync_height()
+            self.card_layout.activate()  # 卡片高度变了，再摆一次行位置
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        if self._mode == "card":
+            self._schedule_card_fit()
+
+    def _on_view_size_changed(self, index: int) -> None:
+        """切换显示大小档位（用户 m04164 第 1 条）：控件尺寸在构造时就定死了，得整批重建。"""
+        key = self.size_box.itemData(index)
+        if not key or key == self._view_size:
+            return
+        self._view_size = view_size_key(key)
+        config.set(config.viewSize, self._view_size)
+        self._rebuild_rows()
+
+    def _rebuild_rows(self) -> None:
+        """丢掉两种视图的控件池，按新的显示大小重建（列宽、封面、卡片布局都跟着变）。"""
+        for layout in (self.list_layout, self.card_layout):
+            _clear_layout(layout)
+        self._rows = {"list": [], "card": []}
+        self.card_layout.setWidgetMinimumWidth(view_size_preset(self._view_size).card_min_width)
+        self.list_header.set_view_size(self._view_size)
+        self.list_header.set_offset(0)
+        self._render()
 
     # ------------------------------------------------------------------ 用户
     def _reload_users(self) -> None:
@@ -831,6 +930,8 @@ class ManagePage(Page):
     def _set_mode(self, mode: str) -> None:
         self._mode = mode
         self.stack.setCurrentIndex(0 if mode == "list" else 1)
+        # 表头只在列表视图出现（卡片视图没有列）
+        self.list_header.setVisible(mode == "list")
         self._render()
 
     def _sync_selection(self) -> None:
@@ -2023,7 +2124,7 @@ class ManagePage(Page):
 CARD_MIN_WIDTH = 240
 
 
-def _make_scroll(parent: QWidget, adaptive: bool = False):
+def _make_scroll(parent: QWidget, adaptive: bool = False, card_min_width: int = CARD_MIN_WIDTH):
     """列表用纵向布局（带尾哨兵），卡片用自适应流式布局（多列铺满）。"""
     scroll = QScrollArea(parent)
     scroll.setWidgetResizable(True)
@@ -2031,7 +2132,7 @@ def _make_scroll(parent: QWidget, adaptive: bool = False):
     host = QWidget()
     if adaptive:
         layout = AdaptiveFlowLayout(host, needAni=False, isTight=True)
-        layout.setWidgetMinimumWidth(CARD_MIN_WIDTH)
+        layout.setWidgetMinimumWidth(card_min_width)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
     else:

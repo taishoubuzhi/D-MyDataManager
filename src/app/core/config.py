@@ -91,6 +91,11 @@ class Config(QConfig):
     simpleDisplay = OptionsConfigItem(
         "Layout", "Simple-Display", SIMPLE_DEFAULT, OptionsValidator(list(SIMPLE_MODES))
     )
+    # 数据管理页的显示大小（用户 m04164 第 1 条）：small/medium/large，主要影响封面大小、
+    # 卡片最小宽度（决定每行放几张）与列表行高；默认 small 与改动前的观感一致
+    viewSize = OptionsConfigItem(
+        "Layout", "View-Size", "small", OptionsValidator(["small", "medium", "large"])
+    )
     # 悬停提示：鼠标停在按钮或标题上多久才弹出说明（毫秒，0 表示立刻弹出）
     tooltipDelay = RangeConfigItem("Layout", "Tooltip-Delay", 2000, RangeValidator(0, 10_000))
     # 左键双击：数据管理页双击条目时打开查看器（默认）还是交给编辑器插件
