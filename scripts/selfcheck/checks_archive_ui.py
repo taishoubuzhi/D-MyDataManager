@@ -1267,7 +1267,9 @@ def video_viewer(case: Case) -> None:
     # 兜底确认一律不真弹框（headless 下弹窗会卡住自检），把问答与提示记下来断言
     asked: list[str] = []
     toasts: list[str] = []
+    warnings: list[str] = []
     original_confirm = video_module.confirm
+    original_warning = video_module.toast_warning
     original_toasts = (
         video_module.toast_success,
         video_module.toast_error,
@@ -1277,6 +1279,7 @@ def video_viewer(case: Case) -> None:
     video_module.toast_success = lambda *_args, **_kwargs: None
     video_module.toast_error = lambda *_args, **_kwargs: None
     video_module.toast_info = lambda _parent=None, title="", content="", **_kwargs: toasts.append(str(title))
+    video_module.toast_warning = lambda _parent=None, title="", content="", **_kwargs: warnings.append(str(title))
 
     viewer = None
     try:
@@ -1357,9 +1360,19 @@ def video_viewer(case: Case) -> None:
             "循环播放",
             "截取当前画面",
             "把音轨导出成音频文件",
+            "用当前画面作封面",
             "全屏",
         ):
             _expect(problems, any(word in tip for tip in tips), f"播放条上应有「{word}」动作，实际 {tips}")
+
+        # 「用当前画面作封面」（用户 m02499 第 2 条）：不在库里的文件要被拒绝，而不是默默写一张没人认的封面
+        warnings.clear()
+        viewer._use_frame_as_cover()
+        _expect(
+            problems,
+            any("不在数据库里" in title for title in warnings),
+            f"库里没有的视频应被拒绝设为封面，实际提示 {warnings}",
+        )
 
         # 首末帧 / 前后一秒要贴着播放按钮两侧
         def _slot(word: str) -> int:
@@ -1686,6 +1699,7 @@ def video_viewer(case: Case) -> None:
                 _drop_widget(built)
     finally:
         video_module.confirm = original_confirm
+        video_module.toast_warning = original_warning
         video_module.toast_success, video_module.toast_error, video_module.toast_info = original_toasts
         _drop_widget(viewer)
         dispose_window(window)

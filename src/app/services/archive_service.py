@@ -16,7 +16,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..core.runtime import paths
-from ..core.config import config
+from ..core.config import config, cover_dir
 from ..db.models import (
     Archive,
     ArchiveEntry,
@@ -34,6 +34,7 @@ from ..repositories import (
     ItemRepository,
     TagRepository,
 )
+from . import cover_service
 from .blob_store import sha256_of
 from .content_store import ContentStore
 from .library_service import LibraryService
@@ -117,6 +118,7 @@ class RestoreReport:
     repaired: int = 0
     renamed: int = 0
     hidden_fixed: int = 0
+    covers_fixed: int = 0
     undeleted: int = 0
     soft_deleted: int = 0
     skipped: int = 0
@@ -307,6 +309,8 @@ class ArchiveService:
                     "user_id": item.user_id,
                     "user_name": user_names.get(item.user_id or 0, ""),
                     "is_hidden": bool(item.is_hidden),
+                    # 只记封面文件名（空串 = 存档时没有封面）；回档要能还原封面变更
+                    "cover_path": cover_service.cover_name(item),
                 }
             )
 
@@ -500,6 +504,9 @@ class ArchiveService:
                 return "changed"
             if bool(item.is_hidden) != bool(entry.is_hidden):
                 return "changed"
+            if self._cover_changed(item, entry):
+                # 封面也算数据信息的一部分（用户 m02499 第 2 条）：回档要能把它调回来
+                return "changed"
             return "same" if self._file_present(item) else "lost"
         match = self._match_item(entry, owner, name_map)
         if match is None:
@@ -511,7 +518,32 @@ class ArchiveService:
             return "removed"
         if bool(match.is_hidden) != bool(entry.is_hidden):
             return "changed"
+        if self._cover_changed(match, entry):
+            return "changed"
         return "same" if self._file_present(match) else "lost"
+
+    def _cover_changed(self, item: DataItem, entry: ArchiveEntry) -> bool:
+        """封面变了吗（只在存档记过这个字段时才比对）。
+
+        `entry.cover_path` 为 None 表示这条存档建于加字段之前、当时没记封面：不能把它
+        当成「存档时没有封面」，否则老存档回档会把所有封面都判成变更（用户 m02499 第 2 条）。
+        """
+        if entry.cover_path is None:
+            return False
+        return cover_service.cover_name(item) != str(entry.cover_path or "")
+
+    def _cover_only_change(self, item: DataItem, entry: ArchiveEntry) -> bool:
+        """只是封面变了：内容与隐藏位都没动，回档只需换封面，不能重建数据项。
+
+        否则「回档把封面调回来」会顺手多出一条重复数据（_plan 里内容变更才走 create）。
+        """
+        return (
+            not item.is_deleted
+            and (item.checksum or "") == (entry.checksum or "")
+            and bool(item.is_hidden) == bool(entry.is_hidden)
+            and self._file_present(item)
+            and self._cover_changed(item, entry)
+        )
 
     def _file_present(self, item: DataItem) -> bool:
         """数据项在库内的文件是否还在。
@@ -658,6 +690,9 @@ class ArchiveService:
                 actions.append(_Action("repair", entry=entry, item=item, archive_name=source))
             elif item.is_deleted or bool(item.is_hidden) != bool(entry.is_hidden):
                 actions.append(_Action("align", entry=entry, item=item, archive_name=source))
+            elif self._cover_only_change(item, entry):
+                # 只是封面变过：换回存档那张即可，绝不能当成内容变更去重建数据项
+                actions.append(_Action("cover", entry=entry, item=item, archive_name=source))
             elif mode == "mirror" and (item.checksum or "") != (entry.checksum or ""):
                 actions.append(_Action("replace", entry=entry, item=item, archive_name=source))
             elif mode == "mirror":
@@ -723,6 +758,8 @@ class ArchiveService:
             return Change("补回文件", name, category, user, action.archive_name)
         if action.kind == "create":
             return Change("新增", name, category, user, action.archive_name)
+        if action.kind == "cover":
+            return Change("换封面", name, category, user, action.archive_name)
         if action.kind == "align":
             assert item is not None and entry is not None
             parts: list[str] = []
@@ -732,6 +769,8 @@ class ArchiveService:
                 parts.append("还原内容")
             if bool(item.is_hidden) != bool(entry.is_hidden):
                 parts.append("仅改隐藏位")
+            if self._cover_changed(item, entry):
+                parts.append("换封面")
             return Change(" + ".join(parts) or "无变化", name, category, user, action.archive_name)
         return None
 
@@ -765,6 +804,8 @@ class ArchiveService:
                 report.replaced += 1
             elif action.kind == "repair":
                 report.repaired += 1
+            elif action.kind == "cover":
+                report.covers_fixed += 1
             elif action.kind == "align":
                 item, entry = action.item, action.entry
                 assert item is not None and entry is not None
@@ -774,6 +815,8 @@ class ArchiveService:
                     report.restored += 1
                 elif bool(item.is_hidden) != bool(entry.is_hidden):
                     report.hidden_fixed += 1
+                if self._cover_changed(item, entry):
+                    report.covers_fixed += 1
         return report
 
     def preview_restore(
@@ -846,6 +889,10 @@ class ArchiveService:
             elif bool(action.item.is_hidden) != bool(entry.is_hidden):
                 libraries.set_item_hidden(action.item, bool(entry.is_hidden))
             return
+        if action.kind == "cover":
+            assert action.item is not None
+            self._apply_cover(entry, action.item)
+            return
         if action.kind == "replace" or action.kind == "repair":
             assert action.item is not None
             self._replace_in_place(entry, action.item)
@@ -853,6 +900,36 @@ class ArchiveService:
         _item, renamed = self._create_from_entry(entry, owner)
         if renamed:
             report.renamed += 1
+
+    def _apply_cover(self, entry: ArchiveEntry, item: DataItem) -> bool:
+        """按存档把数据项的封面调回来；返回是否认下了存档里记的封面。
+
+        存档只记封面文件名（`全局/covers/` 下的名字）：文件还在就直接指过去，文件没了
+        （比如设置页「重置封面」清过目录）就退回默认规则并记一条警告——这比让封面停在
+        改过的样式强。换掉的旧封面没人引用时顺手删掉，减少冗余。
+        """
+        if entry.cover_path is None:
+            # 早期存档没记过封面：不动它，免得把用户现在的封面误判成「该还原」
+            return False
+        name = str(entry.cover_path or "")
+        old = cover_service.cover_name(item)
+        target = cover_dir() / name if name else None
+        if target is not None and target.is_file():
+            item.cover_path = str(target)
+            self.session.flush()
+            if old and old != name:
+                cover_service.release_cover(self.session, old, keep=name)
+            return True
+        if name:
+            logger.warning("存档记录的封面文件已不在，按默认规则重建：{}", name)
+            cover_service.set_cover(self.session, item, "")
+            return False
+        # 存档时就是「没有封面」：清空，别按默认规则再抽一帧（那与存档不符）
+        item.cover_path = ""
+        self.session.flush()
+        if old:
+            cover_service.release_cover(self.session, old)
+        return True
 
     def _replace_in_place(self, entry: ArchiveEntry, item: DataItem) -> None:
         """覆盖式：原地替换内容，不删旧建新（避免 id 漂移与重复数据）。"""
@@ -874,6 +951,8 @@ class ArchiveService:
             entry.checksum or "", entry.size, "", self.store.loose_rel_path(entry.checksum or "")
         )
         self.session.flush()
+        # 内容换回存档那份时，封面也要一起回到存档时的样子（封面属于数据信息，用户 m02499）
+        self._apply_cover(entry, item)
         logger.info("已按存档覆盖数据：{}（id {}）", entry.name, item.id)
 
     def _create_from_entry(
@@ -918,6 +997,8 @@ class ArchiveService:
         item.tags = self.tags.ensure_many(entry.tags or [], user_id=owner_id)
         self.blobs.register(entry.checksum, entry.size, "", self.store.loose_rel_path(entry.checksum))
         self.session.flush()
+        # 新建出来的数据项也要带上存档记的封面，否则回档后封面与存档不一致
+        self._apply_cover(entry, item)
         logger.info("已从存档还原：{}（归属用户 {}）", entry.name, owner_id)
         return item, renamed
 
@@ -941,6 +1022,12 @@ class ArchiveService:
             logger.warning("存档内容已丢失，无法还原：{}", entry.name)
             return None
         action = actions[0]
+        if action.kind == "cover":
+            # 只换了封面：内容、隐藏位都没动，直接按存档把封面调回来
+            assert action.item is not None
+            self._apply_cover(entry, action.item)
+            self.session.flush()
+            return action.item
         if action.kind in ("align", "replace", "repair"):
             assert action.item is not None
             libraries = LibraryService(self.session, store=self.store)
@@ -961,7 +1048,13 @@ class ArchiveService:
     def restore_all(self, archive: Archive, user_id: int | None = None) -> dict[str, int]:
         """整档还原：每条回到其所属用户的原分类目录（恢复式）。"""
         report = self.restore(archive, "restore", user_id)
-        restored = report.restored + report.repaired + report.hidden_fixed + report.undeleted
+        restored = (
+            report.restored
+            + report.repaired
+            + report.hidden_fixed
+            + report.covers_fixed
+            + report.undeleted
+        )
         return {"restored": restored, "skipped": report.skipped}
 
     # ---------------------------------------------------------------- 维护

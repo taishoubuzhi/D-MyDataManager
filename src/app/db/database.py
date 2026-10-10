@@ -22,7 +22,7 @@ _engine: Engine | None = None
 _session_factory: sessionmaker | None = None
 
 # 表结构版本：低版本库启动时原地补列升级，高于当前程序的库则备份并重建
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # 全文检索：FTS5 虚拟表（trigram 分词，支持中文子串匹配）+ 同步触发器
 FTS_TABLE = "items_fts"
@@ -184,6 +184,7 @@ def _reset_for_schema_change() -> None:
 #         manifest_chunks 表），archives 补 logical_size、archive_entries 补 manifest_id
 # 7 -> 8：放弃分块，内容改整份压缩存储：四张块/清单/pack 表合并成 contents，
 #         archive_entries 去掉 manifest_id（内容身份只看 checksum）
+# 8 -> 9：archive_entries 补 cover_path（存档记录封面文件名，回档能还原封面变更）
 _COLUMN_PATCHES: dict[str, tuple[tuple[str, str], ...]] = {
     "archives": (
         ("pinned", "ALTER TABLE archives ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"),
@@ -213,6 +214,8 @@ _COLUMN_PATCHES: dict[str, tuple[tuple[str, str], ...]] = {
             "is_hidden",
             "ALTER TABLE archive_entries ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT 0",
         ),
+        # 可空：NULL 表示早期存档没记过封面，回档时不做封面比对（不能当成「没有封面」）
+        ("cover_path", "ALTER TABLE archive_entries ADD COLUMN cover_path VARCHAR(512)"),
     ),
 }
 

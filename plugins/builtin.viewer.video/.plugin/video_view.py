@@ -25,7 +25,7 @@ from PyQt6.QtGui import QCursor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QFileDialog, QWidget
 from qfluentwidgets import Action, FluentIcon, RoundMenu
 
-from app.sdk import media, ui
+from app.sdk import items, media, ui
 from app.sdk.console import console_for
 from dm_plugin.builtin.lib.ui.plugin import (
     MEDIA_RATES,
@@ -259,6 +259,9 @@ class VideoViewer(PlayerPanel):
         self._screenshot_button = self._add_top_action(
             FluentIcon.CAMERA, "截取当前画面", self._grab_frame
         )
+        self._cover_button = self._add_top_action(
+            FluentIcon.PHOTO, "用当前画面作封面", self._use_frame_as_cover
+        )
         self._export_button = self._add_top_action(
             FluentIcon.SAVE, "把音轨导出成音频文件", self._export_audio
         )
@@ -424,6 +427,39 @@ class VideoViewer(PlayerPanel):
             ui.reveal(shot)
         else:
             toast_error(self, "截图失败", "这一帧解不出来（文件损坏或媒体引擎不可用）")
+
+    def _use_frame_as_cover(self) -> None:
+        """把当前播放位置的那一帧写成这条数据的封面（用户 m02499 第 2 条）。
+
+        帧先落在媒体临时目录，交给数据接口缩放并搬进封面目录，临时文件随后删掉——
+        播放器只负责「解这一帧」，封面怎么存由程序本体说了算。
+        """
+        item_id = items.item_id_for_path(str(self._path))
+        if not item_id:
+            # 播放的可能不是库里的数据（外部文件、收件箱），没有可改封面的对象
+            toast_warning(self, "这个文件不在数据库里", "只有库内的视频才能用画面当封面")
+            return
+        self._wait(True)
+        temp = None
+        try:
+            temp = media.temp_path(".png")
+            shot = media.frame(self._path, temp, at=self._player.position() / 1000.0, size=None)
+        except Exception as exc:  # noqa: BLE001 - 媒体接口拿不到临时目录时只提示
+            toast_error(self, "封面设置失败", str(exc))
+            return
+        finally:
+            self._wait(False)
+        if not shot:
+            toast_error(self, "封面设置失败", "这一帧解不出来（文件损坏或媒体引擎不可用）")
+            return
+        try:
+            items.set_cover(item_id, str(shot))
+        except Exception as exc:  # noqa: BLE001 - 写封面失败不影响继续播放
+            toast_error(self, "封面设置失败", str(exc))
+            return
+        finally:
+            media.cleanup_temp(temp)
+        toast_success(self, "已设为封面", "回数据管理页看到的就是这一帧")
 
     def _export_audio(self) -> None:
         """把音轨导出成音频文件（能直接搬包就不重编码）。"""

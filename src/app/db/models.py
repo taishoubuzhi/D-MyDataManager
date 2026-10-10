@@ -324,6 +324,9 @@ class ArchiveEntry(Base):
 
     user_id / user_name 记录条目所属用户，还原时据此放回该用户的分类目录。
     `checksum` 是这份内容的身份（仓库里按它取内容；取不到就是「库内文件已丢失」）。
+    `cover_path` 只记**封面文件名**（`全局/covers/` 下的名字，空串 = 存档时没有封面，
+    NULL = 早期存档没记过这个字段，回档时不做封面比对）。记文件名而不是绝对路径，
+    是为了资源根目录搬家后存档仍然认得这张封面；同名文件只要还被存档引用就不会被删。
     """
 
     __tablename__ = "archive_entries"
@@ -343,6 +346,7 @@ class ArchiveEntry(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     content: Mapped[str] = mapped_column(Text, default="")
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    cover_path: Mapped[str | None] = mapped_column(String(512), nullable=True, default=None)
 
     archive: Mapped["Archive"] = relationship(back_populates="entries")
 

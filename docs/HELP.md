@@ -22,6 +22,9 @@
 资源文件夹**全局唯一**（配置项 `Storage/Resource-Path`，默认项目根的 `.resources`，旧 `resources/` 启动时自动改名；可在「设置 → 资源文件夹」中更改，
 选的是**容器目录**、资源文件夹是它下面的 `.resources`；目标位置里已经有一个 `.resources`（多半是上次没搬完留下的）时程序会问你要不要删掉它再重搬，
 `ResourceRootExists` 就是这一问；搬不动（复制失败 / 配置写不回去）会把原文件夹与配置都退回去，绝不留下半份，搬迁成功后写回库路径并自动重启），
+同一页还有**「导入资源文件夹」**：选一个已经存在的资源文件夹**直接作为当前资源文件夹使用**——与上面的「更改位置（搬迁）」刻意相反，
+它**不会搬动、也不会删除任何一份**，两边都原样留着，想切回原来的那份再导入一次即可（导入前会问一次，导入后自动重启）；
+选错目录（既没有 `data.db` 也没有 `library/`）会被拒绝并提示「这里不是一个资源文件夹」。
 数据库（`data.db`）与唯一的库文件夹 `library/` 都在它下面。
 库内部结构由 `src/app/core/runtime/paths.py` 与 `src/app/services/library_service.py` 约定：
 
@@ -200,7 +203,7 @@ pyside6-lrelease src\app\resource\i18n\app.en.ts -qm src\app\resource\i18n\app.e
 「清除口令」按钮只对已设口令的用户显示（`UserPage._clear_password()`）：默认用户可以清除任何用户的口令，其他用户只能清除自己的，越权时给出提示。
 
 系统级操作只对默认用户开放（`src/app/ui/pages/settings_page.py` / `plugin_page.py`）：设置页的「恢复初始化」与资源文件夹的
-「更改位置 / 扫描并登记 / 重建目录结构」、插件页的「导入插件包 / 导入插件目录 / 启用 / 插件选项（启用时） / 重命名 /
+「更改位置 / 导入资源文件夹 / 扫描并登记 / 重建目录结构」、插件页的「导入插件包 / 导入插件目录 / 启用 / 插件选项（启用时） / 重命名 /
 编辑说明 / 编辑备注 / 删除 / 批量启用 / 批量禁用 / 批量删除」在普通用户下被禁用，并由页面上的「仅默认用户可用」
 SettingCard（设置页）或说明文字（插件页）标注原因；处理器入口还有 `_require_admin()` 兜底，误调时提示「无权操作」。
 切换用户时 `signalBus.userChanged` 触发 `_sync_admin()` → `_apply_permissions()`，立即刷新按钮可用状态与提示显隐。
@@ -280,8 +283,9 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 `ManagePage.move_selected(category_id)` 把选中项批量移到目标分类（`None` 表示「未分类」），走 `ItemService.set_category()`，文件跟随到
 `<库>/<用户名>/<分类链>/`；工具栏的「移动到分类」按钮与右键菜单共用它。
 「编辑信息…」弹出的 `ItemEditDialog` 分两块：上方只读的「数据信息」（类型 / 大小 / 归属用户 / 所在库 / 库内路径 / 磁盘位置 / 创建时间 / 内容指纹，由 `ManagePage._item_info()` 拼装），
-下方「可修改的信息」才是名称 / 分类 / 标签 / 关键词 / 隐藏；改名会顺带把库内那份文件一起重命名（`ItemService.update()` → `LibraryService.rename_item_file()`：
+下方「可修改的信息」才是名称 / 分类 / 标签 / 关键词 / 隐藏 / 封面；改名会顺带把库内那份文件一起重命名（`ItemService.update()` → `LibraryService.rename_item_file()`：
 沿用原后缀、同名冲突时加 `_N`、文件不在库里时只改显示名并记一条警告），分类变化仍由 `move_item()` 搬目录。
+「封面」一行可以「选择封面图片」（`cover_service.set_cover()` 把图按 `Cover-Size` 缩放后写成 `全局/covers/<指纹>-<图片内容摘要前 8 位>.png`）或「恢复默认封面」（回到视频首帧 / 图片用原文件 / 其它类型图标）；只有用户真动过封面（`values()["cover"]` 不是 `None`）才会去改封面，`ManagePage._on_edit()` 提交后清掉卡片封面缓存（`cover_loader().clear()`）并 emit `itemsChanged`（用户 m02499 第 2 条）。
 「标签管理」/「关键词管理」（`ManagePage._on_manage_tags()` / `_on_manage_keywords()`）打开 `TagManagerDialog` / `KeywordManagerDialog`
 （`src/app/ui/dialogs.py` 的 `TriStateManagerDialog` 子类）：上半区是输入框 + 「添加」——输入一个**新的**标签 / 关键词就对所选数据全部加上，
 输入一个**已存在**的、且下面那一行不是全选状态时也按「全选」处理（等于给所选数据全加上）；下面用 `TriStateList`
@@ -390,8 +394,10 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 它和点「还原整个存档」时的提示同源，因此不会出现「标签说有新增、提示却说无需回档」的矛盾。
 「回档变更」对话框把每条变更按种类分组列出（文件 / 分类 / 归属三列，清单高度按条目数在 220-420 之间伸缩，
 单元格挂完整内容的悬停提示）：**「内容缺失」的条目也在清单里**（`CHANGE_MISSING`，存档里没有内容、回档补不回来），
+**「换封面」也算一条变更**（存档里记了当时的封面文件名，现在对不上就是一条 `cover` 动作，状态显示为「有变更」；
+只换封面时回档**不会**凭空多建一条数据，`ArchiveService._cover_only_change()` + `_plan()` 专门挡这件事），
 `RestoreReport.actionable` 才是「有没有真能执行的变更」的判据——它为假时确认与「先存档再回档」两个按钮禁用，
-头部摘要会写明「其中没有可回档的变更」。
+头部摘要会写明「其中没有可回档的变更」；换封面成功计入 `RestoreReport.covers_fixed`，也就是「已还原 N 项」里的一员。
 
 所有内容都**整份压缩**后按内容寻址存一个文件（一份内容一个文件、一条内容记录，同一内容不重复占空间）。
 压缩优先用 **zstd**（3.14+ 是标准库 `compression.zstd`，3.13 及更早是随依赖装的 `backports.zstd`，两者帧格式互通），两处都没有时自动退回 deflate（zlib）；
@@ -402,6 +408,8 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 从分块版本升级上来时，`SCHEMA_VERSION` 自动从 7 升到 8：旧的块 / pack / 清单索引表会被删除，
 旧的 `store/packs/` 数据文件随后由自动清理当作没有索引引用的文件回收（`library/**` 真实文件不受影响）。
 升级后旧存档的内容文件需要按新机制重建一次 —— 用下面的「重新加载存档文件」即可。
+再往后是 `SCHEMA_VERSION = 9`：给 `archive_entries` 补一列 `cover_path`（存档记录封面文件名），
+老库启动时由 `_COLUMN_PATCHES` 自动 `ALTER TABLE` 补上；老存档这一列是 `NULL`，回档时不比对封面。
 
 **重新加载存档文件**（仅默认用户可见，`_load_identity()` 里按 `user.is_default` 显隐）用于索引与真实文件
 对不上时的修复：点击先跑 `plan_rebuild()` 预检（直接使用现有文件 / 从存档还原文件 / 与存档不一致，
@@ -453,6 +461,10 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 默认选中「未分类」，所以没单独选分类的文本 / 文件都会落在 `<用户名>/` 根目录（「未分类」没有自己的目录；服务层 `ImportService._category_for()` 兜底）。
 模式卡片上会实时显示当前选中的文件 / 文件夹摘要（文本模式隐藏该行，文件夹只显示省略后的路径），
 导入完成后在结果摘要里追加本次耗时；来源按钮同样是流式布局，窄窗口自动换行。
+「导入目标与数据信息」卡片里还有「选择封面图片」/「用默认封面」一行（含 40x40 预览）：给**这一批**数据统一指定一张自定义封面，
+留空就按默认规则（视频取第一帧、图片用自身、其它类型用默认图标）；挑好的路径写进这一批的选项（`options["cover"]`），
+由于清单会把它一起持久化，暂停继续或崩溃恢复之后用的还是同一张图（`ImportPage._set_cover_source()` / `_start_batch()`）。
+**文本模式也吃这一行**：文本自己没有默认封面，所以选了封面才用得上、不选就什么都不设（`ImportService.import_text()` 的 `cover` 参数，用户 m03406 第 1 条）。
 「开始导入」右侧还可以出现插件按钮（扩展点 `app.ui.import.action`，`import_page._sync_plugin_actions()` 在插件启用 / 禁用后自动增删，
 禁用时不占位）：`auto_tag.rule` 与 `auto_tag` 各贡献一个「按规则预填标签」——按当前待导入文件的路径匹配规则，
 把建议并进导入页的标签框（`context.apply_tags()`），**不写库**（文件这时还没入库、没有条目 id）；`auto_keyword` 没有导入页入口。
@@ -513,11 +525,12 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 
 ## 封面
 
-封面规则集中在一个服务里：`src/app/services/cover_service.py`，导入、扫描登记（`LibraryService` 的「扫描并登记」）与设置页「重置封面」三处共用，界面侧只认 `DataItem.cover_path` 与 `item_card.cover_source(item)`：
+封面规则集中在一个服务里：`src/app/services/cover_service.py`，导入（含导入页「选择封面」，文本模式同样传给 `import_text()`）、扫描登记（`LibraryService` 的「扫描并登记」）、管理页「编辑信息」换封面与设置页「重置封面」五处共用，界面侧只认 `DataItem.cover_path` 与 `item_card.cover_source(item)`：
 
 - **图片**：不再生成缩略图副本，`cover_path` 留空，卡片直接拿**库内那份原文件**当封面——`cover_source()` 在 `cover_path` 为空且类型是图片时调 `_image_cover_path()`，**先把 `file_path`（库内相对路径）拼到 `library_root()` 上**，库内文件不在了才退回导入来源 `source_path`，两处都没有才返回空串（显示类型图标）。**不能**改用 `item_api._absolute_path()`：那个函数优先返回导入时的外部 `source_path`，原文件被移走 / 删除后封面就取不到了（用户 m01544：重置封面后部分图片退回默认图标）。视频抽帧用的 `cover_service._source_of()` 同理，也是库内优先。这样封面目录里不会为一堆图片各存一份重复内容。
 - **视频**：导入时用**内置媒体引擎**（`app/services/media_service.py`，底层 PyAV）抽**第一帧**：`media_service.frame(源文件, 目标, size=<Cover-Size>)` 内部走 `av.open()` → 解出第一帧 → Pillow 缩放 → 存成 PNG，成功才写进 `cover_path`。引擎是随程序装的 `av`，**不再需要用户自己装 `ffmpeg`，也没有 `PATH` / `imageio-ffmpeg` / 模型运行环境三级定位这套东西了**（旧实现整体删除）。**抽帧失败不算错误**：`grab_video_frame()` 返回空串、日志记一条 info，卡片退回类型图标，导入流程照常完成。抽出来的若是个空 / 半截文件会即时删掉。
 - **其它类型**：没有封面概念，`cover_path` 一律清空，界面显示类型图标。
+- **自定义封面**：`cover_path` 也可以指向用户挑的一张图——`cover_service.set_cover(session, item, source)` 把图按 `Cover-Size` 缩放后写成 `全局/covers/<指纹>-<图片内容摘要前 8 位>.png`（文件名带 `-`，与默认封面 `<指纹>.png` 区分开），`source` 传空串就是「恢复默认规则」。换封面时旧文件交给 `release_cover()` 回收，但只要还有别的数据项或存档条目引用同一个文件就**不删**（存档要能还原封面变更，用户 m02499 第 2 条）。入口有三处：导入页给整批数据挑一张、管理页「编辑信息」给单条数据换、内置视频查看器「用当前画面作封面」（插件侧走 `app.sdk.items.set_cover()`，先用 `app.sdk.items.item_id_for_path()` 找数据项——它把库内副本与外部来源路径都比一遍，所以正常播放的视频一定找得到，只有真不在库里的文件才提示「这个文件不在数据库里」）。
 
 媒体引擎与程序本体只隔着一层门面：服务侧是 `src/app/services/media_service.py`（真正调 PyAV 的地方），服务门面是 `src/app/services/media_api.py`，插件侧的唯一入口是 `src/app/sdk/media.py`（扩展接口名 `media.open`，由 `main.py` 在启动时 `plugin_service.bootstrap(MEDIA_EXTENSION, media_api.api())` 注册）。**引擎缺失（没装 `av`）只降级、不报错**：`media_service.available()` 为假，`probe()` 返回 `None`、`frame()` 返回空串，封面退回类型图标，视频查看器没有「转码兜底」。临时产物统一放 `.tmp/media`（`paths.MEDIA_TMP_DIR`），关窗 / 任务结束即删、进程退出兜底清空、启动时清掉超过一天的陈旧文件。
 **控制台不再刷 libav 日志**：播放视频时 QtMultimedia 自带的那份 FFmpeg 会往 stderr 打一大段 `Input #0 …`，还会探测硬件编解码器
@@ -526,7 +539,7 @@ KPI 卡与快捷按钮这两块流式区域用 `components/flow_area.py` 的 `Fl
 `PyQt6/Qt6/bin/avutil-*.dll` 并把等级压到 `AV_LOG_PANIC`；PyAV 自己那份（`av.libs/`）由 `media_service._silence_logs()` 压到 ERROR。
 两处都只影响**日志**：真正的播放失败照旧由 `QMediaPlayer.errorOccurred` 走到界面上。
 
-设置页「维护 → 重置封面」（`SettingsPage._reset_covers()`）走 `cover_service.reset_covers(session, on_event=...)`：先删掉 `全局/covers/` 下现有的封面文件、再把所有非删除项的旧 `cover_path` 清空，然后按上面的规范重新生成一遍（图片留空、视频重新抽帧、其它类型清空），返回 `{"items", "covers", "cleared", "failed"}` 并在提示里报出生成、清理与失败数量。数据文件本身不受影响。
+设置页「维护 → 重置封面」（`SettingsPage._reset_covers()`）走 `cover_service.reset_covers(session, on_event=...)`：先删掉 `全局/covers/` 下现有的封面文件（**用户自定义的封面跳过不删**，先按 `cover_name()` / `is_default_name()` 算出 `keep` 集合），再把非自定义的旧 `cover_path` 清空，然后按上面的规范重新生成一遍（图片留空、视频重新抽帧、其它类型清空），返回 `{"items", "covers", "cleared", "failed"}`（`items` 现在也把保留下来的自定义封面算进「最终有封面的项数」）并在提示里报出生成、清理与失败数量。数据文件本身不受影响。
 
 ## 表格与列表通用件
 

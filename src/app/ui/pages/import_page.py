@@ -7,7 +7,8 @@ from functools import partial
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QWidget
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QLabel, QWidget
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -81,6 +82,8 @@ class ImportPage(ScrollPage):
         self._directory: str | None = None
         self._tree_files: list[tuple[Path, str]] = []
         self._worker: ImportWorker | None = None
+        #: 这一批统一使用的自定义封面（用户挑的图片路径）；空串 = 按默认规则
+        self._cover_source: str = ""
         self.selected_label_text = "尚未选择文件"
         self._started_at: dt.datetime | None = None
         #: 当前这份「待导入清单」的 id（暂停后还在，用来继续 / 逐项取消）
@@ -185,6 +188,27 @@ class ImportPage(ScrollPage):
         self.name_by_time_switch.setChecked(bool(config.nameByTime.value))
         self.name_by_time_switch.checkedChanged.connect(self._on_name_by_time_changed)
 
+        # 封面：这一批统一用用户挑的那张图；不挑就按默认规则（用户 m02499 第 2 条）
+        self.cover_button = PushButton("选择封面图片", card)
+        self.cover_button.clicked.connect(self._on_pick_cover)
+        self.cover_clear_button = PushButton("用默认封面", card)
+        self.cover_clear_button.clicked.connect(self._clear_cover)
+        self.cover_clear_button.setEnabled(False)
+        self.cover_preview = QLabel(card)
+        self.cover_preview.setFixedSize(40, 40)
+        self.cover_preview.setScaledContents(True)
+        self.cover_preview.setVisible(False)
+        self.cover_name_label = CaptionLabel("使用默认封面", card)
+        self.cover_hint = CaptionLabel(
+            "不选封面时按默认规则：视频取第一帧，图片用自身，其它类型用默认图标", card
+        )
+        self.cover_hint.setVisible(False)
+        self.cover_button.setToolTip(self.cover_hint.text())
+        cover_row = QHBoxLayout()
+        cover_row.setSpacing(8)
+        cover_row.addWidget(self.cover_preview)
+        cover_row.addWidget(self.cover_name_label, 1)
+
         grid.addWidget(icon_text_label(FluentIcon.PEOPLE, "导入用户", card), 0, 0)
         grid.addWidget(self.user_box, 0, 1, 1, 3)
         grid.addWidget(self.user_hint, 1, 1, 1, 3)
@@ -203,10 +227,15 @@ class ImportPage(ScrollPage):
             icon_text_label(FluentIcon.FONT, "关键词", card), 6, 0, Qt.AlignmentFlag.AlignVCenter
         )
         grid.addWidget(self.keyword_input, 6, 1, 1, 3)
-        grid.addWidget(icon_text_label(FluentIcon.VIEW, "隐藏项", card), 7, 0)
-        grid.addWidget(self.hidden_switch, 7, 1)
-        grid.addWidget(icon_text_label(FluentIcon.DATE_TIME, "按时间命名", card), 7, 2)
-        grid.addWidget(self.name_by_time_switch, 7, 3)
+        grid.addWidget(icon_text_label(FluentIcon.PHOTO, "封面", card), 7, 0)
+        grid.addWidget(self.cover_button, 7, 1)
+        grid.addWidget(self.cover_clear_button, 7, 2)
+        grid.addLayout(cover_row, 7, 3)
+        grid.addWidget(self.cover_hint, 8, 1, 1, 3)
+        grid.addWidget(icon_text_label(FluentIcon.VIEW, "隐藏项", card), 9, 0)
+        grid.addWidget(self.hidden_switch, 9, 1)
+        grid.addWidget(icon_text_label(FluentIcon.DATE_TIME, "按时间命名", card), 9, 2)
+        grid.addWidget(self.name_by_time_switch, 9, 3)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
         outer.addLayout(grid)
@@ -446,6 +475,39 @@ class ImportPage(ScrollPage):
     def _on_name_by_time_changed(self, checked: bool) -> None:
         config.set(config.nameByTime, bool(checked))
 
+    # ------------------------------------------------------------------- 封面
+    def _on_pick_cover(self) -> None:
+        """挑一张图给这一批数据当封面（不挑就按默认规则，用户 m02499 第 2 条）。"""
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "选择封面图片",
+            Path(self._cover_source).parent.as_posix() if self._cover_source else "",
+            "图片 (*.png *.jpg *.jpeg *.bmp *.webp *.gif)",
+        )
+        if path:
+            self._set_cover_source(path)
+
+    def _clear_cover(self) -> None:
+        self._set_cover_source("")
+
+    def _set_cover_source(self, path: str | Path) -> None:
+        """记住 / 清掉这一批用的封面；只做状态与预览，真正的缩放与落盘在导入时做。"""
+        self._cover_source = str(path or "")
+        self.cover_clear_button.setEnabled(bool(self._cover_source))
+        if not self._cover_source:
+            self.cover_name_label.setText("使用默认封面")
+            self.cover_preview.clear()
+            self.cover_preview.setVisible(False)
+            return
+        self.cover_name_label.setText(elide(Path(self._cover_source).name, 28))
+        pixmap = QPixmap(self._cover_source)
+        if pixmap.isNull():
+            # 图打不开也照样记住路径：真正写入时会再判一次并给出失败提示，不在这里吞掉
+            self.cover_preview.setVisible(False)
+            return
+        self.cover_preview.setPixmap(pixmap)
+        self.cover_preview.setVisible(True)
+
     def refresh(self) -> None:
         """按当前数据库状态重建用户/分类/标签候选项（与其它页面保持同一入口）。"""
         self._reload_users()
@@ -635,6 +697,7 @@ class ImportPage(ScrollPage):
                 self.name_edit.text().strip(),
                 content,
                 category_id=self.category_box.currentData(),
+                cover=self._cover_source,
                 **common,
             )
             if item is None:
@@ -671,6 +734,9 @@ class ImportPage(ScrollPage):
         else:
             options = {**common, "category_id": self.category_box.currentData()}
             title = "批量导入"
+        # 这一批统一使用的自定义封面（空串 = 按默认规则）；清单会把它一起存下来，
+        # 暂停后继续、崩溃恢复都还是同一张封面
+        options["cover"] = self._cover_source
 
         self._begin_progress(len(items), f"准备导入 {len(items)} 个文件…")
         worker = ImportWorker(items, options=options, title=title)

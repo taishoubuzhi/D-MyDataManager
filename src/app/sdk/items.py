@@ -36,12 +36,14 @@ __all__ = [
     "current_user_id",
     "ensure_tags",
     "get_item",
+    "item_id_for_path",
     "list_items",
     "notify_changed",
     "notify_tags_changed",
     "provider",
     "read_text",
     "remove_keywords",
+    "set_cover",
     "suffixes_in_use",
     "tag_items",
     "tag_names",
@@ -192,6 +194,10 @@ class ItemsApi(Protocol):
     def remove_keywords(self, item_ids: Iterable[int], words: Iterable[str]) -> int: ...
 
     def read_text(self, item_id: int, limit: int = 4096) -> tuple[str, str, bool]: ...
+
+    def item_id_for_path(self, path: str) -> int | None: ...
+
+    def set_cover(self, item_id: int, source: str = "") -> str: ...
 
     def notify_changed(self) -> None: ...
 
@@ -374,6 +380,40 @@ def read_text(item_id: int, limit: int = 4096) -> tuple[str, str, bool]:
     except Exception:
         logger.exception("读取正文失败：{}", item_id)
         return "", "", False
+
+
+def item_id_for_path(path: str) -> int | None:
+    """按磁盘上的绝对路径找数据项 id；找不到（或程序没提供接口）时返回 None。
+
+    插件手里只有「正在打开的那个文件」，这一步把它对回库里的数据项，才能改它的封面
+    （用户 m02499 第 2 条）。
+    """
+    api = provider()
+    if api is None:
+        return None
+    lookup = getattr(api, "item_id_for_path", None)
+    if not callable(lookup):
+        return None
+    try:
+        found = lookup(str(path))
+    except Exception:
+        logger.exception("按路径查数据条目失败：{}", path)
+        return None
+    return int(found) if found else None
+
+
+def set_cover(item_id: int, source: str = "") -> str:
+    """给数据项换封面：`source` 给本地图片路径就用它当封面，给空串恢复默认封面。
+
+    返回新的封面文件路径（插件不必关心它；拿不到时返回空串）。跨插件的工作流（例如
+    视频查看器「用当前帧作封面」）用它把结果写回数据项。
+    """
+    api = _api()
+    try:
+        return str(api.set_cover(int(item_id), str(source or "")))
+    except Exception as exc:
+        logger.exception("设置封面失败：{}", item_id)
+        raise SdkError(f"设置封面失败：{exc}") from exc
 
 
 def notify_changed() -> None:

@@ -126,7 +126,10 @@ class ImportService:
         keywords: list[str] | None = None,
         tags: list[str] | None = None,
         is_hidden: bool = False,
+        cover: str = "",
     ) -> DataItem | None:
+        """导入一段文本；`cover` 是用户在导入页挑的封面图（空串按默认规则）。"""
+
         target_library = library or self.library
         name = (name or "").strip()
         if not name:
@@ -163,6 +166,8 @@ class ImportService:
             is_hidden=is_hidden,
         )
         item.tags = self.tags.ensure_many(tags or [], user_id=item.user_id)
+        # 封面：用户在导入页挑了图就用那张，没挑就按默认规则（文本没有默认封面，一律留空）
+        cover_service.set_cover(self.session, item, cover)
         self._register_blob(checksum, size, "text/plain")
         feature_service.replace_features(self.session, item)
         self._add_version(item, "导入")
@@ -184,6 +189,7 @@ class ImportService:
         tags: list[str] | None = None,
         is_hidden: bool = False,
         subdir: str = "",
+        cover: str = "",
     ) -> DataItem | None:
         path = Path(source)
         if not path.is_file():
@@ -249,8 +255,9 @@ class ImportService:
             self._add_version(item, "导入")
 
         item.tags = self.tags.ensure_many(list(item.tag_names) + list(tags or []), user_id=item.user_id)
-        # 封面：图片直接用自己（封面路径留空，界面回退到原文件）；视频取第一帧；其余类型不生成
-        item.cover_path = cover_service.build_cover(path, checksum, data_type)
+        # 封面：用户在导入页挑了图就用那张（cover）；没挑才按默认规则——图片直接用自己
+        # （封面路径留空，界面回退到原文件）、视频取第一帧、其余类型不生成
+        cover_service.set_cover(self.session, item, cover)
         _checksum, store_rel, _size = self.store.put_file(target, name=name, mime=mime)
         self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)
@@ -388,6 +395,7 @@ class ImportService:
         keywords: list[str] | None = None,
         tags: list[str] | None = None,
         is_hidden: bool = False,
+        cover: str = "",
     ) -> DataItem:
         """把库文件夹里已有的文件登记为数据项（不复制文件）。"""
         path = Path(path)
@@ -416,8 +424,8 @@ class ImportService:
             is_hidden=is_hidden,
         )
         item.tags = self.tags.ensure_many(tags or [], user_id=item.user_id)
-        # 封面规则与导入一致：图片用自己、视频取第一帧、其余留空
-        item.cover_path = cover_service.build_cover(path, checksum, data_type)
+        # 封面规则与导入一致：挑了图就用那张，否则图片用自己、视频取第一帧、其余留空
+        cover_service.set_cover(self.session, item, cover)
         _checksum, store_rel, _size = self.store.put_file(path, name=path.name, mime=mime)
         self._register_blob(checksum, size, mime, store_rel)
         feature_service.replace_features(self.session, item, path)

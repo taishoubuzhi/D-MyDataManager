@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -24,10 +25,48 @@ from ..db.models import DataItem, DataType
 from ..repositories import ItemFilter
 from ..sdk import items as items_api
 from ..sdk.data import read_text as read_file_text
+from . import cover_service
 from .item_service import ItemService
 from .user_service import UserService
 
 __all__ = ["ItemsApi", "to_ref"]
+
+
+def _norm_path(path: str) -> str:
+    """比路径用的规范形式：Windows 上大小写与分隔符都不敏感。"""
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    try:
+        return os.path.normcase(os.path.abspath(text))
+    except OSError:  # pragma: no cover - 路径离谱时退回原样
+        return text
+
+
+def _item_paths(item: DataItem, path: str = "") -> list[str]:
+    """条目可能对应的所有绝对路径（库内副本 + 外部原文件，都算）。
+
+    `_absolute_path()` 有意优先外部 `source_path`（模型 worker 要读原文件），但插件手里拿到的
+    往往是**库内副本**（`ItemService.file_path_of()` 返回的那个），拿两者去比就会对不上——
+    视频查看器点「用当前画面作封面」因此误报「这个文件不在数据库里」（用户 m03406 第 3 条）。
+    所以这里把库内路径与外部路径都当候选，命中任意一个即可。
+    """
+    out: list[str] = []
+    for raw in (path, item.file_path, item.source_path):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        candidate = Path(text)
+        if candidate.is_absolute():
+            full = str(candidate)
+        else:
+            try:
+                full = str(Path(library_root()) / candidate)
+            except Exception:  # pragma: no cover - 库根读不出来时退回原样
+                full = str(candidate)
+        if full not in out:
+            out.append(full)
+    return out
 
 
 def _clean_names(values: Iterable[str]) -> list[str]:
@@ -260,6 +299,38 @@ class ItemsApi:
         if path is None:
             return "", "", False
         return read_file_text(path, size)
+
+    # ------------------------------------------------------------------ 封面
+    def item_id_for_path(self, path: str) -> int | None:
+        """按磁盘路径找回数据项 id（找不到返回 None）。
+
+        插件手里只有「正在打开的那个文件」，用它把结果写回对应的数据项才能改封面
+        （用户 m02499 第 2 条）。先按文件名取候选、再比绝对路径，避免全表扫描。
+        """
+        wanted = str(path or "").strip()
+        if not wanted:
+            return None
+        target = _norm_path(wanted)
+        with new_session() as session:
+            service = ItemService(session)
+            for item in service.items.by_names([Path(wanted).name]):
+                if any(_norm_path(candidate) == target for candidate in _item_paths(item)):
+                    return int(item.id)
+        return None
+
+    def set_cover(self, item_id: int, source: str = "") -> str:
+        """给数据项换封面（`source` 为空串表示恢复默认封面），返回新的封面路径。"""
+        wanted = _clean_ids([item_id])
+        if not wanted:
+            return ""
+        with session_scope() as session:
+            service = ItemService(session)
+            rows = service.items.by_ids(wanted)
+            if not rows:
+                return ""
+            path = cover_service.set_cover(session, rows[0], str(source or ""))
+        self.notify_changed()
+        return str(path)
 
     def notify_changed(self) -> None:
         from ..core.runtime.signals import signalBus

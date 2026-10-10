@@ -558,6 +558,7 @@ def superuser_permissions(case: Case) -> None:
         settings_page._apply_permissions()
         for label, card in (
             ("更改资料库位置", settings_page._path_card),
+            ("导入资源文件夹", settings_page._import_card),
             ("扫描并登记", settings_page._scan_card),
             ("重建目录结构", settings_page._rebuild_card),
             ("整理数据库", settings_page._compact_card),
@@ -587,10 +588,31 @@ def superuser_permissions(case: Case) -> None:
         finally:
             settings_module.LibraryService = settings_factory
             settings_module.confirm = settings_confirm
+        # 导入资源文件夹：非管理员必须在弹出「选目录」对话框之前就被拦下（否则会卡住自检）
+        import_flow: list[str] = []
+
+        class _ImportProbe:
+            @staticmethod
+            def getExistingDirectory(*_args, **_kwargs) -> str:
+                import_flow.append("dialog")
+                return str(case.root)
+
+        import_dialog = settings_module.QFileDialog
+        import_function = settings_module.import_resource_root
+        settings_module.QFileDialog = _ImportProbe
+        settings_module.import_resource_root = lambda folder: import_flow.append(f"import:{folder}")
+        try:
+            settings_page._import_resource_root()
+        finally:
+            settings_module.QFileDialog = import_dialog
+            settings_module.import_resource_root = import_function
+        if import_flow:
+            problems.append(f"普通用户绕过了设置页的系统级权限校验（导入资源文件夹）：{import_flow}")
         settings_page._is_admin = settings_admin
         settings_page._apply_permissions()
         for label, card in (
             ("更改资料库位置", settings_page._path_card),
+            ("导入资源文件夹", settings_page._import_card),
             ("扫描并登记", settings_page._scan_card),
             ("重建目录结构", settings_page._rebuild_card),
             ("整理数据库", settings_page._compact_card),
@@ -604,6 +626,46 @@ def superuser_permissions(case: Case) -> None:
         ):
             if not card.isHidden():
                 problems.append(f"管理员仍看到「{label}」说明")
+
+        # 导入资源文件夹：管理员选目录 → 确认 → 导入 → 重启（导入本身在服务层校验，这里只验流程）
+        picked_root = case.root / "想导入的资源文件夹"
+        picked_root.mkdir(exist_ok=True)
+        flow: list[str] = []
+
+        class _PickProbe:
+            @staticmethod
+            def getExistingDirectory(*_args, **_kwargs) -> str:
+                flow.append("dialog")
+                return str(picked_root)
+
+        class _FakeSession:
+            def close(self) -> None:
+                flow.append("session.close")
+
+        admin_dialog = settings_module.QFileDialog
+        admin_import = settings_module.import_resource_root
+        admin_confirm = settings_module.confirm
+        admin_restart = settings_module.restart_application
+        admin_privacy = settings_module.privacy.invalidate
+        page_session = settings_page.session
+        settings_module.QFileDialog = _PickProbe
+        settings_module.import_resource_root = lambda folder: flow.append(f"import:{folder}") or picked_root
+        settings_module.confirm = lambda *_a, **_k: flow.append("confirm") or True
+        settings_module.restart_application = lambda: flow.append("restart")
+        settings_module.privacy.invalidate = lambda: flow.append("privacy")
+        settings_page.session = _FakeSession()
+        try:
+            settings_page._import_resource_root()
+        finally:
+            settings_module.QFileDialog = admin_dialog
+            settings_module.import_resource_root = admin_import
+            settings_module.confirm = admin_confirm
+            settings_module.restart_application = admin_restart
+            settings_module.privacy.invalidate = admin_privacy
+            settings_page.session = page_session
+        expected = ["dialog", "confirm", "session.close", f"import:{picked_root}", "privacy", "restart"]
+        if flow != expected:
+            problems.append(f"导入资源文件夹的流程不对：期望 {expected}，实际 {flow}")
 
         # ---- 插件页：插件是系统级资源，只有默认用户可以改动
         # 回归点 1：插件列表为空（currentRow() == -1）时详情按钮没有作用对象，必须统一

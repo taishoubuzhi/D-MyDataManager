@@ -410,6 +410,8 @@ class ImportJob:
                 category_id=service.category_for(options.get("category_id"), options.get("user_id")),
                 user_id=options.get("user_id"),
                 is_hidden=bool(options.get("is_hidden")),
+                # 收养的是这一批的文件，封面也照这一批的选择来
+                cover=str(options.get("cover") or ""),
             )
             service.session.commit()
         except Exception as exc:  # noqa: BLE001 —— 收养失败不该拖垮整轮恢复
@@ -570,6 +572,8 @@ class ImportJob:
             "tags": list(options.get("tags") or []),
             "is_hidden": bool(options.get("is_hidden")),
             "subdir": str(item.get("subdir") or ""),
+            # 这一批用的自定义封面（用户在导入页挑的那张图）；空串表示按默认规则
+            "cover": str(options.get("cover") or ""),
         }
 
     def _mark(self, item: dict, status: str, *, detail: str | None = None, **fields: Any) -> None:

@@ -26,6 +26,7 @@ from ...core.config import (
     ResourceRootExists,
     config,
     export_dir,
+    import_resource_root,
     resources_root,
     set_resource_root,
 )
@@ -529,6 +530,7 @@ class SettingsPage(ScrollPage):
     def _apply_permissions(self) -> None:
         for card in (
             self._path_card,
+            self._import_card,
             self._scan_card,
             self._rebuild_card,
             self._compact_card,
@@ -808,6 +810,16 @@ class SettingsPage(ScrollPage):
         self._path_card.clicked.connect(self._change_resource_root)
         group.addSettingCard(self._path_card)
 
+        self._import_card = ActionCard(
+            "导入资源文件夹",
+            FluentIcon.DOWNLOAD,
+            "导入资源文件夹",
+            "把一份现成的资源文件夹直接作为当前资源文件夹使用（不搬动、不删除任何一份）",
+            group,
+        )
+        self._import_card.clicked.connect(self._import_resource_root)
+        group.addSettingCard(self._import_card)
+
         self._scan_card = ActionCard(
             "扫描并登记",
             FluentIcon.SYNC,
@@ -1055,6 +1067,47 @@ class SettingsPage(ScrollPage):
         # 引擎已指向新位置，各页面持有的会话随之失效：重启程序最稳妥。
         privacy.invalidate()
         self.toast_success("资源文件夹已迁移", f"{moved}\n程序即将重启")
+        restart_application()
+
+    def _import_resource_root(self) -> None:
+        """把一份现成的资源文件夹直接采纳为当前资源文件夹（不搬、不删，用户 m03406 第 2 条）。
+
+        与「更改位置」（迁移）的区别：迁移会把当前资源文件夹搬过去、并删掉留下的那一份；
+        导入只改配置指向，两份都原样留在盘上，所以随时可以再导入回来，也不会破坏别的一份。
+        """
+        if not self._require_admin("导入资源文件夹"):
+            return
+        directory = QFileDialog.getExistingDirectory(
+            self, "选择要导入的资源文件夹", str(resources_root().parent)
+        )
+        if not directory:
+            return
+        target = paths.resource_root(directory)
+        if target.resolve() == resources_root().resolve():
+            self.toast_info("无需导入", "这已经是当前使用的资源文件夹")
+            return
+        if not confirm(
+            self,
+            "导入资源文件夹",
+            f"将直接把\n{target}\n作为当前资源文件夹使用。\n\n"
+            f"它与当前使用的资源文件夹都会原样保留，不会删除任何一边；\n"
+            f"想换回来的时候再导入一次即可。继续吗？",
+        ):
+            return
+        # 页面自己的会话占着 data.db，切换库根前先放掉连接
+        try:
+            self.session.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            imported = import_resource_root(directory)
+        except Exception as exc:  # noqa: BLE001
+            self._reload_session()
+            self.toast_warning("无法导入资源文件夹", str(exc))
+            return
+        # 引擎已指向新位置，各页面持有的会话随之失效：重启程序最稳妥。
+        privacy.invalidate()
+        self.toast_success("资源文件夹已导入", f"{imported}\n程序即将重启")
         restart_application()
 
     def _scan_library(self) -> None:

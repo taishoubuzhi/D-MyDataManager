@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QAbstractItemView, QListWidgetItem, QTreeWidgetItem
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import QAbstractItemView, QFileDialog, QLabel, QListWidgetItem, QTreeWidgetItem
 from PyQt6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import (
     BodyLabel,
@@ -28,7 +31,7 @@ from qfluentwidgets import (
 from ..core.runtime.naming import NUMBER_STYLES, RENAME_MODES, RenameRule, build_plan, split_suffix
 from ..db.models import DataItem
 from ..db.seed import UNCATEGORIZED_NAME
-from .framework import IconTextButton, clear_scroll_background, format_size
+from .framework import IconTextButton, clear_scroll_background, elide, format_size
 from .components.category_tree import KIND_CATEGORY, KIND_ROLE, CategoryTree
 from .components.keyword_input import KeywordInput
 from .components.tag_picker import TagPicker
@@ -336,6 +339,10 @@ class CategorySelectDialog(MessageBoxBase):
         self.remove_button = PushButton("移出选中项", self)
         self.remove_button.clicked.connect(self._remove_selected)
         side.addWidget(self.remove_button)
+        # 挑错了一批分类时不用一项项移出（用户 m02499 第 1 条）
+        self.clear_button = PushButton("移出全部", self)
+        self.clear_button.clicked.connect(self._clear_order)
+        side.addWidget(self.clear_button)
         row.addLayout(side, 1)
         self.viewLayout.addLayout(row)
 
@@ -415,6 +422,16 @@ class CategorySelectDialog(MessageBoxBase):
         self.message.setText(f"已移出 {len(picked)} 项。")
         self._rebuild_list()
 
+    def _clear_order(self) -> None:
+        """清空整张清单：挑错了一批分类时不用一项项移出（用户 m02499 第 1 条）。"""
+        if not self._order:
+            self.message.setText(f"{self._list_title}已经是空的。")
+            return
+        count = len(self._order)
+        self._order.clear()
+        self.message.setText(f"已移出全部 {count} 项。")
+        self._rebuild_list()
+
     def _rebuild_list(self) -> None:
         self.move_list.clear()
         for category_id in self._order:
@@ -427,6 +444,7 @@ class CategorySelectDialog(MessageBoxBase):
 
     def _sync_buttons(self) -> None:
         self.yesButton.setEnabled(bool(self._order))
+        self.clear_button.setEnabled(bool(self._order))
 
 
 class CategoryMoveDialog(CategorySelectDialog):
@@ -522,6 +540,33 @@ class ItemEditDialog(MessageBoxBase):
         self.hidden_switch = SwitchButton(self)
         self.hidden_switch.setChecked(bool(item.is_hidden))
 
+        # 封面：换一张自定义封面，或把封面恢复成默认规则（用户 m02499 第 2 条）
+        # `self._cover_choice` 是 None 表示「用户没动封面」，保存时就不去碰它
+        self._cover_choice: str | None = None
+        self._current_cover_name = Path(str(item.cover_path or "")).name
+        self.cover_button = PushButton("选择封面图片", self)
+        self.cover_button.clicked.connect(self._on_pick_cover)
+        self.cover_default_button = PushButton("恢复默认封面", self)
+        self.cover_default_button.clicked.connect(self._use_default_cover)
+        self.cover_preview = QLabel(self)
+        self.cover_preview.setFixedSize(40, 40)
+        self.cover_preview.setScaledContents(True)
+        self.cover_preview.setVisible(False)
+        self.cover_state_label = CaptionLabel(
+            "当前封面：自定义封面" if self._current_cover_name else "当前封面：默认封面", self
+        )
+        if self._current_cover_name:
+            pixmap = QPixmap(str(item.cover_path))
+            if not pixmap.isNull():
+                self.cover_preview.setPixmap(pixmap)
+                self.cover_preview.setVisible(True)
+        cover_row = QHBoxLayout()
+        cover_row.setSpacing(8)
+        cover_row.addWidget(self.cover_button)
+        cover_row.addWidget(self.cover_default_button)
+        cover_row.addWidget(self.cover_preview)
+        cover_row.addWidget(self.cover_state_label, 1)
+
         grid.addWidget(BodyLabel("名称", self), 0, 0)
         grid.addWidget(self.name_edit, 0, 1)
         grid.addWidget(BodyLabel("分类", self), 1, 0)
@@ -532,11 +577,43 @@ class ItemEditDialog(MessageBoxBase):
         grid.addWidget(self.keyword_input, 3, 1)
         grid.addWidget(BodyLabel("隐藏项", self), 4, 0)
         grid.addWidget(self.hidden_switch, 4, 1)
+        grid.addWidget(BodyLabel("封面", self), 5, 0)
+        grid.addLayout(cover_row, 5, 1)
         self.viewLayout.addLayout(grid)
 
         self.yesButton.setText("保存")
         self.cancelButton.setText("取消")
         self.widget.setMinimumWidth(480)
+
+    def _on_pick_cover(self) -> None:
+        """挑一张图当这个数据项的封面。"""
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "选择封面图片",
+            Path(self._current_cover_name).parent.as_posix() if self._current_cover_name else "",
+            "图片 (*.png *.jpg *.jpeg *.bmp *.webp *.gif)",
+        )
+        if path:
+            self._set_cover_choice(path)
+
+    def _use_default_cover(self) -> None:
+        """恢复默认封面：视频重新抽第一帧、图片回到用自身（保存时才真正执行）。"""
+        self._set_cover_choice("")
+
+    def _set_cover_choice(self, path: str) -> None:
+        self._cover_choice = str(path or "")
+        if not self._cover_choice:
+            self.cover_state_label.setText("已选择：恢复默认封面")
+            self.cover_preview.clear()
+            self.cover_preview.setVisible(False)
+            return
+        self.cover_state_label.setText(f"已选择：{elide(Path(self._cover_choice).name, 24)}")
+        pixmap = QPixmap(self._cover_choice)
+        if pixmap.isNull():
+            self.cover_preview.setVisible(False)
+            return
+        self.cover_preview.setPixmap(pixmap)
+        self.cover_preview.setVisible(True)
 
     def values(self) -> dict:
         return {
@@ -545,6 +622,8 @@ class ItemEditDialog(MessageBoxBase):
             "tags": self.tag_input.keywords(),
             "keywords": self.keyword_input.keywords(),
             "is_hidden": self.hidden_switch.isChecked(),
+            # None = 没动封面；"" = 恢复默认；其它 = 自定义封面图片的路径
+            "cover": self._cover_choice,
         }
 
 

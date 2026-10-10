@@ -401,6 +401,104 @@ def set_resource_root(folder: str | Path, *, replace: bool = False) -> Path:
     return target
 
 
+def _looks_like_resource_root(target: Path) -> bool:
+    """目录看起来是不是一份资源文件夹（有数据库或库文件夹）。"""
+    try:
+        return (target / "data.db").is_file() or (target / "library").is_dir()
+    except OSError:
+        return False
+
+
+def _unlock_imported_root(target: Path) -> None:
+    """放行导入进来的资源文件夹（上一次会话可能把它锁上了）。
+
+    `paths.release_locked_root()` 只放行「当时的」资源根（且同一进程只做一次），导入的是
+    另一份，得单独放行，否则后面建目录、开数据库都会被 ACL 拒绝。
+    """
+    if not config.resourceProtected.value:
+        return
+    try:
+        from .runtime import acl
+
+        if acl.is_supported():
+            acl.unlock_tree(target, skip=paths.UNPROTECTED_DIRS)
+    except Exception as exc:  # noqa: BLE001 - 放行失败不该挡住导入
+        logger.warning("放行导入的资源文件夹失败（继续导入）：%s —— %s", target, exc)
+
+
+def _rebase_imported_library_paths(target: Path) -> None:
+    """导入别处的资源文件夹后，把库记录里的老路径改到导入进来的这一份上。
+
+    资源文件夹被整体挪走（版本更新换了目录、用户手动搬走）之后，库里记的还是老绝对路径，
+    不改的话文件全都打不开。这里按路径里 `library` 那一段之后的相对部分重新拼——比
+    `_rebase_library_paths()` 更宽松，因为搬迁时我们知道老根，导入时并不知道。
+    """
+    from ..db import database
+    from ..db.models import Library
+
+    library_root = Path(target) / "library"
+    with database.session_scope() as session:
+        for library in session.query(Library).all():
+            path = Path(str(library.path or ""))
+            try:
+                path.relative_to(library_root)
+                continue  # 已经在导入进来的这一份里，不动
+            except ValueError:
+                pass
+            relative: Path | None = None
+            for index in range(len(path.parts) - 1, -1, -1):
+                if path.parts[index] == library_root.name:
+                    relative = Path(*path.parts[index + 1:])
+                    break
+            if relative is None or not relative.parts:
+                relative = Path(path.name)
+            new_path = library_root / relative
+            if new_path != path:
+                library.path = str(new_path)
+
+
+def import_resource_root(folder: str | Path) -> Path:
+    """把一份现成的资源文件夹**直接采纳**为当前资源文件夹（不搬、不删、不破坏）。
+
+    与 `set_resource_root()`（迁移）刻意相反：这里**一个文件都不动**——导入的那一份原样留在
+    原地，当前那一份也完整保留，只把配置改指向导入进来的这一份。于是用户随时可以再导入回
+    原来的目录，导入别的资源文件夹也不会破坏当前这一份（用户 m03406 第 2 条：版本更新换了
+    资源路径之后，老资源文件夹还在，却只能重新走一遍导入，想在原位置新建又会因为「已存在」
+    被拒）。
+
+    目标必须是**已经存在的资源文件夹**（有 `data.db` 或 `library/`），否则抛 `ValueError`：
+    配置一旦指到一个空目录，界面看起来就是「数据全没了」。
+
+    顺带做两件事：
+    - 把库记录里的老路径改到导入进来的这一份上（资源文件夹被整体挪过，老路径就都打不开了）；
+    - 清掉「待清理的旧资源文件夹」记录——用户刚刚明确指定要用哪一份，下次启动再去删掉一个
+      资源文件夹就太危险了。
+    """
+    from ..db import database  # 局部导入，避免与数据库模块循环依赖
+
+    target = paths.resource_root(folder)
+    if target == resources_root():
+        config.set(config.resourcePath, str(target))
+        paths.apply_resource_root(target)
+        return target
+    if not _looks_like_resource_root(target):
+        raise ValueError(f"这里不是一个资源文件夹（没有 data.db 也没有 library）：{target}")
+    database.dispose_engine()
+    release_resource_root()  # 旧位置可能锁着，切换前先放行
+    _unlock_imported_root(target)  # 导入的那一份也可能锁着
+    config.set(config.resourcePath, str(target))
+    paths.apply_resource_root(target)
+    paths.ensure_dirs()
+    database.init_db()
+    _rebase_imported_library_paths(target)
+    try:
+        PENDING_CLEANUP_FILE.unlink(missing_ok=True)
+    except OSError as exc:  # pragma: no cover - 删不掉也不影响本次导入
+        logger.warning("清理旧资源文件夹的记录删不掉：%s", exc)
+    logger.info("已导入资源文件夹：%s", target)
+    return target
+
+
 def _rebase_library_paths(old_root: Path, new_root: Path) -> None:
     """资源文件夹整体搬迁后，把库里记录的老路径改到新位置。"""
     from ..db import database

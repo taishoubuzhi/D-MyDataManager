@@ -57,6 +57,7 @@ from ...services import (
     ItemService,
     TaxonomyService,
     UserService,
+    cover_service,
     is_uncategorized,
     reconcile_categories,
 )
@@ -93,6 +94,7 @@ from ...core.config import DOUBLE_CLICK_EDITOR, config, export_dir
 from ..components.export_dialog import ExportDialog
 from ..components.category_tree import SORT_MODES as CATEGORY_SORT_MODES
 from ..components.category_tree import CategoryTree
+from ..components.cover_loader import cover_loader
 from ..components.filter_panel import FilterPanel
 from ..components.item_card import ItemCard, ItemListRow
 from ..components.pager import Pager, normalize_page_size, selection_summary
@@ -1240,6 +1242,11 @@ class ManagePage(Page):
         if not dialog.exec():
             return
         values = dialog.values()
+        cover = values.get("cover")
+        if cover is not None:
+            # 用户动过封面才处理：换封面会把没人引用的旧封面文件删掉减少冗余，
+            # 存档条目引用着的会保留（存档要能还原封面变更，用户 m02499 第 2 条）
+            cover_service.set_cover(self.session, item, cover)
         self.item_service.update(
             item,
             name=values["name"],
@@ -1249,6 +1256,9 @@ class ManagePage(Page):
         )
         self.item_service.move_item(item, values["category_id"])
         self.session.commit()
+        if cover is not None:
+            # 卡片封面按路径缓存，换了封面要让它重新取图
+            cover_loader().clear()
         signalBus.itemsChanged.emit()
         self.toast_success("已保存", item.name)
 

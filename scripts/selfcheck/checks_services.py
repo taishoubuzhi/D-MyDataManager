@@ -65,6 +65,71 @@ def import_file_cover(case: Case) -> None:
     assert path is not None and Path(path).exists(), f"库内文件不存在：{path}"
 
 
+@check("cover_custom_and_archive", "services")
+def cover_custom_and_archive(case: Case) -> None:
+    """自定义封面：换封面另存新文件、旧封面按引用计数释放、存档能记下并把封面还原回来。"""
+    from PIL import Image
+
+    from app.core.config import cover_dir
+    from app.repositories import ItemFilter, ItemRepository
+    from app.services import ArchiveService, ImportService, cover_service
+
+    session = case.session
+    assert SAMPLE_IMAGE.exists(), f"缺少示例图片：{SAMPLE_IMAGE}"
+    result = ImportService(session).import_files([SAMPLE_IMAGE])
+    session.commit()
+    assert not result.failed and result.added, f"导入失败：{result.failed}"
+    item = result.added[0]
+    assert not item.cover_path, f"图片项默认不该有封面副本：{item.cover_path}"
+
+    # 另一张内容不同的图：换封面必须换一个文件名，旧文件才留得住给存档引用
+    other = case.root / "另一张封面.png"
+    Image.new("RGB", (48, 48), (10, 120, 240)).save(other)
+
+    first = cover_service.set_cover(session, item, str(SAMPLE_IMAGE))
+    session.commit()
+    assert first and Path(first).is_file(), f"换封面没写出文件：{first!r}"
+    assert Path(first).parent == Path(cover_dir()), f"封面该落在封面目录里：{first}"
+    assert cover_service.cover_name(item) == Path(first).name, "cover_path 与封面文件名不一致"
+
+    archives = ArchiveService(session)
+    archive = archives.create(note="带封面的存档")
+    session.commit()
+    entries = archives.entries(archive)
+    assert len(entries) == 1, f"存档条目数不对：{len(entries)}"
+    entry = entries[0]
+    assert entry.cover_path == Path(first).name, f"存档没记住封面文件名：{entry.cover_path}"
+
+    second = cover_service.set_cover(session, item, str(other))
+    session.commit()
+    assert Path(second).name != Path(first).name, "换一张图应换一个封面文件名"
+    assert Path(second).is_file(), "换封面后的新文件不在"
+    assert Path(first).is_file(), "被存档引用着的封面不该被删掉"
+    assert archives.entry_state(entry) == "changed", f"只换封面也该记 changed：{archives.entry_state(entry)}"
+
+    preview = archives.preview_restore(archive)
+    assert preview.covers_fixed == 1, f"预览应记一条换封面：{preview.summary()}"
+    assert preview.summary() == "换封面 1", f"预览汇总不对：{preview.summary()}"
+    assert preview.restored == 0, "换封面不该被算成新增数据"
+
+    archives.restore_all(archive)
+    session.commit()
+    assert Path(str(item.cover_path)) == Path(first), f"回档没把封面调回存档那张：{item.cover_path}"
+    assert not Path(second).exists(), "回档该顺手删掉换下来的那张封面（减少冗余）"
+    rows = [row for row in ItemRepository(session).query(ItemFilter()) if row.name == item.name]
+    assert len(rows) == 1, f"只是换封面，回档不该多出数据：{len(rows)}"
+
+    # 恢复默认封面：图片退回「用自己」；文件还留着，因为存档仍在引用
+    assert cover_service.set_cover(session, item, "") == "", "图片恢复默认封面应为空路径"
+    session.commit()
+    assert not item.cover_path, "恢复默认封面后 cover_path 该清空"
+    assert Path(first).is_file(), "存档还引用着的封面文件不该被删掉"
+    assert archives.delete(archive) is True, "删除存档失败"
+    session.commit()
+    assert cover_service.release_cover(session, first) is True, "存档删掉后旧封面应能被释放"
+    assert not Path(first).exists(), "释放后封面文件该没了"
+
+
 @check("item_lifecycle", "services")
 def item_lifecycle(case: Case) -> None:
     """改名 / 打标签 / 删除进回收站 / 还原 / 重复检测。"""
@@ -1017,6 +1082,119 @@ def import_tree_skips_meta(case: Case) -> None:
     names = sorted(row.name for row in ItemRepository(session).query(ItemFilter()))
     assert "meta.json" not in names, f"元数据文件被导入：{names}"
     assert {"a.txt", "b.txt"} <= set(names), f"用户文件未全部导入：{names}"
+
+
+@check("resource_import_keeps_originals", "services")
+def resource_import_keeps_originals(case: Case) -> None:
+    """导入资源文件夹：只改指向，不搬不删任何一份，并清掉「待清理的旧资源文件夹」记录。
+
+    用户 m03406 第 2 条：迁移会把旧资源文件夹搬走，版本更新一换路径，老目录就再也用不上；
+    导入必须两份都留着（随时能切回来），所以这里连带盯着不能出现任何删除 / 复制动作。
+    """
+    import shutil
+    from unittest import mock
+
+    from app.core import config as config_module
+    from app.db import database as database_module
+
+    source = case.root / "导入的资源文件夹"
+    (source / "library").mkdir(parents=True)
+    (source / "data.db").write_text("", encoding="utf-8")
+    empty = case.root / "空目录"
+    empty.mkdir()
+    marker = case.root / "pending-resource-cleanup.json"
+    marker.write_text("{}", encoding="utf-8")
+
+    calls: list[str] = []
+    touched: list[str] = []
+
+    def record(name: str):
+        def _inner(*_args, **_kwargs) -> None:
+            calls.append(name)
+
+        return _inner
+
+    with (
+        mock.patch.object(config_module.paths, "resource_root", lambda value: Path(value)),
+        mock.patch.object(config_module.paths, "apply_resource_root", record("apply")),
+        mock.patch.object(config_module.paths, "ensure_dirs", record("ensure")),
+        mock.patch.object(config_module, "resources_root", lambda: case.root / "现在用的"),
+        mock.patch.object(config_module, "release_resource_root", record("release")),
+        mock.patch.object(config_module, "_unlock_imported_root", record("unlock")),
+        mock.patch.object(config_module, "_rebase_imported_library_paths", record("rebase")),
+        mock.patch.object(config_module, "PENDING_CLEANUP_FILE", marker),
+        mock.patch.object(database_module, "dispose_engine", record("dispose")),
+        mock.patch.object(database_module, "init_db", record("init")),
+        mock.patch.object(
+            config_module.config, "set", lambda item, value: calls.append(f"set={value}")
+        ),
+        mock.patch.object(shutil, "rmtree", lambda path, *a, **k: touched.append(f"rmtree:{path}")),
+        mock.patch.object(shutil, "copytree", lambda src, *a, **k: touched.append(f"copytree:{src}")),
+    ):
+        # 不是资源文件夹的目录必须被拒绝，而且什么都别动（配置指到空目录＝界面看着像数据全丢）
+        try:
+            config_module.import_resource_root(str(empty))
+        except ValueError as exc:
+            assert "资源文件夹" in str(exc), f"拒绝原因不明确：{exc}"
+        else:
+            raise AssertionError("空目录不是资源文件夹，应当拒绝导入")
+        assert not calls and not touched, f"拒绝导入时不该动任何东西：{calls} / {touched}"
+
+        target = config_module.import_resource_root(str(source))
+        assert target == source, f"导入目标不对：{target}"
+        assert calls[:3] == ["dispose", "release", "unlock"], f"切换资源根的顺序不对：{calls}"
+        assert {"apply", "ensure", "init", "rebase"} <= set(calls), f"切换步骤不全：{calls}"
+        assert f"set={source}" in calls, f"没有把配置指向导入的资源文件夹：{calls}"
+        assert not touched, f"导入不该删除或复制任何目录，实际动了：{touched}"
+        assert not marker.exists(), "导入后应清掉「待清理的旧资源文件夹」记录（否则下次启动会删掉一份）"
+        assert (source / "data.db").is_file() and (source / "library").is_dir(), "导入的资源文件夹被改动了"
+
+        # 已经就是当前使用的资源文件夹：只改配置，不重开数据库
+        before = len(calls)
+        with mock.patch.object(config_module, "resources_root", lambda: source):
+            assert config_module.import_resource_root(str(source)) == source, "重复导入应直接返回"
+        tail = calls[before:]
+        assert "dispose" not in tail and "init" not in tail, f"重复导入不该重开数据库：{tail}"
+
+
+@check("import_text_cover", "services")
+def import_text_cover(case: Case) -> None:
+    """导入文本时挑的封面要落到 `cover_path`（此前文本分支压根没把 cover 传下去）。"""
+    from app.services import ImportService
+
+    session = case.session
+    assert SAMPLE_IMAGE.exists(), f"缺少示例图片：{SAMPLE_IMAGE}"
+    item = ImportService(session).import_text("带封面的笔记", "正文", cover=str(SAMPLE_IMAGE))
+    session.commit()
+    assert item is not None, "import_text 返回空"
+    assert item.cover_path, "文本导入挑的封面没生效"
+    assert Path(item.cover_path).is_file(), f"封面文件不在：{item.cover_path}"
+    assert Path(item.cover_path).name != f"{item.checksum}.png", "挑的封面应另存一个新名字"
+
+
+@check("item_id_for_path_library_copy", "services")
+def item_id_for_path_library_copy(case: Case) -> None:
+    """按路径查数据项：插件手里的库内副本路径必须能命中。
+
+    此前只优先比对 `source_path`（给模型 worker 用的绝对原路径），而播放器拿到的是库内副本，
+    于是永远查不到、点「用当前画面作封面」就提示「这个文件不在数据库里」（用户 m03406 第 3 条）。
+    """
+    from app.services import ImportService, LibraryService
+    from app.services.item_api import ItemsApi
+
+    session = case.session
+    assert SAMPLE_IMAGE.exists(), f"缺少示例图片：{SAMPLE_IMAGE}"
+    result = ImportService(session).import_files([SAMPLE_IMAGE])
+    session.commit()
+    assert result.added, "没有导入任何项"
+    item = result.added[0]
+    api = ItemsApi()
+
+    library_path = LibraryService(session).abs_path(item)
+    assert library_path, "库内副本路径为空"
+    assert api.item_id_for_path(str(library_path)) == item.id, "库内副本路径查不到数据项"
+    assert api.item_id_for_path(str(item.source_path)) == item.id, "原始路径查不到数据项"
+    assert api.item_id_for_path(str(case.root / "并不存在.png")) is None, "无关路径不该命中"
 
 
 def _restore_fixture(case: Case, *, hidden: bool = False):

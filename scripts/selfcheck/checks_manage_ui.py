@@ -466,6 +466,22 @@ def manage_category_move(case: Case) -> None:
         if len(dialog.category_ids()) != 1:
             problems.append(f"移出选中项后移动表={dialog.category_ids()}")
 
+        # 移出全部：一次清空整张移动表（用户 m02499 第 1 条）
+        if not hasattr(dialog, "clear_button"):
+            problems.append("弹窗右侧缺少「移出全部」按钮")
+        else:
+            dialog._add(sub_id)
+            dialog._add(other_id)
+            dialog.clear_button.click()
+            if dialog.category_ids():
+                problems.append(f"点「移出全部」后表应为空：{dialog.category_ids()}")
+            if dialog.yesButton.isEnabled():
+                problems.append("表空时确认键应禁用")
+            if dialog.clear_button.isEnabled():
+                problems.append("表空时「移出全部」应禁用")
+            if "已移出全部 2 项" not in dialog.message.text():
+                problems.append(f"点「移出全部」没有给出提示：{dialog.message.text()}")
+
         # 页面级两步流程：移动表 → 目标弹窗 → 确认 → 真正移动
         picked = [leaf_id]
         target = other_id
@@ -1083,6 +1099,30 @@ def import_page_scope(case: Case) -> None:
         if not page.category_box.isEnabled():
             problems.append("文件导入时分类下拉不可用")
 
+        # 选择封面（用户 m02499 第 2 条）：挑一张图，整批数据都用它当封面
+        from PIL import Image
+
+        cover_source = Path(case.root) / "封面.png"
+        Image.new("RGB", (32, 32), (200, 60, 60)).save(cover_source)
+        if "第一帧" not in page.cover_hint.text():
+            problems.append(f"导入页没说明默认封面规则：{page.cover_hint.text()}")
+        page._set_cover_source(str(cover_source))
+        app.processEvents()
+        if page._cover_source != str(cover_source):
+            problems.append(f"导入页没有记下挑的封面：{page._cover_source!r}")
+        if cover_source.name not in page.cover_name_label.text():
+            problems.append(f"导入页没有显示封面文件名：{page.cover_name_label.text()}")
+        if not page.cover_clear_button.isEnabled():
+            problems.append("挑了封面后「用默认封面」按钮应可用")
+        page._clear_cover()
+        app.processEvents()
+        if page._cover_source:
+            problems.append(f"点「用默认封面」后封面源该清空：{page._cover_source!r}")
+        if cover_source.name in page.cover_name_label.text():
+            problems.append(f"清空封面后不该还显示文件名：{page.cover_name_label.text()}")
+        page._set_cover_source(str(cover_source))
+        app.processEvents()
+
         page._on_directory(str(sources))
         app.processEvents()
         page.import_now()
@@ -1103,6 +1143,16 @@ def import_page_scope(case: Case) -> None:
                 problems.append(f"批量导入结果没有报告成功：{label}")
             if page.details_card.isVisibleTo(page):
                 problems.append("批量导入完成后仍显示文件明细")
+            # 这一批数据都该带上挑的那张封面（自定义封面名是「校验和-图片摘要.png」）
+            from app.repositories import ItemRepository
+
+            custom = {
+                str(row.cover_path)
+                for row in ItemRepository(session).query(ItemFilter())
+                if row.cover_path and "-" in Path(str(row.cover_path)).name
+            }
+            if len(custom) < 3:
+                problems.append(f"批量导入没给 3 条数据带上自定义封面：{sorted(custom)}")
 
         assert not problems, "导入范围：" + "；".join(problems[:12])
     finally:
@@ -1234,8 +1284,69 @@ def manage_edit_dialog(case: Case) -> None:
         for key in ("数据信息", "可修改的信息", "库内路径", "磁盘位置"):
             if not any(key in text for text in texts):
                 problems.append(f"编辑弹窗没有渲染「{key}」")
+        if not any("封面" in text for text in texts):
+            problems.append("编辑弹窗没有渲染「封面」")
         if dialog.values()["name"] != item.name:
             problems.append(f"编辑弹窗的名称初值 {dialog.values()['name']!r} != {item.name!r}")
+
+        # 封面行（用户 m02499 第 2 条）：没动封面时 values() 给 None，挑图 / 恢复默认才给值
+        from PIL import Image
+
+        from app.core.config import cover_dir
+        from app.db.models import DataItem
+        from app.services import cover_service
+
+        cover_source = Path(case.root) / "编辑用封面.png"
+        Image.new("RGB", (24, 24), (30, 200, 120)).save(cover_source)
+        if dialog.values()["cover"] is not None:
+            problems.append(f"没动封面时 values()['cover'] 应为 None：{dialog.values()['cover']!r}")
+        dialog._set_cover_choice(str(cover_source))
+        if dialog.values()["cover"] != str(cover_source):
+            problems.append(f"挑了封面后 values()['cover'] 不对：{dialog.values()['cover']!r}")
+        dialog._use_default_cover()
+        if dialog.values()["cover"] != "":
+            problems.append(f"点「恢复默认封面」后 values()['cover'] 该是空串：{dialog.values()['cover']!r}")
+
+        # 页面入口：挑了封面就走 cover_service 落盘（用页面自己的会话取对象）
+        page.session.expire_all()
+        target = page.session.get(DataItem, item.id)
+        if target is None:
+            problems.append("页面会话里找不到刚导入的数据")
+
+        class _FakeEditDialog:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def exec(self):
+                return True
+
+            def values(self):
+                return {
+                    "name": target.name,
+                    "category_id": target.category_id,
+                    "tags": [],
+                    "keywords": [],
+                    "is_hidden": False,
+                    "cover": str(cover_source),
+                }
+
+        if target is not None:
+            saved_dialog_class = manage_module.ItemEditDialog
+            saved_require = page._require_selection
+            manage_module.ItemEditDialog = _FakeEditDialog
+            page._require_selection = lambda: [target]
+            try:
+                page._on_edit()
+            finally:
+                manage_module.ItemEditDialog = saved_dialog_class
+                page._require_selection = saved_require
+            page.session.expire_all()
+            session.expire_all()
+            chosen = str(target.cover_path or "")
+            if not chosen or Path(chosen).parent != Path(cover_dir()):
+                problems.append(f"编辑弹窗挑了封面却没落盘：{target.cover_path!r}")
+            elif not Path(chosen).is_file():
+                problems.append(f"落盘的封面文件不存在：{chosen}")
 
         dialog.name_edit.setText("改名之后")
         ItemService(session).update(item, name=dialog.values()["name"])
