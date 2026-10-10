@@ -17,9 +17,15 @@
 /AGENTS.md
 /docs/index/
 
-# —— 不随发布分发的本地样板插件
+# —— 不随发布分发的本地插件
 /plugins/example.model_usage/
 /plugins/example.ui_extension/
+/plugins/auto_keyword/
+/plugins/auto_keyword.rule/
+/plugins/auto_tag/
+/plugins/auto_tag.rule/
+/plugins/lib.autolabel/
+/plugins/lib.model/
 
 # —— 打包产物
 /pyappify_dist/

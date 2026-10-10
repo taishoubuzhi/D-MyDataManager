@@ -34,6 +34,13 @@
       <excludeFolder url="file://$MODULE_DIR$/.errors" />
       <excludeFolder url="file://$MODULE_DIR$/.models" />
       <excludeFolder url="file://$MODULE_DIR$/exports" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/auto_keyword" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/auto_keyword.rule" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/auto_tag" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/auto_tag.rule" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/example.ui_extension" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/lib.autolabel" />
+      <excludeFolder url="file://$MODULE_DIR$/plugins/lib.model" />
     </content>
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
